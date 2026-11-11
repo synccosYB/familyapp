@@ -1,0 +1,164 @@
+<!doctype html><html lang="yi" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>משפחה – פראטאטיפ</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:"Noto Sans Hebrew","Arial Hebrew",Arial,sans-serif;background:#f6f7f9;color:#111827;font-size:17px}
+nav{position:fixed;top:0;right:0;bottom:0;width:230px;background:#1e1b4b;color:#fff;padding:18px 12px;overflow:auto}
+nav .lg{font-size:22px;font-weight:800;margin:0 8px 4px}nav .sd{font-size:13px;opacity:.75;margin:0 8px 16px}
+nav a{display:block;color:#e0e7ff;text-decoration:none;padding:11px 12px;border-radius:10px;margin-bottom:4px;font-weight:600;cursor:pointer}
+nav a.on,nav a:hover{background:#4338ca;color:#fff}
+main{margin-right:230px;padding:24px 28px;max-width:1100px}
+h1{font-size:28px;margin:0 0 4px}h2{font-size:20px;margin:22px 0 10px}.cap{color:#6b7280;margin-bottom:16px}
+.card{background:#fff;border:1px solid #e6e8ec;border-radius:14px;padding:16px}.grid{display:grid;gap:12px}.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(4,1fr)}
+.big{font-size:26px;font-weight:800}.muted{color:#6b7280;font-size:14px}
+.row{display:flex;align-items:center;gap:12px;padding:12px 14px;background:#fff;border:1px solid #e6e8ec;border-radius:12px;margin-bottom:8px}.grow{flex:1}
+.btn{background:#4338ca;color:#fff;border:0;border-radius:10px;padding:10px 16px;font:inherit;font-weight:700;cursor:pointer}.btn.l{background:#eef2ff;color:#3730a3}.btn.s{padding:7px 12px;font-size:14px}
+.tag{display:inline-block;padding:3px 9px;border-radius:99px;font-size:13px;font-weight:700;background:#f3f4f6}.tag.f{background:#dbeafe;color:#1e40af}.tag.m{background:#fce7f3;color:#9d174d}.tag.g{background:#dcfce7;color:#166534}.tag.a{background:#fef3c7;color:#92400e}
+.seg{display:inline-flex;border:1px solid #c7d2fe;border-radius:10px;overflow:hidden;margin-bottom:14px}.seg button{border:0;background:#fff;padding:9px 16px;font:inherit;font-weight:700;cursor:pointer;color:#3730a3}.seg button.on{background:#4338ca;color:#fff}
+input,select,textarea{width:100%;font:inherit;padding:10px;border:1px solid #d1d5db;border-radius:10px;margin:6px 0 12px}label{font-weight:700;font-size:14px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;padding:16px;z-index:9}.modal.on{display:flex}.mbox{background:#fff;border-radius:16px;padding:22px;width:520px;max-width:100%;max-height:90vh;overflow:auto}
+.toast{position:fixed;bottom:20px;left:20px;background:#111827;color:#fff;padding:12px 18px;border-radius:12px;display:none;z-index:10}
+.tree{overflow-x:auto;padding:10px 0}.tree ul{padding-top:18px;position:relative;display:flex;justify-content:center;margin:0;padding-right:0}
+.tree li{list-style:none;text-align:center;position:relative;padding:18px 6px 0}
+.tree li::before,.tree li::after{content:'';position:absolute;top:0;right:50%;border-top:2px solid #c7d2fe;width:50%;height:18px}.tree li::after{right:auto;left:50%;border-right:2px solid #c7d2fe}
+.tree li:only-child::after,.tree li:only-child::before{display:none}.tree li:only-child{padding-top:0}.tree li:first-child::before,.tree li:last-child::after{border:0 none}
+.tree li:last-child::before{border-left:2px solid #c7d2fe;border-radius:0 0 0 6px}.tree li:first-child::after{border-radius:0 0 6px 0}
+.tree ul ul::before{content:'';position:absolute;top:0;right:50%;border-right:2px solid #c7d2fe;width:0;height:18px}
+.pn{display:inline-block;background:#fff;border:2px solid #e0e7ff;border-radius:12px;padding:8px 12px;min-width:110px;font-weight:700;cursor:pointer}.pn .muted{font-weight:400;font-size:12px}.pn.d{border-color:#d6d3d1;background:#fafaf9}.pn.me{border-color:#4338ca;background:#eef2ff}
+.chat{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto;padding:6px}.bub{max-width:70%;padding:10px 14px;border-radius:14px;background:#fff;border:1px solid #e6e8ec}.bub.me{align-self:flex-start;background:#4338ca;color:#fff;border:0}.bub .muted{font-size:12px}.bub.me .muted{color:#c7d2fe}
+.perek{display:grid;grid-template-columns:repeat(10,1fr);gap:6px}.pk{padding:8px 0;text-align:center;border-radius:8px;background:#fff;border:1px solid #e6e8ec;font-weight:700;cursor:pointer;font-size:14px}.pk.t{background:#dcfce7;border-color:#86efac;color:#166534}.pk.mine{background:#4338ca;color:#fff}
+.login{max-width:520px;margin:60px auto;text-align:center}.side{display:block;width:100%;padding:22px;border-radius:16px;border:2px solid #e0e7ff;background:#fff;font:inherit;font-size:20px;font-weight:800;cursor:pointer;margin-bottom:12px}.side:hover{border-color:#4338ca}
+@media(max-width:800px){nav{position:static;width:auto;display:flex;overflow-x:auto;gap:4px;padding:10px}nav .lg,nav .sd{display:none}nav a{white-space:nowrap;margin:0}main{margin:0;padding:16px}.g2,.g3,.g4{grid-template-columns:1fr 1fr}.perek{grid-template-columns:repeat(6,1fr)}.bub{max-width:85%}}
+</style></head><body>
+<nav id="nav"></nav><main id="m"></main><div class="modal" id="md"><div class="mbox" id="mb"></div></div><div class="toast" id="ts"></div>
+<script>
+const $=s=>document.getElementById(s);
+function toast(t){$('ts').textContent=t;$('ts').style.display='block';setTimeout(()=>$('ts').style.display='none',2200)}
+function cl(){$('md').classList.remove('on')}
+let ME=null,SIDE='all',CH='all';
+const SIDES={f:'טאטעס סייד · משפחת באכנער',m:'מאמעס סייד · משפחת בידערמאן'};
+// ---- data (made up) ----
+const TREE={f:{n:'ר׳ אברהם באכנער ז״ל',w:'מרת שרה באכנער ע״ה',d:1,k:[
+ {n:'ר׳ משה באכנער',w:'רחל',k:[{n:'יואל',me:1},{n:'חיה'},{n:'שמואל'}]},
+ {n:'ר׳ יעקב באכנער',w:'לאה',k:[{n:'מנחם'},{n:'פערל'}]},
+ {n:'מרים קליין',w:'(ר׳ דוד קליין)',k:[{n:'יוסף'},{n:'בלומה'},{n:'אליעזר'}]}]},
+ m:{n:'ר׳ חיים בידערמאן ז״ל',w:'מרת פייגא בידערמאן ע״ה',d:1,k:[
+ {n:'רחל באכנער',w:'(ר׳ משה באכנער)',k:[{n:'יואל',me:1},{n:'חיה'},{n:'שמואל'}]},
+ {n:'ר׳ שלמה בידערמאן',w:'גיטל',k:[{n:'אהרן'},{n:'שרה'},{n:'ישראל'},{n:'מלכה'}]},
+ {n:'ר׳ ברוך בידערמאן',w:'דבורה',k:[{n:'נחום'},{n:'רבקה'}]}]}};
+const YZ=[
+ {n:'ר׳ אברהם בן ר׳ יצחק באכנער ז״ל',r:'זיידע',s:'f',hd:'כ״ג כסלו',gd:'Dec 12',days:31,kever:'מאנסי, בית החיים וויזניץ'},
+ {n:'מרת שרה בת ר׳ מרדכי ע״ה',r:'באבע',s:'f',hd:'ז׳ שבט',gd:'Jan 25',days:75,kever:'מאנסי, בית החיים וויזניץ'},
+ {n:'ר׳ חיים בן ר׳ שמעון בידערמאן ז״ל',r:'זיידע',s:'m',hd:'י״ח חשון',gd:'Nov 8',days:-3,kever:'ירושלים, הר המנוחות'},
+ {n:'מרת פייגא בת ר׳ זלמן ע״ה',r:'באבע',s:'m',hd:'ה׳ אדר',gd:'Feb 22',days:103,kever:'ירושלים, הר המנוחות'}];
+const MASECHTOS=['ברכות','פאה','דמאי','כלאים','שביעית','תרומות','מעשרות','מעשר שני','חלה','ערלה','ביכורים','שבת','עירובין','פסחים','שקלים','יומא','סוכה','ביצה','ראש השנה','תענית','מגילה','מועד קטן','חגיגה','יבמות','כתובות','נדרים','נזיר','סוטה','גיטין','קידושין','בבא קמא','בבא מציעא','בבא בתרא','סנהדרין','מכות','שבועות','עדיות','עבודה זרה','אבות','הוריות'];
+const COUS=['חיה','שמואל','מנחם','פערל','יוסף','בלומה','אהרן','שרה','נחום','רבקה','ישראל','מלכה'];
+const LEARN={f:{for:'ר׳ אברהם בן ר׳ יצחק ז״ל',by:'כ״ג כסלו',tl:{},ms:{}},m:{for:'ר׳ חיים בן ר׳ שמעון ז״ל',by:'י״ח חשון (נעקסט יאר)',tl:{},ms:{}}};
+(function(){for(let i=1;i<=150;i++)if(i%3==0||i%7==1)LEARN.f.tl[i]=COUS[i%6];for(let i=1;i<=150;i++)if(i%4==0)LEARN.m.tl[i]=COUS[6+i%6];MASECHTOS.forEach((x,i)=>{if(i%3==0)LEARN.f.ms[x]=COUS[i%6];if(i%5==0)LEARN.m.ms[x]=COUS[6+i%6]})})();
+const SIM=[{t:'בר מצוה',who:'מנחם באכנער',s:'f',d:'מוצאי שבת, 21 נאוועמבער',hd:'י״ט כסלו',pl:'אולם בית שמחה',addr:'51 Forest Rd, Monroe, NY 10950',rsvp:{},yes:14},
+ {t:'חתונה',who:'שרה בידערמאן',s:'m',d:'דינסטאג, 8 דעצעמבער',hd:'ו׳ טבת',pl:'אולם אווענט',addr:'1074 Wythe Ave, Brooklyn, NY 11249',rsvp:{},yes:41},
+ {t:'שלום זכר',who:'יוסף קליין',s:'f',d:'פרייטאג צו נאכטס, 14 נאוועמבער',hd:'י״ב כסלו',pl:'ביי יוסף קליין',addr:'12 Forest Rd, Monroe, NY 10950',rsvp:{},yes:9}];
+const MSG={all:[['חיה','גוט וואך אלעמען! ווער קומט צום בר מצוה?','10:02'],['אהרן','מיר קומען אי״ה 👍','10:15'],['בלומה','עס זענען נאך 40 קאפיטלעך תהילים פריי, נעמט!','11:30']],
+ f:[['מנחם','דעם זיידנס יארצייט איז אין 31 טעג, ווער גייט צום קבר?','9:40'],['שמואל','איך פאר, האב פלאץ פאר 3 אין קאר','9:52']],
+ m:[['רבקה','מזל טוב שרה! 🎉','8:12'],['נחום','ווער האט די אלטע בילדער פון באבע פייגא?','8:30']]};
+const NOW=['','10:41','11:02','12:15'];
+
+const DIR=[
+{h:'יואל באכנער',w:'מרים באכנער',s:'b',par:'זון פון ר׳ משה און רחל באכנער',a:'14 פארעסט ראוד, מאנרא, NY 10950',ph:'845-555-0142',pw:'845-555-0143'},
+{h:'ר׳ אליהו שווארץ',w:'חיה שווארץ',s:'b',par:'טאכטער פון ר׳ משה און רחל באכנער',a:'22 ראמפא ראוד, מאנסי, NY 10952',ph:'845-555-0177',pw:'845-555-0178'},
+{h:'שמואל באכנער',w:'גיטי באכנער',s:'b',par:'זון פון ר׳ משה און רחל באכנער',a:'5 דינעוו ראוד, קרית יואל, NY 10950',ph:'845-555-0190',pw:''},
+{h:'מנחם באכנער',w:'פרומט באכנער',s:'f',par:'זון פון ר׳ יעקב און לאה באכנער',a:'1420 50טע גאס, ברוקלין, NY 11219',ph:'718-555-0121',pw:'718-555-0122'},
+{h:'ר׳ זלמן פרידמאן',w:'פערל פרידמאן',s:'f',par:'טאכטער פון ר׳ יעקב און לאה באכנער',a:'88 לי עוו׳, ברוקלין, NY 11211',ph:'718-555-0133',pw:'718-555-0134'},
+{h:'יוסף קליין',w:'שרה קליין',s:'f',par:'זון פון ר׳ דוד און מרים קליין',a:'12 פארעסט ראוד, מאנרא, NY 10950',ph:'845-555-0155',pw:'845-555-0156'},
+{h:'ר׳ שמעון ראזענבערג',w:'בלומה ראזענבערג',s:'f',par:'טאכטער פון ר׳ דוד און מרים קליין',a:'3 סאטמאר דרייוו, מאנרא, NY 10950',ph:'845-555-0166',pw:''},
+{h:'אליעזר קליין',w:'',s:'f',par:'זון פון ר׳ דוד און מרים קליין (בחור)',a:'12 פארעסט ראוד, מאנרא, NY 10950',ph:'845-555-0157',pw:''},
+{h:'אהרן בידערמאן',w:'רבקה בידערמאן',s:'m',par:'זון פון ר׳ שלמה און גיטל בידערמאן',a:'45 ראוז עוו׳, לייקוואוד, NJ 08701',ph:'732-555-0111',pw:'732-555-0112'},
+{h:'ר׳ בערל כהן',w:'שרה כהן',s:'m',par:'טאכטער פון ר׳ שלמה און גיטל בידערמאן',a:'9 מעיפל עוו׳, מאנסי, NY 10952',ph:'845-555-0188',pw:'845-555-0189'},
+{h:'ישראל בידערמאן',w:'חנה בידערמאן',s:'m',par:'זון פון ר׳ שלמה און גיטל בידערמאן',a:'רחוב סורוצקין 12, ירושלים',ph:'+972-2-555-0101',pw:''},
+{h:'ר׳ נפתלי בערגער',w:'מלכה בערגער',s:'m',par:'טאכטער פון ר׳ שלמה און גיטל בידערמאן',a:'611 בעדפארד עוו׳, ברוקלין, NY 11211',ph:'718-555-0145',pw:'718-555-0146'},
+{h:'נחום בידערמאן',w:'ברכה בידערמאן',s:'m',par:'זון פון ר׳ ברוך און דבורה בידערמאן',a:'27 גראנד סט׳, לייקוואוד, NJ 08701',ph:'732-555-0160',pw:'732-555-0161'},
+{h:'ר׳ מאיר שטערן',w:'רבקה שטערן',s:'m',par:'טאכטער פון ר׳ ברוך און דבורה בידערמאן',a:'14 פארעסט ראוד, מאנרא, NY 10950',ph:'845-555-0199',pw:''}];
+let Q='';
+function tel(p){return p?`<a dir="ltr" href="tel:${p.replace(/[^+0-9]/g,'')}" style="color:#3730a3;font-weight:700;text-decoration:none">📞 ${p}</a>`:'<span class="muted">—</span>'}
+function sTag2(s){return s=='b'?'<span class="tag f">טאטעס</span> <span class="tag m">מאמעס</span>':sideTag(s)}
+function editDir(i){const d=i<0?{h:'',w:'',s:ME.s=='both'?'f':ME.s,par:'',a:'',ph:'',pw:''}:DIR[i];$('mb').innerHTML=`<h2 style="margin-top:0">${i<0?'+ לייג צו א משפחה':'✏️ עדיט די פרטים'}</h2>
+<div class="grid g2"><div><label>מאן</label><input id="dh" value="${d.h}"></div><div><label>ווייב</label><input id="dw" value="${d.w}"></div></div>
+<div class="grid g2"><div><label>📞 מאן</label><input id="dph" dir="ltr" style="text-align:right" value="${d.ph}"></div><div><label>📞 ווייב</label><input id="dpw" dir="ltr" style="text-align:right" value="${d.pw}"></div></div>
+<label>אדרעס</label><input id="da" value="${d.a}"><label>וועמענס קינד</label><input id="dp" value="${d.par}" placeholder="זון/טאכטער פון…">
+<label>סייד</label><select id="ds"><option value="f" ${d.s=='f'?'selected':''}>טאטעס סייד</option><option value="m" ${d.s=='m'?'selected':''}>מאמעס סייד</option><option value="b" ${d.s=='b'?'selected':''}>ביידע</option></select>
+<div id="de" style="color:#dc2626;font-weight:700"></div><button class="btn" onclick="saveDir(${i})">סעיוו</button> <button class="btn l" onclick="cl()">קענסל</button>`;$('md').classList.add('on')}
+function saveDir(i){const o={h:$('dh').value.trim(),w:$('dw').value.trim(),ph:$('dph').value.trim(),pw:$('dpw').value.trim(),a:$('da').value.trim(),par:$('dp').value.trim(),s:$('ds').value};if(!o.h&&!o.w){$('de').textContent='שרייב כאטש איין נאמען';return}if(i<0)DIR.push(o);else DIR[i]=o;cl();toast('✓ געסעיווט');go()}
+function dlDir(){const rows=[['מאן','ווייב','סייד','וועמענס קינד','אדרעס','טעל מאן','טעל ווייב'],...DIR.filter(d=>vis2(d.s)).map(d=>[d.h,d.w,d.s=='f'?'טאטעס':d.s=='m'?'מאמעס':'ביידע',d.par,d.a,d.ph,d.pw])];const csv='\ufeff'+rows.map(r=>r.map(x=>'"'+String(x).replace(/"/g,'""')+'"').join(',')).join('\n');const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='kuzinen.csv';a.click();toast('⬇ ליסט דאונלאודעד')}
+function vis2(s){return SIDE=='all'||s=='b'||SIDE==s}
+// invitation art for sample simchas
+function invSvg(t,who,d,pl,c){const s=`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800" viewBox="0 0 600 800"><rect width="600" height="800" fill="#fffaf0"/><rect x="24" y="24" width="552" height="752" fill="none" stroke="${c}" stroke-width="6"/><rect x="40" y="40" width="520" height="720" fill="none" stroke="${c}" stroke-width="2"/><text x="300" y="120" font-size="34" text-anchor="middle" fill="${c}" font-family="serif">ב״ה</text><text x="300" y="240" font-size="44" text-anchor="middle" fill="#3b2f2f" font-family="serif">מיר לאדן אייך איין</text><text x="300" y="320" font-size="40" text-anchor="middle" fill="#3b2f2f" font-family="serif">צו דער ${t}</text><text x="300" y="420" font-size="58" font-weight="bold" text-anchor="middle" fill="${c}" font-family="serif">${who}</text><text x="300" y="540" font-size="32" text-anchor="middle" fill="#3b2f2f" font-family="serif">${d}</text><text x="300" y="600" font-size="28" text-anchor="middle" fill="#3b2f2f" font-family="serif">${pl}</text><text x="300" y="720" font-size="26" text-anchor="middle" fill="${c}" font-family="serif">בשעה טובה ומוצלחת</text></svg>`;return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(s)}
+SIM.forEach((x,i)=>{x.img=invSvg(x.t,x.who,x.d,x.pl,['#1e3a8a','#9d174d','#166534'][i%3]);x.fn='אינוויטעישן.jpg'});
+function showInv(k){const x=SIM[k];$('mb').innerHTML=`<h2 style="margin-top:0">${x.t} · ${x.who}</h2>${x.pdf?`<div class="card" style="text-align:center;padding:30px">📄 <b>${x.fn}</b><div class="muted">PDF אינוויטעישן</div><a class="btn" style="display:inline-block;margin-top:10px;text-decoration:none" href="${x.img}" download="${x.fn}">⬇ דאונלאוד</a></div>`:`<img src="${x.img}" style="width:100%;border-radius:10px;border:1px solid #e6e8ec">`}<div style="margin-top:12px"><a class="btn l" style="text-decoration:none;display:inline-block" href="${x.img}" download="${x.fn}">⬇ דאונלאוד</a> <button class="btn l" onclick="cl()">צומאכן</button></div>`;$('md').classList.add('on')}
+function upInv(k,inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{SIM[k].img=r.result;SIM[k].fn=f.name;SIM[k].pdf=f.type=='application/pdf';toast('✓ אינוויטעישן אפלאודעד');go()};r.readAsDataURL(f)}
+let NEWINV=null;
+function pickInv(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{NEWINV={img:r.result,fn:f.name,pdf:f.type=='application/pdf'};$('ip').innerHTML=NEWINV.pdf?`📄 ${f.name}`:`<img src="${r.result}" style="max-width:100%;max-height:220px;border-radius:8px">`};r.readAsDataURL(f)}
+function gmap(a){return 'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(a)}
+function waze(a){return 'https://waze.com/ul?q='+encodeURIComponent(a)+'&navigate=yes'}
+function navBtns(a){return a?`<a class="btn s" style="text-decoration:none;background:#1a73e8" href="${gmap(a)}" target="_blank">🗺️ Google Maps</a><a class="btn s" style="text-decoration:none;background:#33ccff;color:#05324a" href="${waze(a)}" target="_blank">🚗 Waze</a>`:''}
+// ---- views ----
+function nav(v){$('nav').innerHTML=ME?`<div class="lg">אונדזער משפחה</div><div class="sd">${ME.n} · ${ME.s=='both'?'ביידע סיידס':SIDES[ME.s]}</div>`+[['home','🏠 היים'],['yz','🕯️ יארצייטן'],['tree','🌳 פעמילי טרי'],['learn','📖 משניות און תהילים'],['sim','🎉 שמחות'],['chat','💬 טשעט'],['people','👥 קאזינס / אדרעסן']].map(([k,t])=>`<a class="${v==k?'on':''}" href="#${k}">${t}</a>`).join('')+`<a onclick="ME=null;location.hash='';go()" style="margin-top:14px;opacity:.7">↩ לאג אאוט</a>`:''}
+function seg(){return `<div class="seg">${[['all','ביידע סיידס'],['f','טאטעס סייד'],['m','מאמעס סייד']].map(([k,t])=>`<button class="${SIDE==k?'on':''}" onclick="SIDE='${k}';go()">${t}</button>`).join('')}</div>`}
+function sideTag(s){return `<span class="tag ${s}">${s=='f'?'טאטעס סייד':'מאמעס סייד'}</span>`}
+function vis(s){return SIDE=='all'||SIDE==s}
+const V={
+login(){return `<div class="login"><div style="font-size:54px">🌳</div><h1>אונדזער משפחה</h1><div class="cap">אלע קאזינס אין איין ארט: יארצייטן, פעמילי טרי, לערנען, שמחות און טשעט.</div>
+<label style="display:block;text-align:right">דיין נאמען</label><input id="ln" value="יואל באכנער"><label style="display:block;text-align:right">טעלעפאן (מען שיקט א קאוד)</label><input id="lp" value="845-555-0142" dir="ltr" style="text-align:right">
+<div class="cap" style="margin-top:8px">פון וועלכע סייד ביסטו א קאזין?</div>
+<button class="side" onclick="login('f')">👨 טאטעס סייד<div class="muted">משפחת באכנער · אייניקלעך פון ר׳ אברהם ז״ל</div></button>
+<button class="side" onclick="login('m')">👩 מאמעס סייד<div class="muted">משפחת בידערמאן · אייניקלעך פון ר׳ חיים ז״ל</div></button>
+<button class="side" style="font-size:16px" onclick="login('both')">ביידע סיידס (ווי יואל, וואס איז אויף ביידע)</button></div>`},
+home(){const nx=YZ.filter(y=>y.days>=0&&(ME.s=='both'||y.s==ME.s)).sort((a,b)=>a.days-b.days)[0];const sm=SIM.filter(x=>ME.s=='both'||x.s==ME.s);
+return `<h1>שלום ${ME.n.split(' ')[0]} 👋</h1><div class="cap">${ME.s=='both'?'דו זעהסט ביידע סיידס פון די משפחה':SIDES[ME.s]}</div>
+<div class="grid g4"><div class="card"><div class="muted">נעקסטע יארצייט</div><div class="big" style="font-size:20px">${nx?nx.hd:'—'}</div><div class="muted">${nx?'אין '+nx.days+' טעג':''}</div></div><div class="card"><div class="muted">שמחות</div><div class="big">${sm.length}</div></div><div class="card"><div class="muted">תהילים גענומען</div><div class="big">${Object.keys(LEARN.f.tl).length+Object.keys(LEARN.m.tl).length} <span style="font-size:16px;color:#6b7280">פון 300</span></div></div><div class="card"><div class="muted">קאזינס</div><div class="big">${COUS.length+1}</div></div></div>
+${nx?`<h2>🕯️ קומט באלד</h2><div class="row"><div class="grow"><b>${nx.n}</b><div class="muted">${nx.r} · ${nx.hd} (${nx.gd}) · ${nx.kever}</div></div>${sideTag(nx.s)}<a class="btn s" href="#learn">נעם תהילים</a></div>`:''}
+<h2>🎉 שמחות</h2>${sm.map(x=>`<div class="row"><div class="grow"><b>${x.t} · ${x.who}</b><div class="muted">${x.d} · ${x.hd} · ${x.pl}</div></div>${sideTag(x.s)}${navBtns(x.addr)}<a class="btn s l" href="#sim">אנטווארטן</a></div>`).join('')}
+<h2>💬 לעצטע מעסעדזשעס</h2>${MSG.all.slice(-2).map(m=>`<div class="row"><b>${m[0]}:</b><div class="grow">${m[1]}</div><span class="muted">${m[2]}</span></div>`).join('')}`},
+yz(){const L=YZ.filter(y=>vis(y.s)).sort((a,b)=>(a.days<0?999:a.days)-(b.days<0?999:b.days));
+return `<h1>🕯️ יארצייטן</h1><div class="cap">אלע זיידעס און באבעס, מיט העברעאישע דאטע. מען שיקט א רימיינדער א וואך פריער און דעם טאג.</div>${seg()}
+${L.map(y=>`<div class="row" style="${y.days>=0&&y.days<=31?'border-color:#a5b4fc;background:#eef2ff':''}"><div style="font-size:28px">🕯️</div><div class="grow"><b style="font-size:18px">${y.n}</b><div class="muted">${y.r} · <b>${y.hd}</b> · דאס יאר: ${y.gd} · ${y.days<0?'שוין פארביי':'אין '+y.days+' טעג'}</div><div class="muted">📍 ${y.kever}</div></div>${sideTag(y.s)}<button class="btn s l" onclick="remind('${y.hd}')">🔔 רימיינד מיר</button></div>`).join('')}
+<button class="btn" onclick="addYz()">+ לייג צו א יארצייט</button>`},
+tree(){const s=SIDE=='all'?(ME.s=='m'?'m':'f'):SIDE;const node=(p,top)=>`<li><div class="pn ${p.d?'d':''} ${p.me?'me':''}" onclick="toast('${p.n.replace(/'/g,'')}${p.w?' · '+p.w.replace(/'/g,''):''}')">${p.n}${p.w?`<div class="muted">${p.w}</div>`:''}${p.me?'<div class="muted">(דו)</div>':''}</div>${p.k?`<ul>${p.k.map(c=>node(c)).join('')}</ul>`:''}</li>`;
+return `<h1>🌳 פעמילי טרי</h1><div class="cap">דריק אויף א נאמען צו זען מער. יעדער קאזין קען צולייגן זיינע קינדער.</div><div class="seg">${[['f','טאטעס סייד'],['m','מאמעס סייד']].map(([k,t])=>`<button class="${s==k?'on':''}" onclick="SIDE='${k}';go()">${t}</button>`).join('')}</div>
+<div class="card tree"><ul>${node(TREE[s],1)}</ul></div><button class="btn" style="margin-top:12px" onclick="addPerson('${s}')">+ לייג צו א מענטש</button>`},
+learn(){const s=SIDE=='all'?(ME.s=='m'?'m':'f'):SIDE,L=LEARN[s];const tn=Object.keys(L.tl).length,mn=Object.keys(L.ms).length;
+return `<h1>📖 משניות און תהילים</h1><div class="cap">לעילוי נשמת <b>${L.for}</b> · צו ענדיקן ביז ${L.by}. דריק אויף א קאפיטל אדער מסכתא צו נעמען.</div>
+<div class="seg">${[['f','טאטעס סייד'],['m','מאמעס סייד']].map(([k,t])=>`<button class="${s==k?'on':''}" onclick="SIDE='${k}';go()">${t}</button>`).join('')}</div>
+<div class="grid g2"><div class="card"><div class="muted">תהילים</div><div class="big">${tn} <span style="font-size:16px;color:#6b7280">פון 150</span></div><div style="height:8px;background:#e5e7eb;border-radius:9px;margin-top:6px"><div style="height:8px;width:${tn/1.5}%;background:#16a34a;border-radius:9px"></div></div></div><div class="card"><div class="muted">משניות (מסכתות)</div><div class="big">${mn} <span style="font-size:16px;color:#6b7280">פון ${MASECHTOS.length}</span></div><div style="height:8px;background:#e5e7eb;border-radius:9px;margin-top:6px"><div style="height:8px;width:${mn/MASECHTOS.length*100}%;background:#16a34a;border-radius:9px"></div></div></div></div>
+<h2>תהילים · 150 קאפיטלעך</h2><div class="muted" style="margin-bottom:8px">🟩 גענומען · 🟦 דו · ⬜ פריי</div><div class="perek">${Array.from({length:150},(_,i)=>i+1).map(i=>`<div class="pk ${L.tl[i]==ME.n.split(' ')[0]?'mine':L.tl[i]?'t':''}" title="${L.tl[i]||'פריי'}" onclick="takeT('${s}',${i})">${heb(i)}</div>`).join('')}</div>
+<h2>משניות · ${MASECHTOS.length} מסכתות</h2><div class="grid g4">${MASECHTOS.map(x=>`<div class="row" style="margin:0;cursor:pointer;${L.ms[x]==ME.n.split(' ')[0]?'background:#4338ca;color:#fff':L.ms[x]?'background:#f0fdf4;border-color:#86efac':''}" onclick="takeM('${s}','${x}')"><div class="grow"><b>${x}</b><div class="muted" style="${L.ms[x]==ME.n.split(' ')[0]?'color:#c7d2fe':''}">${L.ms[x]||'פריי'}</div></div></div>`).join('')}</div>`},
+sim(){const L=SIM.filter(x=>vis(x.s));return `<h1>🎉 שמחות</h1><div class="cap">שיק אן אינוויטעישן צו דער גאנצער סייד, אדער צו אלעמען. יעדער ענטפערט מיט איין דריק.</div>${seg()}
+${L.map((x,i)=>{const k=SIM.indexOf(x),r=x.rsvp[ME.n];return `<div class="card" style="margin-bottom:10px"><div style="display:flex;gap:10px;align-items:center"><div style="font-size:30px">${x.t=='חתונה'?'💍':x.t=='בר מצוה'?'📜':'👶'}</div><div class="grow"><b style="font-size:19px">${x.t} · ${x.who}</b><div class="muted">${x.d} · ${x.hd}</div><div class="muted">📍 ${x.pl}${x.addr?` · <span dir="ltr">${x.addr}</span>`:''}</div></div>${x.img?(x.pdf?`<div onclick="showInv(${k})" style="cursor:pointer;width:84px;height:110px;border:1px solid #e6e8ec;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-direction:column;font-size:12px">📄<br>PDF</div>`:`<img src="${x.img}" onclick="showInv(${k})" style="width:84px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #e6e8ec;cursor:pointer" title="זע די אינוויטעישן">`):''}${sideTag(x.s)}</div>
+<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn s ${r=='y'?'':'l'}" onclick="rsvp(${k},'y')">✓ איך קום${r=='y'?' (ענטפערט)':''}</button><button class="btn s ${r=='n'?'':'l'}" onclick="rsvp(${k},'n')">✗ קען נישט</button><span class="muted">${x.yes+(r=='y'?1:0)} קומען</span>${navBtns(x.addr)}${x.img?`<button class="btn s l" onclick="showInv(${k})">🖼️ זע אינוויטעישן</button>`:''}<label class="btn s l" style="cursor:pointer">⬆ ${x.img?'עדיט':'אפלאוד'} אינוויטעישן<input type="file" accept="image/*,application/pdf" style="display:none" onchange="upInv(${k},this)"></label><button class="btn s l" style="margin-right:auto" onclick="toast('מזל טוב געשיקט! 🎉')">שיק א מזל טוב</button></div></div>`}).join('')}
+<button class="btn" onclick="newSim()">+ נייע שמחה / אינוויטעישן</button>`},
+chat(){const L=MSG[CH];return `<h1>💬 טשעט</h1><div class="cap">רעד מיט די קאזינס. יעדע סייד האט א גרופע, און איין גרופע פאר אלעמען.</div>
+<div class="seg">${[['all','👨‍👩‍👧 אלע קאזינס'],['f','טאטעס סייד'],['m','מאמעס סייד']].filter(([k])=>k=='all'||ME.s=='both'||ME.s==k).map(([k,t])=>`<button class="${CH==k?'on':''}" onclick="CH='${k}';go()">${t}</button>`).join('')}</div>
+<div class="card"><div class="chat" id="cb">${L.map(m=>`<div class="bub ${m[0]==ME.n.split(' ')[0]?'me':''}"><div class="muted">${m[0]} · ${m[2]}</div>${m[1]}</div>`).join('')}</div>
+<div style="display:flex;gap:8px;margin-top:10px"><input id="ci" placeholder="שרייב א מעסעדזש…" style="margin:0" onkeydown="if(event.key=='Enter')send()"><button class="btn" onclick="send()">שיק</button></div></div>`},
+people(){const L=DIR.map((d,i)=>({...d,i})).filter(d=>vis2(d.s)&&(!Q||(d.h+d.w+d.a+d.par+d.ph+d.pw).includes(Q)));
+return `<h1>👥 קאזינס · אדרעסן און טעלעפאנען</h1><div class="cap">יעדער קאזין מיט מאן און ווייב, אדרעס און טעלעפאן. יעדער קען עדיטן זיינע אייגענע פרטים.</div>${seg()}
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" placeholder="🔍 סוירטש נאמען, שטאט, טעלעפאן…" value="${Q}" style="margin:0;max-width:340px" oninput="Q=this.value;go();const e=$('q');e.focus();e.setSelectionRange(e.value.length,e.value.length)"><span class="muted">${L.length} משפחות</span><button class="btn s l" onclick="dlDir()">⬇ דאונלאוד ליסט (Excel)</button><button class="btn s" onclick="editDir(-1)">+ לייג צו</button></div>
+<div class="grid g2">${L.map(d=>`<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div style="width:44px;height:44px;border-radius:99px;background:#eef2ff;display:flex;align-items:center;justify-content:center;font-weight:800;color:#3730a3;flex:none">${(d.h||d.w)[0]}</div><div class="grow"><b style="font-size:18px">${d.h}${d.w?' · '+d.w:''}</b><div class="muted">${d.par}</div></div>${sTag2(d.s)}</div>
+<div style="margin-top:10px;display:grid;gap:6px"><div>📍 ${d.a||'—'}</div><div style="display:flex;gap:14px;flex-wrap:wrap"><span><span class="muted">מאן:</span> ${tel(d.ph)}</span>${d.w?`<span><span class="muted">ווייב:</span> ${tel(d.pw)}</span>`:''}</div></div>
+<div style="margin-top:10px;display:flex;gap:6px"><button class="btn s l" onclick="editDir(${d.i})">✏️ עדיט</button>${navBtns(d.a)}</div></div>`).join('')||'<div class="muted">גארנישט געטראפן</div>'}</div>
+<button class="btn" style="margin-top:14px" onclick="toast('לינק געשיקט 📲 דער קאזין וועט אויסקלייבן זיין סייד')">+ אינווייט א קאזין</button>`}};
+// ---- helpers ----
+function heb(n){const o=['','א','ב','ג','ד','ה','ו','ז','ח','ט'],t=['','י','כ','ל','מ','נ','ס','ע','פ','צ'];let s='';if(n>=100){s+='ק';n-=100}if(n==15)return s+'טו';if(n==16)return s+'טז';s+=t[Math.floor(n/10)]+o[n%10];return s}
+function login(s){ME={n:$('ln').value.trim()||'יואל באכנער',s};SIDE=s=='both'?'all':s;CH='all';toast('ברוך הבא! ✓');location.hash='#home';go()}
+function remind(d){toast('🔔 מען וועט דיך דערמאנען פאר '+d)}
+function takeT(s,i){const L=LEARN[s].tl,me=ME.n.split(' ')[0];if(L[i]&&L[i]!=me){toast('קאפיטל '+heb(i)+' האט שוין '+L[i]);return}if(L[i]==me){delete L[i];toast('צוריקגעגעבן');}else{L[i]=me;toast('✓ דו האסט גענומען קאפיטל '+heb(i))}go()}
+function takeM(s,x){const L=LEARN[s].ms,me=ME.n.split(' ')[0];if(L[x]&&L[x]!=me){toast('מסכתא '+x+' האט שוין '+L[x]);return}if(L[x]==me){delete L[x];toast('צוריקגעגעבן')}else{L[x]=me;toast('✓ דו האסט גענומען מסכתא '+x)}go()}
+function rsvp(k,v){SIM[k].rsvp[ME.n]=v;toast(v=='y'?'✓ מען באכנערט אז דו קומסט':'מען באכנערט, א שיינעם דאנק');go()}
+function send(){const t=$('ci').value.trim();if(!t)return;MSG[CH].push([ME.n.split(' ')[0],t,'איצט']);go();setTimeout(()=>{const c=$('cb');if(c)c.scrollTop=c.scrollHeight},10)}
+function addYz(){$('mb').innerHTML=`<h2 style="margin-top:0">+ נייער יארצייט</h2><label>נאמען (מיט טאטנס נאמען)</label><input id="yn" placeholder="ר׳ … בן ר׳ … ז״ל"><label>ווער איז ער/זי</label><input id="yr" placeholder="זיידע, באבע, פעטער…"><div class="grid g2"><div><label>טאג</label><input id="yd" placeholder="כ״ג"></div><div><label>חודש</label><select id="ym">${['תשרי','חשון','כסלו','טבת','שבט','אדר','ניסן','אייר','סיון','תמוז','אב','אלול'].map(x=>`<option>${x}</option>`).join('')}</select></div></div><label>סייד</label><select id="ys"><option value="f">טאטעס סייד</option><option value="m">מאמעס סייד</option></select><label>קבר</label><input id="yk"><button class="btn" onclick="doYz()">סעיוו</button> <button class="btn l" onclick="cl()">קענסל</button>`;$('md').classList.add('on')}
+function doYz(){const n=$('yn').value.trim();if(!n){toast('שרייב א נאמען');return}YZ.push({n,r:$('yr').value||'משפחה',s:$('ys').value,hd:($('yd').value||'א׳')+' '+$('ym').value,gd:'—',days:60,kever:$('yk').value||'—'});cl();toast('✓ צוגעלייגט');go()}
+function addPerson(s){$('mb').innerHTML=`<h2 style="margin-top:0">+ לייג צו אין בוים</h2><label>נאמען</label><input id="pn2"><label>קינד פון</label><select id="pp">${TREE[s].k.flatMap(c=>[c.n,...(c.k||[]).map(g=>g.n)]).map(x=>`<option>${x}</option>`).join('')}</select><button class="btn" onclick="doPerson('${s}')">צולייגן</button> <button class="btn l" onclick="cl()">קענסל</button>`;$('md').classList.add('on')}
+function doPerson(s){const n=$('pn2').value.trim(),par=$('pp').value;if(!n)return;const f=(p)=>{if(p.n==par){(p.k=p.k||[]).push({n});return 1}return (p.k||[]).some(f)};f(TREE[s]);cl();toast('✓ '+n+' צוגעלייגט');go()}
+function newSim(){NEWINV=null;$('mb').innerHTML=`<h2 style="margin-top:0">+ נייע שמחה</h2><label>וואס</label><select id="st">${['חתונה','בר מצוה','בת מצוה','שלום זכר','ברית','קידוש','אופשערן','תנאים'].map(x=>`<option>${x}</option>`).join('')}</select><label>פון וועמען</label><input id="sw" value="${ME.n}"><label>ווען</label><input id="sd" placeholder="למשל: זונטאג, 30 נאוועמבער"><label>ווו (נאמען פון זאל / הויז)</label><input id="sp"><label>אדרעס (פאר GPS)</label><input id="sa" dir="ltr" style="text-align:right" placeholder="51 Forest Rd, Monroe, NY"><label>אינוויטעישן (בילד אדער PDF)</label><input type="file" accept="image/*,application/pdf" onchange="pickInv(this)"><div id="ip" style="margin:-4px 0 12px"></div><label>שיק צו</label><select id="ss"><option value="f">טאטעס סייד</option><option value="m">מאמעס סייד</option><option value="all">אלע קאזינס</option></select><button class="btn" onclick="doSim()">שיק אינוויטעישן</button> <button class="btn l" onclick="cl()">קענסל</button>`;$('md').classList.add('on')}
+function doSim(){const s=$('ss').value;SIM.unshift({t:$('st').value,who:$('sw').value,s:s=='all'?(ME.s=='m'?'m':'f'):s,d:$('sd').value||'—',hd:'',pl:$('sp').value||'—',addr:$('sa').value.trim(),rsvp:{},yes:0,...(NEWINV||{})});NEWINV=null;cl();toast('✓ אינוויטעישן געשיקט צו '+(s=='all'?'אלע קאזינס':s=='f'?'טאטעס סייד':'מאמעס סייד'));go()}
+function go(){const v=(location.hash||'#').slice(1)||'home';if(!ME){nav();$('m').innerHTML=V.login();return}nav(v);$('m').innerHTML=(V[v]||V.home)();window.scrollTo(0,0)}
+$('md').onclick=e=>{if(e.target.id=='md')cl()};window.onhashchange=go;go();
+</script></body></html>
