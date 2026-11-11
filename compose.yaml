@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: familye
+      POSTGRES_USER: familye
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - familye-db:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U familye -d familye"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://familye:${POSTGRES_PASSWORD}@db:5432/familye
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN}
+      NODE_ENV: ${NODE_ENV:-production}
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-}
+      ADMIN_NAME: ${ADMIN_NAME:-אדמין}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  familye-db:
