@@ -1,0 +1,5 @@
+node_modules/
+deploy/admin.env
+deploy/qa.env
+*.env.local
+data/
