@@ -133,7 +133,7 @@ app.addHook('preHandler', async req => {
   if (route.startsWith('/api/admin/')) {
     const manager=await admin(req);
     if(!manager.is_admin) {
-      if(!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[manager.family_group_id])) throw new HttpError(403,'משפחה נישט צוגעטיילט');
+      if(!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine AND archived_at IS NULL',[manager.family_group_id])) throw new HttpError(403,'משפחה נישט צוגעטיילט');
       const groupEdit=req.method==='PATCH'&&route==='/api/admin/family-groups/:id';
       if(groupEdit&&Number((req.params as any).id)!==manager.family_group_id)throw new HttpError(404,'נישט געטראפן');
       const permitted=groupEdit||(req.method==='GET' && ['/api/admin/users','/api/admin/family-groups'].includes(route)) ||
@@ -151,9 +151,13 @@ app.addHook('preHandler', async req => {
   const group = u.family_group_id;
   if (!group || !Number.isSafeInteger(group) || (!u.is_admin && !u.family_group_ids.includes(group)))
     throw new HttpError(403,'מען דארף דיר צוטיילן צו א משפחה. רעד מיט דעם אדמין.');
-  if (!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group])) throw new HttpError(403,'משפחה נישט געטראפן');
-  familyContext.getStore()!.id = group;
-  if((req.method==='GET'||u.is_admin)&&(route.startsWith('/api/people')||route.startsWith('/api/person-reviews')))familyContext.getStore()!.peopleGroups=[...new Set([...u.family_group_ids,group])];
+  const treeScope=(req.method==='GET'||u.is_admin)&&(route.startsWith('/api/people')||route.startsWith('/api/person-reviews'));
+  const scopedGroups=treeScope?[...u.family_group_ids,group]:[group];
+  const activeGroups=(await q<{id:number}>('SELECT id FROM family_groups WHERE id=ANY($1::int[]) AND NOT is_quarantine AND archived_at IS NULL',[scopedGroups])).map(g=>g.id);
+  if(!activeGroups.includes(group))throw new HttpError(403,'משפחה נישט געטראפן');
+  const context=familyContext.getStore()!;
+  context.id=group;
+  if(treeScope)context.peopleGroups=activeGroups;
   const check = async (table: string, id: unknown) => {
     if (id===null || id===undefined || id==='') return;
     const row=await q1(`SELECT 1 FROM ${table} WHERE id::text=$1 AND ${table==='people'?personSql():table==='yahrzeits'?yahrzeitSql():table==='families'&&route.startsWith('/api/people')?`family_group_id=ANY(${personGroupsSql()})`:familySql()}`,[String(id)]);
@@ -188,7 +192,7 @@ async function findInvitation(token: unknown) {
   if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(token)) throw bad('דער אינוויטעישן לינק איז נישט גוט');
   const invitation = await q1(`SELECT i.sides,i.created_by,i.family_group_id FROM family_invitations i JOIN users u ON u.id=i.created_by
     WHERE i.token_hash=$1 AND i.expires_at>now() AND u.status='active'
-    AND EXISTS(SELECT 1 FROM family_groups g WHERE g.id=i.family_group_id AND NOT g.is_quarantine) AND (u.is_admin OR (i.family_group_id=ANY(u.family_group_ids) AND ((u.is_family_admin AND i.family_group_id=u.family_group_id) OR i.sides <@ u.sides)))`, [sha(token)]);
+    AND EXISTS(SELECT 1 FROM family_groups g WHERE g.id=i.family_group_id AND NOT g.is_quarantine AND g.archived_at IS NULL) AND (u.is_admin OR (i.family_group_id=ANY(u.family_group_ids) AND ((u.is_family_admin AND i.family_group_id=u.family_group_id) OR i.sides <@ u.sides)))`, [sha(token)]);
   if (!invitation) throw new HttpError(404, 'דער אינוויטעישן לינק איז אויסגעלאפן. בעט א נייעם לינק.');
   return invitation;
 }
@@ -265,7 +269,7 @@ app.post('/api/auth/login', authLimit, async (req, reply) => {
   const u = phone ? await q1('SELECT * FROM users WHERE phone=$1', [phone]) : null;
   const ok = u?.password_hash ? await verify(u.password_hash, String(b.password || '')).catch(() => false) : false;
   if (!u || !ok) throw new HttpError(401, 'טעלעפאן אדער פאסווארט איז נישט ריכטיג');
-  if (!u.is_admin && !(await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[u.family_group_id]))) throw new HttpError(403,'דיין אקאונט דארף א משפחה צוטיילונג פונעם אדמין');
+  if (!u.is_admin && !(await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine AND archived_at IS NULL',[u.family_group_id]))) throw new HttpError(403,'דיין אקאונט דארף א משפחה צוטיילונג פונעם אדמין');
   if (u.status === 'rejected') throw new HttpError(403, 'דער אקאונט איז נישט אפרובירט געווארן');
   await newSession(reply, u.id);
   return { user: publicUser(u) };
@@ -279,14 +283,14 @@ app.post('/api/auth/logout', async (req, reply) => {
 app.get('/api/me', async (req) => {
   const u = await loadUser(req);
   const groupId=u?.family_group_id;
-  const group=groupId?await q1('SELECT id,name FROM family_groups WHERE id=$1 AND NOT is_quarantine',[groupId]):null;
-  const groups=u?await q('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND ($1::boolean OR id=ANY($2::int[])) ORDER BY name',[u.is_admin,u.family_group_ids]):[];
+  const groups=u?await q('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND archived_at IS NULL AND ($1::boolean OR id=ANY($2::int[])) ORDER BY name',[u.is_admin,u.family_group_ids]):[];
+  const group=groups.find(g=>g.id===groupId);
   return { user: u ? {...publicUser(u),family_groups:groups,family_name:group?.name || null,selected_family_group_id:group?.id || null} : null, settings: {...await getSettings(),...(group?{family_yi:group.name,side_a_family_yi:'',side_b_family_yi:''}:{})}, email_enabled: emailReady() };
 });
 app.post('/api/me/family-group',async(req,reply)=>{
   const u=await member(req),group=Number((req.body as any)?.family_group_id);
   if(!Number.isSafeInteger(group)||(!u.is_admin&&!u.family_group_ids.includes(group)))throw new HttpError(403,'די משפחה איז נישט צוגעטיילט צו דיר');
-  if(!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group]))throw bad('קלייב אויס א משפחה');
+  if(!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine AND archived_at IS NULL',[group]))throw bad('קלייב אויס א משפחה');
   reply.setCookie('fam_group',String(group),{path:'/',httpOnly:true,sameSite:'lax',secure:config.cookieSecure});
   await q('DELETE FROM chat_presence WHERE user_id=$1',[u.id]);
   return {ok:true};
@@ -501,17 +505,17 @@ app.put('/api/admin/settings', async (req) => {
 const assignmentTables = ['people','yahrzeits','learn_lists','directory','simchas','files','messages','families'] as const;
 app.get('/api/admin/family-groups', async req => {
   const manager=await admin(req);
-  return {groups:await q('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND ($1::boolean OR id=$2) ORDER BY name',[manager.is_admin,manager.family_group_id])};
+  return {groups:await q('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND archived_at IS NULL AND ($1::boolean OR id=$2) ORDER BY name',[manager.is_admin,manager.family_group_id])};
 });
 app.patch('/api/admin/family-groups/:id', async req => {
   const manager=await admin(req),id=Number((req.params as any).id),name=str((req.body as any)?.name,120);
   if(!name)throw bad('שרייב א משפחה נאמען');
-  const group=await q1('UPDATE family_groups SET name=$1 WHERE id=$2 AND NOT is_quarantine AND ($3::boolean OR id=$4) RETURNING id,name',[name,id,manager.is_admin,manager.family_group_id]);
+  const group=await q1('UPDATE family_groups SET name=$1 WHERE id=$2 AND NOT is_quarantine AND archived_at IS NULL AND ($3::boolean OR id=$4) RETURNING id,name',[name,id,manager.is_admin,manager.family_group_id]);
   if(!group)throw new HttpError(404,'נישט געטראפן'); return {group};
 });
 app.post('/api/admin/select-family-group', async (req,reply) => {
   await admin(req);const group=Number((req.body as any)?.family_group_id);
-  if(!Number.isSafeInteger(group)||!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group]))throw bad('קלייב אויס א משפחה');
+  if(!Number.isSafeInteger(group)||!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine AND archived_at IS NULL',[group]))throw bad('קלייב אויס א משפחה');
   reply.setCookie('fam_group',String(group),{path:'/',httpOnly:true,sameSite:'lax',secure:config.cookieSecure});
   return {ok:true};
 });
@@ -529,7 +533,7 @@ app.put('/api/admin/users/:id/family-group', async req => {
   await tx(async c=>{
     const old=(await c.query('SELECT family_group_id,family_group_ids FROM users WHERE id=$1 FOR UPDATE',[id])).rows[0];
     if(!old)throw new HttpError(404,'נישט געטראפן');
-    const valid=(await c.query('SELECT id FROM family_groups WHERE id=ANY($1::int[]) AND NOT is_quarantine FOR KEY SHARE',[groups])).rows;
+    const valid=(await c.query('SELECT id FROM family_groups WHERE id=ANY($1::int[]) AND NOT is_quarantine AND archived_at IS NULL FOR KEY SHARE',[groups])).rows;
     if(valid.length!==groups.length)throw bad('קלייב אויס עקזיסטירנדיקע משפחות');
     const primary=groups.includes(old.family_group_id)?old.family_group_id:groups[0];
     await c.query('UPDATE users SET family_group_id=$1,family_group_ids=$2,is_family_admin=CASE WHEN family_group_id=$1 THEN is_family_admin ELSE false END WHERE id=$3',[primary,groups,id]);
@@ -563,7 +567,7 @@ app.get('/api/admin/unassigned-records', async req => {
 });
 app.post('/api/admin/assign-records', async req => {
   const a=await admin(req),b:any=req.body||{},group=Number(b.family_group_id);
-  if(!Number.isSafeInteger(group)||!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group]))throw bad('קלייב אויס א משפחה');
+  if(!Number.isSafeInteger(group)||!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine AND archived_at IS NULL',[group]))throw bad('קלייב אויס א משפחה');
   if(!b.records || typeof b.records!=='object' || Object.keys(b.records).some(t=>!assignmentTables.includes(t as any)))throw bad('קלייב אויס רעקארדס');
   await tx(async c=>{
     await c.query('SELECT pg_advisory_xact_lock(68427301)');
@@ -574,9 +578,10 @@ app.post('/api/admin/assign-records', async req => {
       const result=await c.query(`UPDATE ${table} SET family_group_id=$1 WHERE id::text=ANY($2::text[]) AND family_group_id IS NULL RETURNING id`,[group,unique]);
       if(result.rows.length!==unique.length)throw new HttpError(409,'א רעקארד איז שוין צוגעטיילט. ריפרעש און פרוביר נאכאמאל.');
     }
-    // Labels must not refer to a different family (or still-unassigned labels).
+    // Check labels affected by this assignment, including labels attached to other people.
     if((await c.query(`SELECT 1 FROM person_families pf JOIN people p ON p.id=pf.person_id JOIN families f ON f.id=pf.family_id
-      WHERE p.family_group_id IS NOT NULL AND (f.family_group_id IS NULL OR (p.family_group_id IS DISTINCT FROM f.family_group_id AND NOT EXISTS(SELECT 1 FROM person_family_access a WHERE a.person_id=p.id AND a.family_group_id=f.family_group_id))) LIMIT 1`)).rows.length)
+      WHERE (p.id::text=ANY($1::text[]) OR f.id::text=ANY($2::text[])) AND p.family_group_id IS NOT NULL
+        AND (f.family_group_id IS NULL OR (p.family_group_id IS DISTINCT FROM f.family_group_id AND NOT EXISTS(SELECT 1 FROM person_family_access a WHERE a.person_id=p.id AND a.family_group_id=f.family_group_id))) LIMIT 1`,[b.records.people||[],b.records.families||[]])).rows.length)
       throw bad('קלייב אויך אויס די פארבונדענע משפחה נעמען פאר דער זעלבער משפחה');
     await c.query('INSERT INTO family_assignment_audit(admin_id,family_group_id,assignments) VALUES($1,$2,$3)',[a.id,group,JSON.stringify(b.records)]);
   });
@@ -590,7 +595,7 @@ async function recoveryPlan(c:any, mapping:any) {
     coalesce((SELECT array_agg(family_id) FROM person_families WHERE person_id=p.id),'{}') label_ids FROM people p WHERE family_group_id IS NULL ORDER BY id`)).rows;
   if(!people.length)throw bad('נישטא קיין אלטע מענטשן צוריקצושטעלן');
   if(!mapping || typeof mapping!=='object' || Array.isArray(mapping) || Object.keys(mapping).length!==labels.length)throw bad('טייל צו יעדן אלטן משפחה נאמען');
-  const groups=(await c.query('SELECT id,name FROM family_groups WHERE NOT is_quarantine')).rows;
+  const groups=(await c.query('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND archived_at IS NULL')).rows;
   for(const label of labels)if(!groups.some((g:any)=>g.id===Number(mapping[label.id])))throw bad('קלייב אויס א משפחה פאר יעדן נאמען');
   const assignments=new Map<number,number[]>();
   for(const p of people)assignments.set(p.id,[...new Set<number>(p.label_ids.map((id:number)=>Number(mapping[id])))].filter(Boolean).sort((a,b)=>a-b));
@@ -635,14 +640,22 @@ app.post('/api/admin/recover-tree',async req=>{
 });
 
 // ---------------- yahrzeits ----------------
+const personFamilyLabelsSql = (personId: string, groups: string) => `coalesce((
+  SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name)
+  FROM person_families pf JOIN families f ON f.id=pf.family_id
+  JOIN family_groups g ON g.id=f.family_group_id AND NOT g.is_quarantine AND g.archived_at IS NULL
+  WHERE pf.person_id=${personId} AND f.family_group_id=ANY(${groups})
+),'[]')`;
 function yzOut(r: any) {
   const n = nextYahrzeit(r.hday, r.hmonth, r.death_year);
   return { ...r, hebrew: `${gem(r.hday)} ${MONTH_YI[r.hmonth] || r.hmonth}`, next: n };
 }
 async function listYahrzeits(u: User) {
-  const rows = await q(`SELECT y.*,CASE WHEN p.id IS NULL THEN y.father_name ELSE coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(fp.title,''),fp.name) FROM people fp WHERE fp.id=p.father_id AND ${personSql('fp')}),'') END father_name,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,p.kever_address,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id AND ${familySql('f')}),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
+  const labelGroups=[...u.family_group_ids,u.family_group_id];
+  const rows = await q(`SELECT y.*,CASE WHEN p.id IS NULL THEN y.father_name ELSE coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(fp.title,''),fp.name) FROM people fp WHERE fp.id=p.father_id AND ${personSql('fp')}),'') END father_name,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,p.kever_address,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year,
+    ${personFamilyLabelsSql('y.person_id','$3::int[]')} families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
     LEFT JOIN yahrzeit_reminders r ON r.yahrzeit_id=y.id AND r.user_id=$1 LEFT JOIN users cu ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(cu.family_group_ids) AND cu.id=y.created_by
-    WHERE y.archived_at IS NULL AND ${yahrzeitSql('y')} AND (y.side IN ('both','all') OR y.side=ANY($2::text[]))`, [u.id, mySides(u)]);
+    WHERE y.archived_at IS NULL AND ${yahrzeitSql('y')} AND (y.side IN ('both','all') OR y.side=ANY($2::text[]))`, [u.id, mySides(u), labelGroups]);
   return rows.map(yzOut).sort((a, b) => (a.next?.days ?? 9999) - (b.next?.days ?? 9999));
 }
 function yzBody(u: User, b: any) {
@@ -683,7 +696,7 @@ app.post('/api/yahrzeits/:id/remind', async (req) => {
 const personSelect = () => `SELECT p.*,
   f.id father_id,m.id mother_id,sp.id spouse_id,sp2.id second_spouse_id,pa.id parent_id,
   CASE WHEN p.spouse_id IS NOT NULL AND sp.id IS NULL THEN '' ELSE p.spouse END spouse,
-  coalesce((SELECT json_agg(json_build_object('id',fam.id,'name',fam.name) ORDER BY fam.name) FROM person_families pf JOIN families fam ON fam.id=pf.family_id WHERE pf.person_id=p.id AND fam.family_group_id=ANY(${personGroupsSql()})),'[]') families,
+  ${personFamilyLabelsSql('p.id',personGroupsSql())} families,
   f.name father_name,f.title father_title,m.name mother_name,m.title mother_title,
   sp.name spouse_name,sp.title spouse_title,sp2.name second_spouse_name,sp2.title second_spouse_title
   FROM people p LEFT JOIN people f ON f.id=p.father_id AND ${personSql('f')}
@@ -714,7 +727,13 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     if(key&&!/^[a-zA-Z0-9_-]{16,80}$/.test(key))throw bad('דער סעיוו קוד איז נישט ריכטיג');
     const fingerprint=sha(JSON.stringify({id:id||null,body:b}));
     if(key){const saved=(await c.query(`SELECT * FROM person_save_requests WHERE user_id=$1 AND request_key=$2 AND ${familySql()}`,[u.id,key])).rows[0];
-      if(saved){if(saved.fingerprint!==fingerprint)throw new HttpError(409,'די פרטים האבן זיך געטוישט. פרוביר נאכאמאל.');return saved.response?.id?(await c.query(`${personSelect()} WHERE p.id=$1 AND ${personSql('p')}`,[saved.response.id])).rows[0]:saved.response;}}
+      if(saved){
+        if(saved.fingerprint!==fingerprint)throw new HttpError(409,'די פרטים האבן זיך געטוישט. פרוביר נאכאמאל.');
+        if(!saved.response?.id)return saved.response;
+        const person=(await c.query(`${personSelect()} WHERE p.id=$1 AND ${personSideSql('p',2)}`,[saved.response.id,mySides(u)])).rows[0];
+        if(!person)throw new HttpError(404,'נישט געטראפן');
+        return person;
+      }}
     const finish=async(response:any)=>{
       if(key)await c.query('INSERT INTO person_save_requests(user_id,request_key,fingerprint,response) VALUES($1,$2,$3,$4)',[u.id,key,fingerprint,JSON.stringify(response)]);
       return response;
@@ -732,6 +751,33 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     b = {...(old || {}),...b};
     const name = str(b.name,120); if (!name) throw bad('שרייב א נאמען');
     const side = okSide(u,b.side);
+    const context=familyContext.getStore()!;
+    const viewedGroup=context.id!;
+    const previousFamilies=id?(await c.query(`SELECT pf.family_id FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=$1 AND f.family_group_id=ANY(${personGroupsSql()})`,[id])).rows.map(r=>r.family_id):[];
+    const requestedFamilies=b.family_ids===undefined?previousFamilies:b.family_ids;
+    if(!Array.isArray(requestedFamilies) || requestedFamilies.some((v:any)=>!Number.isSafeInteger(Number(v))||Number(v)<1)) throw bad('קלייב אויס ריכטיגע משפחות');
+    const familyIds=[...new Set<number>(requestedFamilies.map(Number))];
+    const checkedFamilies=familyIds.length?(await c.query(`SELECT f.family_group_id FROM families f JOIN family_groups g ON g.id=f.family_group_id AND NOT g.is_quarantine AND g.archived_at IS NULL
+      WHERE f.id=ANY($1::int[]) AND f.family_group_id=ANY(${personGroupsSql()})`,[familyIds])).rows:[];
+    if(checkedFamilies.length!==familyIds.length)throw bad('א משפחה איז נישט געפונען');
+
+    const checkedGroups=[...new Set<number>(checkedFamilies.map(f=>f.family_group_id))];
+    const assignAccess=u.is_admin && original.family_ids!==undefined && checkedGroups.length>0;
+    let owner:number=old?.family_group_id ?? viewedGroup;
+    if(assignAccess && !checkedGroups.includes(owner) && (!old || (context.peopleGroups || [viewedGroup]).includes(owner))) {
+      owner=checkedGroups.includes(viewedGroup)?viewedGroup:Math.min(...checkedGroups);
+    }
+    const accessGroups=new Set([owner]);
+    if(assignAccess)for(const group of checkedGroups)accessGroups.add(group);
+    if(old) {
+      // Retain access assigned independently of the editable labels, including inherited legacy access.
+      const retained=(await c.query(`SELECT a.family_group_id FROM person_family_access a WHERE a.person_id=$1 AND (
+          NOT $2::boolean OR
+          a.family_group_id<>ALL(${personGroupsSql()}) OR NOT EXISTS (
+            SELECT 1 FROM person_families pf JOIN families f ON f.id=pf.family_id
+            WHERE pf.person_id=a.person_id AND f.family_group_id=a.family_group_id))`,[id,assignAccess])).rows;
+      for(const grant of retained)accessGroups.add(grant.family_group_id);
+    }
     const visible=(await c.query(`${personSelect()} WHERE ${personSideSql('p',1)}`,[mySides(u)])).rows;
     const matches=(value:string,exclude?:number)=>visible.filter(p=>p.id!==exclude&&nameKey(p.name)===nameKey(value));
     const identityChanged=!old || ['name','father_id','mother_id','parent_id'].some(k=>String(b[k]||'')!==String(old[k]||''));
@@ -743,12 +789,13 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if(b.confirm_distinct!==true || reason.length<5)throw new HttpError(409,'דער נאמען עקזיסטירט שוין. קלייב דעם מענטש, אדער באשטעטיג אז דאס איז א צווייטער מענטש און ערקלער פארוואס.',{code:'person_matches',field:'person',matches:candidates.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
       if(!key)throw bad('די באשטעטיגונג דארף א סעיוו קוד');
       if(candidates.some(p=>sameParent(p,b))) {
-        const pending=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason) VALUES($1,$2,$3,$4,$5) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason])).rows[0];
-        return finish({pending_review:pending.id});
+        const pending=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,family_group_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason,owner])).rows[0];
+        return finish({pending_review:pending.id,...(owner!==viewedGroup?{review_family_group_id:owner}:{})});
       }
       // Keep the explicit same-name exception for later audit; no automatic merge.
-      confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now()) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason])).rows[0].id;
+      confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at,family_group_id) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now(),$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason,owner])).rows[0].id;
     }
+    const relativeGroup=accessGroups.has(viewedGroup)?viewedGroup:owner;
     // Inline relatives and their links commit together, so a failed form leaves no orphan people.
     for (const key of ['father_id','mother_id','spouse_id','second_spouse_id']) {
       const draft = b.new_relatives?.[key];
@@ -758,8 +805,8 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if (!relativeName) throw bad('שרייב דעם נאמען פונעם נייעם מענטש');
       const existing=matches(relativeName);
       if(existing.length)throw new HttpError(409,'דער קרוב עקזיסטירט אפשר שוין. קלייב אים פון דער ליסטע. אויב דאס איז א צווייטער מענטש, לייג אים צו באזונדער מיט אן ערקלערונג.',{code:'person_matches',field:key,matches:existing.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
-      const relative = (await c.query(`INSERT INTO people(name,title,side,life_status,lineage_term,created_by)
-        VALUES($1,$2,$3,'unknown',$4,$5) RETURNING *`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id])).rows[0];
+      const relative = (await c.query(`INSERT INTO people(name,title,side,life_status,lineage_term,created_by,family_group_id)
+        VALUES($1,$2,$3,'unknown',$4,$5,$6) RETURNING *`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id,relativeGroup])).rows[0];
       visible.push(relative);b[key] = relative.id;
     }
     const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id), secondSpouse = personId(b.second_spouse_id);
@@ -797,25 +844,29 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     }
     const lineage=str(b.lineage_term,4);
     if (!['','בן','בת'].includes(lineage)) throw bad('קלייב אויס בן אדער בת');
-    const previousFamilies=id?(await c.query(`SELECT pf.family_id FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=$1 AND f.family_group_id=ANY(${personGroupsSql()})`,[id])).rows.map(r=>r.family_id):[];
-    const requestedFamilies=b.family_ids===undefined?previousFamilies:b.family_ids;
-    if(!Array.isArray(requestedFamilies) || requestedFamilies.some((v:any)=>!Number.isSafeInteger(Number(v))||Number(v)<1)) throw bad('קלייב אויס ריכטיגע משפחות');
-    const familyIds:number[]=[...new Set<number>(requestedFamilies.map(Number))];
     const newFamily=str(b.new_family,80);
     if(newFamily) {
-      const family=(await c.query(`INSERT INTO families(name,created_by) VALUES($1,$2) ON CONFLICT(family_group_id,lower(name)) DO UPDATE SET name=families.name RETURNING id`,[newFamily,u.id])).rows[0];
+      const family=(await c.query(`INSERT INTO families(name,created_by,family_group_id) VALUES($1,$2,$3) ON CONFLICT(family_group_id,lower(name)) DO UPDATE SET name=families.name RETURNING id`,[newFamily,u.id,relativeGroup])).rows[0];
       if(!familyIds.includes(family.id)) familyIds.push(family.id);
-    }
-    if(familyIds.length) {
-      const found=(await c.query(`SELECT id FROM families WHERE id=ANY($1::int[]) AND family_group_id=ANY(${personGroupsSql()})`,[familyIds])).rows;
-      if(found.length!==familyIds.length) throw bad('א משפחה איז נישט געפונען');
     }
     const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year,lineage];
     for(const previous of [old?.spouse_id,old?.second_spouse_id].filter(Boolean)) if(!partners.includes(previous)) {
       await c.query('UPDATE people SET spouse_id=CASE WHEN spouse_id=$1 THEN NULL ELSE spouse_id END, second_spouse_id=CASE WHEN second_spouse_id=$1 THEN NULL ELSE second_spouse_id END WHERE id=$2',[id,previous]);
     }
-    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15,second_spouse_id=$17 WHERE id=$16 RETURNING *`,[...vals,id,secondSpouse])).rows[0]
-      : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[...vals,u.id])).rows[0];
+    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15,second_spouse_id=$17,family_group_id=$18 WHERE id=$16 RETURNING *`,[...vals,id,secondSpouse,owner])).rows[0]
+      : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,created_by,family_group_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,[...vals,u.id,owner])).rows[0];
+    if(assignAccess) {
+      const groups=[...accessGroups];
+      if(old) {
+        await c.query('DELETE FROM person_family_access WHERE person_id=$1 AND family_group_id<>ALL($2::int[])',[row.id,groups]);
+        // Move the person's memorial only when its current family loses access to the person.
+        await c.query(`WITH moved AS (SELECT id,family_group_id FROM yahrzeits WHERE person_id=$1 AND family_group_id<>ALL($2::int[]))
+          UPDATE yahrzeits y SET family_group_id=$3 FROM moved m
+          WHERE y.id=m.id OR (y.canonical_id=m.id AND y.family_group_id=m.family_group_id)`,[row.id,groups,owner]);
+      }
+      await c.query(`INSERT INTO person_family_access(person_id,family_group_id)
+        SELECT $1,g FROM unnest($2::int[]) g WHERE g<>$3 ON CONFLICT DO NOTHING`,[row.id,groups,owner]);
+    }
     row.kever=str(b.kever ?? old?.kever,200);
     row.kever_address=str(b.kever_address ?? old?.kever_address,500);
     await c.query('UPDATE people SET kever=$1,kever_address=$3 WHERE id=$2',[row.kever,row.id,row.kever_address]);
@@ -851,12 +902,12 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     if(confirmationId)await c.query('UPDATE person_reviews SET result_id=$1 WHERE id=$2',[row.id,confirmationId]);
     if(reviewId) {
       await c.query("UPDATE person_reviews SET status='approved',result_id=$1,reviewed_by=$2,reviewed_at=now() WHERE id=$3",[row.id,u.id,reviewId]);
-      await c.query(`UPDATE person_save_requests SET response=$1 WHERE ${familySql()} AND response->>'pending_review'=$2`,[JSON.stringify(row),String(reviewId)]);
+      await c.query(`UPDATE person_save_requests SET response=$1 WHERE user_id=$2 AND response->>'pending_review'=$3`,[JSON.stringify(row),review.created_by,String(reviewId)]);
     }
     return finish((await c.query(`${personSelect()} WHERE p.id=$1`,[row.id])).rows[0]);
   });
 }
-const personResponse=(person:any)=>person.pending_review?{pending_review:person.pending_review}:{person};
+const personResponse=(person:any)=>person.pending_review?person:{person};
 app.post('/api/people', async req => personResponse(await savePerson(await member(req),req.body)));
 app.put('/api/people/:id', async req => personResponse(await savePerson(await member(req),req.body,Number((req.params as any).id))));
 app.delete('/api/people/:id', async req => {

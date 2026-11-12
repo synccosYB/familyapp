@@ -58,7 +58,7 @@ export async function runLearningReminders(log: {error:(o:object,m:string)=>void
     if (!locked) return;
     const rows = (await c.query(`SELECT l.id,l.kind,l.niftar,l.target_date,u.id user_id,u.email FROM learn_lists l
       JOIN users u ON l.family_group_id=ANY(u.family_group_ids)
-      JOIN family_groups g ON g.id=l.family_group_id AND NOT g.is_quarantine
+      JOIN family_groups g ON g.id=l.family_group_id AND NOT g.is_quarantine AND g.archived_at IS NULL
       WHERE u.status='active' AND u.email_verified_at IS NOT NULL AND u.learning_email_reminders
       AND (u.is_admin OR (u.is_family_admin AND u.family_group_id=l.family_group_id) OR l.side='both' OR l.side=ANY(u.sides))
       AND (l.target_date IS NULL OR l.target_date >= $1::date)
