@@ -60,6 +60,52 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/people',undefined,a.cookie)).status,401);
   const again=await request('/auth/login',{phone:'8455550101',password:'build-member-password'});assert.equal(again.status,200);
   assert.equal((await request('/people',undefined,again.cookie)).body.people.length,2);
+  // Structured relationships are shared by tree, household directory and yahrzeits.
+  const createPerson=async body=>{const r=await request('/people',{side:'a',...body},admin.cookie);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.person;};
+  const father=await createPerson({name:'Structured father',title:'Rabbi',life_status:'deceased',death_hday:12,death_hmonth:'KISLEV'});
+  const mother=await createPerson({name:'Structured mother'});
+  const wife=await createPerson({name:'Structured spouse'});
+  const son=await createPerson({name:'Structured son',father_id:father.id,mother_id:mother.id,spouse_id:wife.id});
+  const personRows=(await request('/people',undefined,admin.cookie)).body.people;
+  assert.equal(personRows.find(p=>p.id===wife.id).spouse_id,son.id);
+  assert.equal(personRows.find(p=>p.id===mother.id).life_status,'unknown');
+  assert.equal(personRows.find(p=>p.id===son.id).mother_name,'Structured mother');
+  const directory=await request('/directory',{husband_person_id:son.id,wife_person_id:wife.id,parents:'Legacy note retained',side:'a',mine:true},admin.cookie);
+  assert.equal(directory.status,200,JSON.stringify(directory.body));
+  const familyId=directory.body.family.id;
+  assert.equal((await request('/people/'+father.id,{name:'Renamed father',side:'a',title:'Rabbi'},admin.cookie,'PUT')).status,200);
+  const household=(await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId);
+  assert.match(household.parents,/Renamed father/);
+  assert.match(household.parents,/Structured mother/);
+  const calendar=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits;
+  const fatherYz=calendar.find(y=>y.person_id===father.id);
+  assert.ok(fatherYz);assert.equal(fatherYz.name,'Rabbi Renamed father');assert.equal(fatherYz.hday,12);
+  assert.equal(calendar.length,1,'unknown dates must not invent yahrzeits');
+  assert.equal((await request('/yahrzeits/'+fatherYz.id,{name:'Drift',side:'a',hday:1,hmonth:'AV'},admin.cookie,'PUT')).status,400);
+  assert.equal((await request('/people/'+mother.id,{name:'Structured mother',side:'a',mother_id:son.id},admin.cookie,'PUT')).status,400,'reject cycles through mother');
+  assert.equal((await request('/people/'+son.id,{name:'Structured son',side:'a',father_id:mother.id,mother_id:mother.id},admin.cookie,'PUT')).status,400);
+  assert.equal((await request('/people/'+father.id,undefined,admin.cookie,'DELETE')).status,400,'do not cascade-delete linked family members');
+  const sharedPerson=await createPerson({name:'Shared person',side:'both'});
+  assert.equal((await request('/people/'+son.id,{name:'Structured son',side:'a',spouse_id:sharedPerson.id},admin.cookie,'PUT')).status,400,'reciprocal spouse links must not expose private people through shared records');
+  const hiddenPerson=await createPerson({name:'Hidden B father',side:'b'});
+  assert.equal((await request('/people/'+son.id,{name:'Structured son',side:'a',father_id:hiddenPerson.id},admin.cookie,'PUT')).status,400,'do not leak another side via links');
+  assert.equal((await request('/directory',undefined,b.cookie)).body.families.length,0);
+  assert.equal((await request('/directory/'+familyId,{husband:'unauthorized',side:'a'},b.cookie,'PUT')).status,404);
+  assert.equal((await request('/directory',{husband_person_id:son.id,side:'both'},admin.cookie)).status,400,'a shared household cannot expose a private person');
+  assert.equal((await request('/people/'+father.id,{name:'Renamed father',side:'b'},admin.cookie,'PUT')).status,400,'reject moving linked data behind another side');
+  assert.equal((await request('/people/'+father.id,{name:'Renamed father',side:'a',death_hday:31},admin.cookie,'PUT')).status,400);
+  assert.equal((await request('/people/'+wife.id,{name:'Structured spouse',side:'a',spouse_id:null},admin.cookie,'PUT')).status,200);
+  assert.equal((await request('/people',undefined,admin.cookie)).body.people.find(p=>p.id===son.id).spouse_id,null);
+  assert.equal((await request('/people/'+wife.id,{name:'Structured spouse',side:'a',spouse_id:son.id},admin.cookie,'PUT')).status,200);
+  const contenders=await Promise.all([['Race 1','a'],['Race 2','a']].map(([name,side])=>createPerson({name,side})));
+  const cycleRace=await Promise.all(contenders.map((p,i)=>request('/people/'+p.id,{name:p.name,side:'a',father_id:contenders[1-i].id},admin.cookie,'PUT')));
+  assert.deepEqual(cycleRace.map(r=>r.status).sort(),[200,400]);
+  // Saving a household is transactional, and does not overwrite canonical names.
+  assert.equal((await request('/directory/'+familyId,{husband:'Stale copy',wife:'Stale copy',side:'a'},admin.cookie,'PUT')).status,200);
+  assert.equal((await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId).husband,'Structured son');
+  assert.equal((await request('/people/'+father.id,{name:'Renamed father',side:'a',death_hday:null,death_hmonth:null},admin.cookie,'PUT')).status,200);
+  assert.equal((await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits.length,0);
+
  }finally{
   if(child&&child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}
   await adminPool.query(`DROP SCHEMA ${schema} CASCADE`);await adminPool.end();await rm(data,{recursive:true,force:true});
