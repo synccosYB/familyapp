@@ -38,6 +38,8 @@ jobs:
           name: familye-build
           path: |
             dist/
+            src/
+            tsconfig.json
             web/
             db/
             deploy/start.sh
