@@ -1150,6 +1150,11 @@ async function listDir(u: User) {
       parents:[h&&parents(h)?`${h.name}: ${parents(h)}`:'',w&&parents(w)?`${w.name}: ${parents(w)}`:''].filter(Boolean).join(' · ') || d.parents};
   });
 }
+// Household links must use people accessible in this selected family, not the wider tree workspace.
+app.get('/api/directory-people', async req => {
+  const u = await member(req);
+  return { people: await q(`${personSelect()} WHERE ${personSideSql('p',1)} ORDER BY p.id`, [mySides(u)]) };
+});
 app.get('/api/directory', async (req) => { const u = await member(req); return { families: await listDir(u) }; });
 const mayEditDir = (u: User, d: any) => managesFamily(u) || d.owner_id === u.id || d.created_by === u.id;
 async function saveDirectory(u:User,b:any,id?:number) {
