@@ -82,6 +82,43 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.ok(JSON.stringify(ok(await req('/people',undefined,a.cookie))).includes('Legacy hidden'));
   assert.equal((await req('/admin/assign-records',{family_group_id:gb,records:{people:[legacy.id]}},root.cookie)).status,409);
   await assert.rejects(db.query(`UPDATE ${schema}.people SET father_id=$1 WHERE id=$2`,[pb.id,child.id]),/foreign key/);
+  // Recover a connected canonical tree into several families, retaining shared IDs.
+  const labels=(await db.query(`INSERT INTO ${schema}.families(name) VALUES('Legacy A'),('Legacy B') RETURNING id`)).rows;
+  const lp=(await db.query(`INSERT INTO ${schema}.people(name,side) VALUES('A grandfather','both'),('B grandfather','both'),('Shared husband','both'),('Shared wife','both'),('Unlabelled child','both') RETURNING id`)).rows.map(r=>r.id);
+  await db.query(`UPDATE ${schema}.people SET father_id=$1,spouse_id=$2 WHERE id=$3`,[lp[0],lp[3],lp[2]]);
+  await db.query(`UPDATE ${schema}.people SET father_id=$1,spouse_id=$2 WHERE id=$3`,[lp[1],lp[2],lp[3]]);
+  await db.query(`UPDATE ${schema}.people SET father_id=$1,mother_id=$2 WHERE id=$3`,[lp[2],lp[3],lp[4]]);
+  for(const [person,ls] of [[lp[0],[labels[0].id]],[lp[1],[labels[1].id]],[lp[2],labels.map(l=>l.id)],[lp[3],labels.map(l=>l.id)]])for(const label of ls)await db.query(`INSERT INTO ${schema}.person_families(person_id,family_id) VALUES($1,$2)`,[person,label]);
+  const recoveredYz=(await db.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,person_id,father_name) VALUES('Shared wife','both',1,'TISHREI',$1,'B grandfather') RETURNING id`,[lp[3]])).rows[0].id;
+  const mapping={[labels[0].id]:ga,[labels[1].id]:gb};
+  assert.equal((await req('/admin/recover-tree/preview',{label_groups:mapping},a.cookie)).status,403);
+  const plan=ok(await req('/admin/recover-tree/preview',{label_groups:mapping},root.cookie));
+  assert.deepEqual(plan.unknown,[]);assert.deepEqual(plan.people.find(p=>p.id===lp[4]).group_ids,[ga,gb]);
+  assert.equal((await req('/admin/recover-tree',{label_groups:mapping,token:'stale'},root.cookie)).status,409);
+  ok(await req('/admin/recover-tree',{label_groups:mapping,token:plan.token},root.cookie));
+  const ar=ok(await req('/people',undefined,a.cookie)).people,br=ok(await req('/people',undefined,b.cookie)).people;
+  for(const id of lp.slice(2)){assert.equal(ar.filter(p=>p.id===id).length,1);assert.equal(br.filter(p=>p.id===id).length,1);}
+  assert.ok(!ar.some(p=>p.id===lp[1]));assert.ok(!br.some(p=>p.id===lp[0]));
+  assert.equal(ar.find(p=>p.id===lp[3]).father_id,null);assert.equal(ar.find(p=>p.id===lp[3]).father_name,null);
+  assert.equal(br.find(p=>p.id===lp[2]).father_id,null);assert.equal(br.find(p=>p.id===lp[2]).father_name,null);
+  assert.ok(ar.find(p=>p.id===lp[2]).families.every(f=>f.id===labels[0].id));
+  assert.equal((await req('/people/'+lp[1],{name:'Forbidden'},a.cookie,'PUT')).status,404);
+  assert.equal((await req('/people/'+lp[2],{name:'Shared edit'},a.cookie,'PUT')).status,403);
+  assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.people WHERE id=ANY($1)`,[lp])).rows[0].n,5);
+  const yaShared=ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits.find(y=>y.id===recoveredYz);
+  const ybShared=ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits.find(y=>y.id===recoveredYz);
+  assert.ok(yaShared);assert.ok(ybShared);assert.equal(yaShared.father_name,'');assert.equal(ybShared.father_name,'B grandfather');
+  const sharedLearning=ok(await req('/lists',{kind:'tehillim',yahrzeit_id:recoveredYz},b.cookie)).list;
+  assert.match(sharedLearning.niftar,/B grandfather/);
+  assert.ok(!ok(await req('/lists',undefined,a.cookie)).lists.some(l=>l.id===sharedLearning.id),'learning room remains family-private');
+  const sharedDirectory=ok(await req('/directory',{husband_person_id:lp[2],wife_person_id:lp[3],side:'both'},b.cookie)).family;
+  assert.equal(sharedDirectory.husband_person_id,lp[2]);
+  assert.ok(!JSON.stringify(ok(await req('/directory',undefined,b.cookie))).includes('A grandfather'));
+  await assert.rejects(db.query(`DELETE FROM ${schema}.person_family_access WHERE person_id=$1 AND family_group_id=$2`,[lp[3],gb]),/foreign key/,'cannot revoke access and leave invalid cross-family links');
+  // A new child reuses the shared parent, without cloning the parent.
+  const sharedChild=ok(await req('/people',{name:'New cousin',side:'both',father_id:lp[2]},b.cookie)).person;
+  assert.equal(sharedChild.father_id,lp[2]);
+  assert.ok(!ok(await req('/people',undefined,a.cookie)).people.some(p=>p.id===sharedChild.id));
   // Uploaded files are protected even when the attacker guesses the file URL.
   await db.query(`INSERT INTO ${schema}.files(id,filename,mime,size,content,uploaded_by,chat_room,family_group_id) VALUES('private-b','secret.txt','text/plain',6,$1,$2,'all',$3)`,[Buffer.from('secret'),b.body.user.id,gb]);
   assert.equal((await req('/files/private-b',undefined,m.cookie)).status,404);
@@ -182,7 +219,7 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const switched=multi.cookie+'; '+switchResult.cookie;
   assert.equal(ok(await req('/me',undefined,switched)).user.selected_family_group_id,gb);
   assert.ok(ok(await req('/people',undefined,switched)).people.some(p=>p.id===pb.id));
-  assert.ok(!ok(await req('/people',undefined,switched)).people.some(p=>p.id===pa.id));
+  assert.ok(ok(await req('/people',undefined,switched)).people.some(p=>p.id===pa.id),'canonical tree combines only explicitly assigned families');
   assert.equal((await req('/people/'+pa.id,{note:'wrong view'},switched,'PUT')).status,404);
   const multiPeers=ok(await req('/chat-members',undefined,b.cookie)).members;assert.ok(multiPeers.some(p=>p.id===uid),'secondary members appear in chat');
   const secondaryInvite=ok(await req('/family-invitations',{sides:['a']},switched)).link.split('#join=')[1];
