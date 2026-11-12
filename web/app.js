@@ -1,5 +1,5 @@
 'use strict';
-import { familyUnits } from './tree-layout.js';
+import { familyUnits, fitTreeScale } from './tree-layout.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -158,11 +158,11 @@ V.tree = async () => {
   const sides = mySides(); if (!STATE.treeSide || !sides.includes(STATE.treeSide)) STATE.treeSide = sides[0];
   const s = STATE.treeSide, P = people.filter((p) => p.side === s || p.side === 'both');
   const {units,edges}=familyUnits(P); STATE.treeEdges=edges;
-  const node = p => `<button class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="editp" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</strong>${p.father_name?`<span class="muted">טאטע: ${esc(p.father_name)}</span>`:''}${p.mother_name?`<span class="muted">מאמע: ${esc(p.mother_name)}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">מאן / ווייב: ${esc(p.spouse)}</span>`:''}</button>`;
+  const node = p => `<button class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="editp" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</strong>${p.father_name?`<span class="muted tree-relation">טאטע: ${esc(p.father_name)}</span>`:''}${p.mother_name?`<span class="muted tree-relation">מאמע: ${esc(p.mother_name)}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">מאן / ווייב: ${esc(p.spouse)}</span>`:''}</button>`;
   const couple = unit => `<section class="family-unit ${unit.members.length===2?'married':''}" aria-label="${unit.members.length===2?'פארהייראטע פארפאלק':'מענטש'}">${unit.members.length===2?'<div class="marriage-label">פארהייראט</div>':''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
   const treeHtml=STATE.treeView==='tree'
-    ? `<div class="family-scroll"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div>`
+    ? `<div class="tree-toolbar" aria-label="בוים פארגרעסערונג"><button class="btn s l" data-act="treezoom" data-v="fit">פאס צום עקראַן</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="פארקלענערן בוים">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="פארגרעסערן בוים">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
     : `<div class="family-list">${units.map(couple).join('')}</div>`;
   return `<h1>🌳 פעמילי טרי</h1><div class="cap">דריק אויף א נאמען צו עדיטן אדער צולייגן קינדער.</div>
   <div class="btns" style="margin-bottom:6px">${sides.length > 1 ? `<div class="seg">${sides.map((c) => `<button class="${s === c ? 'on' : ''}" data-act="treeside" data-v="${c}">${esc(sideLong(c))}</button>`).join('')}</div>` : `<b style="margin-bottom:14px">${esc(sideLong(s))}</b>`}
@@ -174,26 +174,42 @@ let treeObserver;
 function drawFamilyLines() {
   const map=$('family-map'); if(!map) return;
   const svg=map.querySelector('svg'), base=map.getBoundingClientRect();
-  svg.setAttribute('width',String(map.scrollWidth)); svg.setAttribute('height',String(map.scrollHeight));
+  const scale=base.width/map.offsetWidth || 1;
+  svg.setAttribute('width',String(map.offsetWidth)); svg.setAttribute('height',String(map.offsetHeight));
   const paths=[];
   for(const edge of STATE.treeEdges || []) {
     const parent=map.querySelector(`[data-tree-person="${edge.parentId}"]`),child=map.querySelector(`[data-tree-person="${edge.childId}"]`);
     if(!parent || !child) continue;
     const a=parent.getBoundingClientRect(),b=child.getBoundingClientRect();
     const parentUnit=parent.closest('.family-unit').getBoundingClientRect(),childUnit=child.closest('.family-unit').getBoundingClientRect();
-    const x1=a.left+a.width/2-base.left,y1=parentUnit.bottom-base.top,x2=b.left+b.width/2-base.left,y2=childUnit.top-base.top;
+    const x1=(a.left+a.width/2-base.left)/scale,y1=(parentUnit.bottom-base.top)/scale,x2=(b.left+b.width/2-base.left)/scale,y2=(childUnit.top-base.top)/scale;
     const bend=Math.max(20,(y2-y1)*0.45);
     paths.push(`<path d="M ${x1} ${y1} C ${x1} ${y1+bend}, ${x2} ${y2-bend}, ${x2} ${y2}"/>`);
   }
   svg.innerHTML=paths.join('');
 }
+function updateFamilyViewport() {
+  const map=$('family-map'),viewport=$('family-viewport'),stage=$('family-stage'); if(!map||!viewport||!stage) return;
+  const width=map.offsetWidth,height=map.offsetHeight;
+  const availableHeight=Math.max(220,window.innerHeight-viewport.getBoundingClientRect().top-90);
+  const scale=STATE.treeZoom ?? fitTreeScale(width,height,viewport.clientWidth,availableHeight);
+  STATE.treeScale=scale;
+  viewport.style.maxHeight=availableHeight+'px';
+  stage.style.width=Math.max(viewport.clientWidth,Math.ceil(width*scale))+'px';
+  stage.style.height=Math.ceil(height*scale)+'px';
+  map.style.right=Math.max(0,(viewport.clientWidth-width*scale)/2)+'px';
+  map.style.transform=`scale(${scale})`;
+  if($('tree-scale')) $('tree-scale').textContent=Math.round(scale*100)+'%';
+  drawFamilyLines();
+}
 function observeFamilyTree() {
   treeObserver?.disconnect();
-  const map=$('family-map'); if(!map) return;
-  if(typeof ResizeObserver!=='undefined') {treeObserver=new ResizeObserver(drawFamilyLines);treeObserver.observe(map);}
-  requestAnimationFrame(drawFamilyLines);
-  document.fonts?.ready.then(drawFamilyLines);
+  const map=$('family-map'),viewport=$('family-viewport'); if(!map||!viewport) return;
+  if(typeof ResizeObserver!=='undefined') {treeObserver=new ResizeObserver(updateFamilyViewport);treeObserver.observe(map);treeObserver.observe(viewport);}
+  requestAnimationFrame(updateFamilyViewport);
+  document.fonts?.ready.then(updateFamilyViewport);
 }
+window.addEventListener('resize',updateFamilyViewport);
 async function personForm(id, parentId) {
   const {people:P}=await api('/people'); STATE.people=P;
   const p = P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null};
@@ -443,7 +459,8 @@ const ACT = {
   authmode: (el) => { STATE.authMode = el.dataset.v; go(); },
   pick: (el) => { STATE.pickSides = el.dataset.v === 'ab' ? ['a', 'b'] : [el.dataset.v]; const keep = { fn: val('fn'), fp: val('fp'), fw: $('fw').value, fnote: val('fnote') }; $('m').innerHTML = V.login(); for (const k in keep) if ($(k)) $(k).value = keep[k]; },
   side: (el) => { STATE.side = el.dataset.v; refresh(); },
-  treeside: (el) => { STATE.treeSide = el.dataset.v; refresh(); }, treeview: (el) => { STATE.treeView = el.dataset.v; refresh(); },
+  treezoom: (el) => { STATE.treeZoom=el.dataset.v==='fit'?null:el.dataset.v==='actual'?1:Math.max(0.2,Math.min(2,(STATE.treeScale||1)+Number(el.dataset.v))); updateFamilyViewport(); },
+  treeside: (el) => { STATE.treeSide = el.dataset.v; STATE.treeZoom=null; refresh(); }, treeview: (el) => { STATE.treeView = el.dataset.v; refresh(); },
   room: (el) => { STATE.room = el.dataset.v; go(); },
   simpast: (el) => { STATE.simPast = el.dataset.v === '1'; go(); },
   remind: async (el) => { const on = el.dataset.on === '1'; await api(`/yahrzeits/${el.dataset.id}/remind`, { method: 'POST', body: { on } }); toast(on ? '🔔 מען וועט דיך דערמאנען' : 'אפגעשטעלט'); refresh(); },
