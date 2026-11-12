@@ -86,6 +86,35 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   // Concurrent requests must not bleed request-local family defaults or filters.
   const mixed=await Promise.all(Array.from({length:12},(_,i)=>req('/people',{name:'Concurrent '+i,side:'a'},i%2?a.cookie:b.cookie)));
   mixed.forEach((r,i)=>assert.equal(ok(r).person.family_group_id,i%2?ga:gb));
+  // Duplicate gate: existing person choices, explicit same-name exceptions and review.
+  const duplicate={name:'Corrected child',side:'a',father_id:pa.id};
+  const warning=await req('/people',duplicate,m.cookie);assert.equal(warning.status,409);assert.equal(warning.body.details.matches[0].id,child.id);
+  const submitted={...duplicate,confirm_distinct:true,distinct_reason:'Two different sons with a similar recorded name',request_key:randomBytes(16).toString('hex')};
+  const queued=ok(await req('/people',submitted,m.cookie));assert.ok(queued.pending_review);assert.equal(queued.person,undefined);
+  assert.deepEqual(ok(await req('/people',submitted,m.cookie)),queued,'retry returns the same review');
+  assert.equal((await req('/person-reviews/'+queued.pending_review+'/resolve',{action:'approve'},m.cookie)).status,403);
+  assert.equal((await req('/person-reviews/'+queued.pending_review+'/resolve',{action:'approve'},b.cookie)).status,404);
+  const reused=ok(await req('/person-reviews/'+queued.pending_review+'/resolve',{action:'existing',existing_person_id:child.id},a.cookie));assert.equal(reused.person.id,child.id);
+  assert.equal(ok(await req('/people',undefined,a.cookie)).people.filter(p=>p.name==='Corrected child').length,1);
+  const again=ok(await req('/people',{...submitted,request_key:randomBytes(16).toString('hex')},m.cookie));
+  const approved=ok(await req('/person-reviews/'+again.pending_review+'/resolve',{action:'approve'},a.cookie));assert.ok(approved.person.id!==child.id);
+  assert.equal((await req('/person-reviews/'+again.pending_review+'/resolve',{action:'approve'},a.cookie)).status,409);
+  // Same name alone is allowed only with a deliberate explanation, and repeated saves are idempotent.
+  const weak={name:'A ancestor',side:'a',confirm_distinct:true,distinct_reason:'Different relative with the same name',request_key:randomBytes(16).toString('hex')};
+  const results=await Promise.all([req('/people',weak,m.cookie),req('/people',weak,m.cookie)]);assert.equal(ok(results[0]).person.id,ok(results[1]).person.id);
+  assert.equal((await req('/people',{...weak,name:'Changed payload'},m.cookie)).status,409);
+  const before=ok(await req('/people',undefined,a.cookie)).people.length;
+  const inline=await req('/people',{name:'Inline duplicate test',side:'a',new_relatives:{father_id:{name:'A ancestor'}}},m.cookie);
+  assert.equal(inline.status,409);assert.equal(inline.body.details.field,'father_id');
+  assert.equal(ok(await req('/people',undefined,a.cookie)).people.length,before,'blocked inline save leaves no orphan');
+  // Naming normalization catches punctuation/spacing variations; another family is never exposed.
+  assert.equal((await req('/people',{name:'A  ANCESTOR!',side:'a'},m.cookie)).status,409);
+  assert.equal((await req('/people',{name:'B ancestor',side:'a'},m.cookie)).status,200);
+  // A review cannot overwrite a person corrected after submission.
+  const editCandidate=ok(await req('/people',{name:'Edit original',side:'a'},m.cookie)).person;
+  const editQueued=ok(await req('/people/'+editCandidate.id,{...submitted,request_key:randomBytes(16).toString('hex')},m.cookie,'PUT'));
+  ok(await req('/people/'+editCandidate.id,{note:'A newer correction'},a.cookie,'PUT'));
+  assert.equal((await req('/person-reviews/'+editQueued.pending_review+'/resolve',{action:'approve'},a.cookie)).status,409);
   // Family ownership can correct its own name but cannot rename another group.
   ok(await req('/admin/family-groups/'+ga,{name:'Bochner-Biderman corrected'},a.cookie,'PATCH'));
   assert.equal((await req('/admin/family-groups/'+gb,{name:'Hijacked'},a.cookie,'PATCH')).status,404);

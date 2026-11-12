@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash, verify } from '@node-rs/argon2';
 import { config } from './config.js';
+import { nameKey, sameParent } from './person-matches.js';
 import { familyContext, familySql } from './family-scope.js';
 import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
@@ -27,7 +28,7 @@ const tok = (n = 32) => randomBytes(n).toString('base64url');
 const hashPw = (pw: string) => hash(pw, { memoryCost: 19456, timeCost: 2, parallelism: 1 });
 const COOKIE = 'fam_s';
 
-class HttpError extends Error { constructor(public status: number, public yi: string) { super(yi); } }
+class HttpError extends Error { constructor(public status: number, public yi: string, public details?: unknown) { super(yi); } }
 const bad = (yi: string) => new HttpError(400, yi);
 
 export function normPhone(raw: unknown): string {
@@ -61,7 +62,7 @@ await app.register(fstatic, { root: WEB, prefix: '/', index: ['index.html'], max
   setHeaders: (res, p) => { if (/\.(js|css|svg|png|woff2)$/.test(p)) res.setHeader('Cache-Control', 'no-cache'); } });
 
 app.setErrorHandler((err: any, req, reply) => {
-  if (err instanceof HttpError) return reply.code(err.status).send({ error: err.yi });
+  if (err instanceof HttpError) return reply.code(err.status).send({ error: err.yi, details:err.details });
   if (err.statusCode === 429) return reply.code(429).send({ error: 'צו פיל פרואוון, ווארט א מינוט' });
   if (err.code === '23503') return reply.code(400).send({error:'פארבונדענע רעקארדס מוזן זיין אין דער זעלבער משפחה. קלייב זיי אויס אינאיינעם.'});
   if (err.code === '23505') return reply.code(409).send({error:'דער רעקארד עקזיסטירט שוין'});
@@ -144,10 +145,10 @@ app.addHook('preHandler', async req => {
     if (!row) throw new HttpError(404,'נישט געטראפן');
   };
   const params=req.params as any;
-  const table=route.startsWith('/api/chat/message/')?'messages':({people:'people',yahrzeits:'yahrzeits',lists:'learn_lists',simchas:'simchas',directory:'directory',files:'files'} as Record<string,string>)[route.split('/')[2]];
+  const table=route.startsWith('/api/chat/message/')?'messages':({people:'people',yahrzeits:'yahrzeits',lists:'learn_lists',simchas:'simchas',directory:'directory',files:'files','person-reviews':'person_reviews'} as Record<string,string>)[route.split('/')[2]];
   if(table && params?.id) await check(table,params.id);
   const b:any=req.body || {};
-  for(const key of ['father_id','mother_id','spouse_id','parent_id','person_id','husband_person_id','wife_person_id']) await check('people',b[key]);
+  for(const key of ['father_id','mother_id','spouse_id','parent_id','person_id','husband_person_id','wife_person_id','existing_person_id']) await check('people',b[key]);
   for(const key of ['yahrzeit_id','legacy_yahrzeit_id']) await check('yahrzeits',b[key]);
   await check('files',b.file_id); await check('messages',b.reply_to);
   if(Array.isArray(b.family_ids)) for(const id of b.family_ids) await check('families',id);
@@ -555,6 +556,7 @@ app.post('/api/yahrzeits',async req=>{
   const u=await member(req),b:any=req.body||{};
   yzBody(u,b);
   const person=await savePerson(u,{name:b.name,side:b.side,life_status:'deceased',death_hday:b.hday,death_hmonth:b.hmonth,death_year:b.death_year,kever:b.kever,kever_address:b.kever_address,note:b.note,family_ids:b.family_ids||[]},b.person_id?Number(b.person_id):undefined);
+  if(person.pending_review)return {pending_review:person.pending_review};
   const y=await q1('SELECT * FROM yahrzeits WHERE person_id=$1',[person.id]);
   if(!y) throw bad('לייג צו א טאג און חודש אין דעם מענטשס פראפיל');
   return {yahrzeit:yzOut(y)};
@@ -589,11 +591,28 @@ const personId = (v: any): number | null => {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v); if (!Number.isSafeInteger(n) || n < 1) throw bad('קלייב אויס א מענטש'); return n;
 };
-async function savePerson(u: User, b: any, id?: number) {
+async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
   return tx(async c => {
     // Serialize graph changes so two simultaneous saves cannot introduce ancestry cycles.
     await c.query("SELECT pg_advisory_xact_lock(68427301)");
+    let review:any;
+    if(reviewId) {
+      if(!managesFamily(u))throw new HttpError(403,'נאר פאר אדמין');
+      review=(await c.query(`SELECT * FROM person_reviews WHERE id=$1 AND ${familySql()} FOR UPDATE`,[reviewId])).rows[0];
+      if(!review || review.status!=='pending')throw new HttpError(409,'די בקשה איז שוין באהאנדלט');
+      b=review.payload;id=review.person_id||undefined;
+    }
+    const original=structuredClone(b), key=reviewId?'':str(b.request_key,80);
+    if(key&&!/^[a-zA-Z0-9_-]{16,80}$/.test(key))throw bad('דער סעיוו קוד איז נישט ריכטיג');
+    const fingerprint=sha(JSON.stringify({id:id||null,body:b}));
+    if(key){const saved=(await c.query(`SELECT * FROM person_save_requests WHERE user_id=$1 AND request_key=$2 AND ${familySql()}`,[u.id,key])).rows[0];
+      if(saved){if(saved.fingerprint!==fingerprint)throw new HttpError(409,'די פרטים האבן זיך געטוישט. פרוביר נאכאמאל.');return saved.response;}}
+    const finish=async(response:any)=>{
+      if(key)await c.query('INSERT INTO person_save_requests(user_id,request_key,fingerprint,response) VALUES($1,$2,$3,$4)',[u.id,key,fingerprint,JSON.stringify(response)]);
+      return response;
+    };
     const old = id ? (await c.query('SELECT * FROM people WHERE id=$1 FOR UPDATE',[id])).rows[0] : null;
+    if(review?.person_id && sha(JSON.stringify(old))!==review.previous_hash)throw new HttpError(409,'דער מענטש איז געענדערט זינט דער בקשה. עדיט דעם יעצטיגן רעקארד.');
     if (id && (!old || !canSee(u,old.side) || old.family_group_id!==familyContext.getStore()?.id)) throw new HttpError(404,'נישט געטראפן');
     const legacy=b.legacy_yahrzeit_id ? (await c.query('SELECT * FROM yahrzeits WHERE id=$1 FOR UPDATE',[Number(b.legacy_yahrzeit_id)])).rows[0] : null;
     if(b.legacy_yahrzeit_id && (!legacy || legacy.archived_at || (legacy.person_id && legacy.person_id!==id) || !canSee(u,legacy.side) || legacy.family_group_id!==familyContext.getStore()?.id)) throw bad('דער אלטער יארצייט איז נישט פאר דעם מענטש');
@@ -601,6 +620,23 @@ async function savePerson(u: User, b: any, id?: number) {
     b = {...(old || {}),...b};
     const name = str(b.name,120); if (!name) throw bad('שרייב א נאמען');
     const side = okSide(u,b.side);
+    const visible=(await c.query(`${personSelect} WHERE ${sideSql('p.side',1)}`,[mySides(u)])).rows;
+    const matches=(value:string,exclude?:number)=>visible.filter(p=>p.id!==exclude&&nameKey(p.name)===nameKey(value));
+    const identityChanged=!old || ['name','father_id','mother_id','parent_id'].some(k=>String(b[k]||'')!==String(old[k]||''));
+    const proposal={...original,name,father_id:b.father_id,mother_id:b.mother_id,parent_id:b.parent_id,spouse_id:b.spouse_id};
+    const candidates=identityChanged?matches(name,id):[];
+    let confirmationId:number|undefined;
+    if(candidates.length&&!reviewId) {
+      const reason=str(b.distinct_reason,500);
+      if(b.confirm_distinct!==true || reason.length<5)throw new HttpError(409,'דער נאמען עקזיסטירט שוין. קלייב דעם מענטש, אדער באשטעטיג אז דאס איז א צווייטער מענטש און ערקלער פארוואס.',{code:'person_matches',field:'person',matches:candidates.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
+      if(!key)throw bad('די באשטעטיגונג דארף א סעיוו קוד');
+      if(candidates.some(p=>sameParent(p,b))) {
+        const pending=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason) VALUES($1,$2,$3,$4,$5) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason])).rows[0];
+        return finish({pending_review:pending.id});
+      }
+      // Keep the explicit same-name exception for later audit; no automatic merge.
+      confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now()) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason])).rows[0].id;
+    }
     // Inline relatives and their links commit together, so a failed form leaves no orphan people.
     for (const key of ['father_id','mother_id','spouse_id']) {
       const draft = b.new_relatives?.[key];
@@ -608,9 +644,11 @@ async function savePerson(u: User, b: any, id?: number) {
       if (b[key]) throw bad('קלייב אן עקזיסטירנדיקן מענטש אדער לייג צו א נייעם');
       const relativeName = str(draft.name,120);
       if (!relativeName) throw bad('שרייב דעם נאמען פונעם נייעם מענטש');
+      const existing=matches(relativeName);
+      if(existing.length)throw new HttpError(409,'דער קרוב עקזיסטירט אפשר שוין. קלייב אים פון דער ליסטע. אויב דאס איז א צווייטער מענטש, לייג אים צו באזונדער מיט אן ערקלערונג.',{code:'person_matches',field:key,matches:existing.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
       const relative = (await c.query(`INSERT INTO people(name,title,side,life_status,lineage_term,created_by)
-        VALUES($1,$2,$3,'unknown',$4,$5) RETURNING id`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id])).rows[0];
-      b[key] = relative.id;
+        VALUES($1,$2,$3,'unknown',$4,$5) RETURNING *`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id])).rows[0];
+      visible.push(relative);b[key] = relative.id;
     }
     const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id);
     const legacyParent = b.parent_id !== undefined ? personId(b.parent_id) : old?.parent_id || null;
@@ -686,11 +724,17 @@ async function savePerson(u: User, b: any, id?: number) {
     }
     // Keep a linked yahrzeit name in sync when its person's father is renamed too.
     await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=ANY($1::int[]) OR p.father_id=$2)`,[[row.id,father,mother].filter(Boolean),row.id]);
-    return row;
+    if(confirmationId)await c.query('UPDATE person_reviews SET result_id=$1 WHERE id=$2',[row.id,confirmationId]);
+    if(reviewId) {
+      await c.query("UPDATE person_reviews SET status='approved',result_id=$1,reviewed_by=$2,reviewed_at=now() WHERE id=$3",[row.id,u.id,reviewId]);
+      await c.query(`UPDATE person_save_requests SET response=$1 WHERE ${familySql()} AND response->>'pending_review'=$2`,[JSON.stringify(row),String(reviewId)]);
+    }
+    return finish(row);
   });
 }
-app.post('/api/people', async req => ({person:await savePerson(await member(req),req.body)}));
-app.put('/api/people/:id', async req => ({person:await savePerson(await member(req),req.body,Number((req.params as any).id))}));
+const personResponse=(person:any)=>person.pending_review?{pending_review:person.pending_review}:{person};
+app.post('/api/people', async req => personResponse(await savePerson(await member(req),req.body)));
+app.put('/api/people/:id', async req => personResponse(await savePerson(await member(req),req.body,Number((req.params as any).id))));
 app.delete('/api/people/:id', async req => {
   const u=await member(req), id=Number((req.params as any).id);
   return tx(async c=>{
@@ -702,6 +746,31 @@ app.delete('/api/people/:id', async req => {
       UNION SELECT 1 FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows.length;
     if (linked) throw bad('דער מענטש איז פארבונדן מיט משפחה. נעם קודם אוועק די לינקס.');
     await c.query('DELETE FROM people WHERE id=$1',[id]); return {ok:true};
+  });
+});
+
+app.get('/api/person-reviews',async req=>{
+  const u=await member(req);
+  const reviews=await q(`SELECT id,person_id,payload,reason,status,result_id,created_at FROM person_reviews WHERE ${familySql()} AND ($1::boolean OR created_by=$2) ORDER BY (status='pending') DESC,id DESC LIMIT 200`,[managesFamily(u),u.id]);
+  const people=await q(`${personSelect} WHERE ${sideSql('p.side',1)}`,[mySides(u)]);
+  return {reviews:reviews.map(r=>({...r,proposal:{father:people.find(p=>p.id===Number(r.payload.father_id))?.name||r.payload.new_relatives?.father_id?.name||'',mother:people.find(p=>p.id===Number(r.payload.mother_id))?.name||r.payload.new_relatives?.mother_id?.name||'',spouse:people.find(p=>p.id===Number(r.payload.spouse_id))?.name||r.payload.new_relatives?.spouse_id?.name||''},matches:people.filter(p=>p.id!==r.person_id&&nameKey(p.name)===nameKey(r.payload.name)).map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))}))};
+});
+app.post('/api/person-reviews/:id/resolve',async req=>{
+  const u=await member(req),id=Number((req.params as any).id),b:any=req.body||{};
+  if(!managesFamily(u))throw new HttpError(403,'נאר פאר אדמין');
+  if(b.action==='approve')return personResponse(await savePerson(u,{},undefined,id));
+  if(!['existing','reject'].includes(b.action))throw bad('קלייב אויס אן אקציע');
+  return tx(async c=>{
+    await c.query('SELECT pg_advisory_xact_lock(68427301)');
+    const review=(await c.query(`SELECT * FROM person_reviews WHERE id=$1 AND ${familySql()} FOR UPDATE`,[id])).rows[0];
+    if(!review||review.status!=='pending')throw new HttpError(409,'די בקשה איז שוין באהאנדלט');
+    let person:any=null;
+    if(b.action==='existing') {
+      person=(await c.query(`SELECT * FROM people WHERE id=$1 AND ${familySql()}`,[personId(b.existing_person_id)])).rows[0];
+      if(!person)throw new HttpError(404,'נישט געטראפן');
+    }
+    await c.query('UPDATE person_reviews SET status=$1,result_id=$2,reviewed_by=$3,reviewed_at=now() WHERE id=$4',[b.action==='existing'?'existing':'rejected',person?.id||null,u.id,id]);
+    return {ok:true,person};
   });
 });
 
