@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {familyUnits} from '../web/tree-layout.js';
+import {familyUnits,fitTreeScale} from '../web/tree-layout.js';
 
 test('married couple appears once, with both people’s father and mother edges',()=>{
   const people=[{id:1},{id:2},{id:3},{id:4},{id:5,father_id:1,mother_id:2,spouse_id:6},{id:6,father_id:3,mother_id:4,spouse_id:5}];
@@ -29,4 +29,14 @@ test('invalid legacy cycles cannot hang rendering',()=>{
 test('spouses follow the displayed parent branches even when created in the opposite order',()=>{
   const {units}=familyUnits([{id:1},{id:2},{id:3},{id:4},{id:5,father_id:3,mother_id:4,spouse_id:6},{id:6,father_id:1,mother_id:2,spouse_id:5}]);
   assert.deepEqual(units.find(u=>u.members.length===2).members.map(p=>p.id),[6,5]);
+});
+
+
+test('fit keeps a wide multi-generation tree inside the available screen',()=>{
+  for(const [w,h,aw,ah] of [[1000,800,400,500],[750,1400,1100,500],[600,400,1100,700]]) {
+    const scale=fitTreeScale(w,h,aw,ah);
+    assert.ok(w*scale<=aw+1);assert.ok(h*scale<=ah+1);assert.ok(scale<=1);
+  }
+  assert.equal(fitTreeScale(0,0,400,500),1);
+  assert.equal(fitTreeScale(100000,100000,400,500),0.2,'very large trees remain scrollable at a readable lower bound');
 });

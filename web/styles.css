@@ -26,14 +26,16 @@ label{font-weight:700;font-size:14px;display:block}.ltr{direction:ltr;text-align
 .toast{position:fixed;bottom:20px;left:20px;background:#111827;color:#fff;padding:12px 18px;border-radius:12px;display:none;z-index:30;max-width:calc(100% - 40px)}
 .err{color:#b91c1c;font-weight:700;min-height:1em;margin:-4px 0 10px}
 /* A married couple is one unit; parent edges retain the individual endpoints. */
-.family-scroll{overflow-x:auto;padding:8px 0}
-.family-map{position:relative;display:flex;flex-direction:column;gap:64px;width:max-content;min-width:100%;padding:4px}
-.family-level{display:flex;justify-content:center;align-items:stretch;gap:24px;position:relative;z-index:1}
-.family-unit{border:1px solid #e0e7ff;border-radius:14px;background:#fff;padding:10px;position:relative;display:flex;flex-direction:column}
+.tree-toolbar{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}.tree-toolbar output{min-width:44px;text-align:center;font-size:13px;font-variant-numeric:tabular-nums}
+.family-scroll{overflow:auto;padding:0}.family-stage{position:relative;overflow:hidden;width:100%;min-height:1px}
+.family-map{position:absolute;top:0;right:0;transform-origin:top right;display:flex;flex-direction:column;gap:36px;width:max-content;padding:4px}
+.family-level{display:flex;justify-content:center;align-items:stretch;gap:18px;position:relative;z-index:1}
+.family-unit{border:1px solid #e0e7ff;border-radius:14px;background:#fff;padding:7px;position:relative;display:flex;flex-direction:column}
 .family-unit.married{border:2px solid #818cf8;background:#f5f3ff}
 .family-members{display:flex;gap:12px;align-items:stretch;flex:1}
 .marriage-label{text-align:center;color:#4338ca;font-size:13px;font-weight:700;padding:0 0 8px}
-.family-person{display:flex;flex-direction:column;justify-content:center;gap:5px;background:#fff;border:1px solid #e0e7ff;border-radius:9px;padding:12px;width:185px;min-width:0;cursor:pointer;font:inherit;text-align:center;overflow-wrap:anywhere}
+.family-person{display:flex;flex-direction:column;justify-content:center;gap:5px;background:#fff;border:1px solid #e0e7ff;border-radius:9px;padding:9px;width:150px;min-height:54px;min-width:0;cursor:pointer;font:inherit;font-size:14px;text-align:center;overflow-wrap:anywhere}
+.family-map .tree-relation{display:none}
 .family-person strong{font-weight:700}.family-person .muted{font-size:12px}.family-person.d{background:#fafaf9;border-color:#d6d3d1}
 .family-person:focus-visible{outline:3px solid #4338ca;outline-offset:2px}
 .family-lines{position:absolute;inset:0;z-index:0;overflow:visible;pointer-events:none;direction:ltr}

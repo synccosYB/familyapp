@@ -48,3 +48,10 @@ export function familyUnits(people) {
   }
   return { units, edges };
 }
+
+
+// Fit the complete graph; retain a readable lower bound and scroll beyond it.
+export function fitTreeScale(width, height, availableWidth, availableHeight) {
+  if (![width,height,availableWidth,availableHeight].every(n=>Number.isFinite(n) && n>0)) return 1;
+  return Math.max(0.2,Math.min(1,availableWidth/width,availableHeight/height));
+}
