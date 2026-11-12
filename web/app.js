@@ -1,5 +1,6 @@
 'use strict';
 import { familyUnits, treeViewportLayout } from './tree-layout.js';
+import { marriageChildren, childParents } from './family-relationships.js';
 import { automaticHebrewDate } from './hebrew-date.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
 const $ = (id) => document.getElementById(id);
@@ -267,10 +268,17 @@ document.addEventListener('wheel',ev=>{
 async function personProfile(id) {
   const {people}=await api('/people'),p=people.find(p=>p.id===id);if(!p)throw new Error('נישט געטראפן');
   const linked=(key,label)=>p[key]?`<div class="row"><span class="muted">${label}</span><button type="button" class="btn l" data-act="viewperson" data-id="${p[key]}">${esc([p[key.replace('_id','_title')],p[key.replace('_id','_name')]].filter(Boolean).join(' '))}</button></div>`:'';
+  const childRow=c=>`<div class="row"><button class="btn l" data-act="viewperson" data-id="${c.id}">${esc(c.name)}</button><span class="muted">טאטע: ${esc(c.father_name||'נישט באקאנט')} · מאמע: ${esc(c.mother_name||'נישט באקאנט')}</span></div>`;
+  const marriages=[['spouse_id','זיווג ראשון'],['second_spouse_id','זיווג שני']].map(([key,label])=>{
+    const spouse=people.find(x=>x.id===p[key]);
+    return `<section class="card"><h3>${label}</h3>${spouse?linked(key,'מאן / ווייב'):`<button class="btn l" data-act="addmarriage" data-id="${id}" data-key="${key}">+ לייג צו ${label}</button>`}${spouse?`<h4>קינדער פון ${label}</h4>${marriageChildren(people,id,spouse.id).map(childRow).join('')||'<p class="muted">נאך קיין קינדער צוגעלייגט צו דעם זיווג.</p>'}<button class="btn l" data-act="marriagechild" data-id="${id}" data-spouse="${spouse.id}">+ קינד פון ${label}</button>`:''}</section>`;
+  }).join('');
+  const otherChildren=marriageChildren(people,id).filter(c=>![p.spouse_id,p.second_spouse_id].includes(c.father_id===id?c.mother_id:c.father_id));
   modal(`<h2>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.life_status==='deceased'?' ז״ל':''}</h2><div class="btns">${familyTags(p)}</div>
     <p class="muted">${p.life_status==='deceased'?'נפטר / נפטרת':p.life_status==='living'?'לעבט':'לעבנס סטאטוס נישט באקאנט'}</p>
-    ${linked('father_id','טאטע')}${linked('mother_id','מאמע')}${linked('spouse_id','זיווג ראשון')}${linked('second_spouse_id','זיווג שני')}
-    ${people.some(c=>c.father_id===id||c.mother_id===id)?`<h3>קינדער</h3>${people.filter(c=>c.father_id===id||c.mother_id===id).map(c=>`<div class="row"><button class="btn l" data-act="viewperson" data-id="${c.id}">${esc(c.name)}</button><span class="muted">טאטע: ${esc(c.father_name||'נישט באקאנט')} · מאמע: ${esc(c.mother_name||'נישט באקאנט')}</span></div>`).join('')}`:''}
+    ${linked('father_id','טאטע')}${linked('mother_id','מאמע')}${marriages}
+    ${otherChildren.length?`<h3>קינדער — אנדערער / נישט באקאנטער זיווג</h3>${otherChildren.map(childRow).join('')}`:''}
+    <button class="btn l" data-act="addchild" data-id="${id}">+ קינד / קלייב עלטערן</button>
     ${p.death_hday&&p.death_hmonth?`<p><b>יארצייט:</b> ${hebD(p.death_hday)} ${esc(HMONTHS.find(([k])=>k===p.death_hmonth)?.[1]||'')}${p.death_year?' · '+esc(p.death_year):''}</p>`:''}
     ${p.kever?`<p><b>בית החיים / מקום קבורה:</b> ${esc(p.kever)}</p>`:''}${p.kever_address?`<p dir="auto">📍 ${esc(p.kever_address)}</p><div class="btns">${navBtns(p.kever_address)}</div>`:''}${p.note?`<p>${esc(p.note)}</p>`:''}
     <div class="btns"><button class="btn" data-act="editp" data-id="${p.id}">✏️ עדיט פראפיל</button><button class="btn l" data-act="close">צומאכן</button></div>`);
@@ -319,6 +327,7 @@ async function personForm(id, parentId, defaults={}) {
   <div class="err" id="ferr"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button>
   ${id ? `<button type="button" class="btn l" data-act="addchild" data-id="${id}">+ קינד</button><button type="button" class="btn r" data-act="delp" data-id="${id}">🗑</button>` : ''}</div></form>`);
   renderPersonMatches();
+  if(defaults.openRelative){const key=defaults.openRelative;$('p'+key).value='new';$('new_'+key).hidden=false;$('new_'+key+'_name').focus();}
 }
 
 // learning
@@ -712,7 +721,14 @@ const ACT = {
   edityz: (el) => yzForm(Number(el.dataset.id)),
   delyz: async (el) => { if (!confirm('אויסמעקן דעם יארצייט?')) return; await api('/yahrzeits/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast('אויסגעמעקט'); refresh(); },
   editp: (el) => personForm(Number(el.dataset.id)),
-  addchild: (el) => personForm(0, Number(el.dataset.id)),
+  addmarriage: el=>personForm(Number(el.dataset.id),undefined,{openRelative:el.dataset.key}),
+  marriagechild: async el=>{
+    const {people}=await api('/people'),p=people.find(x=>x.id===Number(el.dataset.id)),spouse=people.find(x=>x.id===Number(el.dataset.spouse));
+    if(!p||!spouse)throw new Error('די עלטערן זענען נישט געטראפן');
+    STATE.childMarriage={person:p,spouse};
+    modal(`<h2>+ קינד פון ${esc(p.name)} און ${esc(spouse.name)}</h2><form data-form="marriagechild">${field('ווער איז דער טאטע?',`<select id="childfather" required><option value="">— קלייב דעם טאטע —</option><option value="${p.id}">${esc(p.name)}</option><option value="${spouse.id}">${esc(spouse.name)}</option></select>`)}<p>ביידע עלטערן ווערן פארבונדן צום נייעם קינד. עקזיסטירנדיקע קינדער בלייבן ווי זיי זענען.</p><button class="btn">ווייטער צו קינד</button><button type="button" class="btn l" data-act="close">קענסל</button></form>`);
+  },
+  addchild: el=>personForm(0, Number(el.dataset.id)),
   delp: async (el) => { if (!confirm('אויסמעקן?')) return; await api('/people/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast('אויסגעמעקט'); refresh(); },
   newlist: (el) => listForm(Number(el.dataset.yz) || 0),
   item: (el) => onItem(Number(el.dataset.idx)),
@@ -752,6 +768,10 @@ const CHANGE = {
     try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast('✓ סייד געטוישט'); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
 };
 const FORMS = {
+  marriagechild: ()=>{
+    const {person,spouse}=STATE.childMarriage;
+    return personForm(0,undefined,{...childParents(person.id,spouse.id,Number(val('childfather'))),side:person.side,families:person.families||[]});
+  },
   renamegroup:async()=>{await api('/admin/family-groups/'+val('renamegroupid'),{method:'PATCH',body:{name:val('renamegroupname')}});await loadMe();refresh();},
   newgroup:async()=>{const {group}=await api('/admin/family-groups',{method:'POST',body:{name:val('groupname')}});await api('/me/family-group',{method:'POST',body:{family_group_id:group.id}});location.reload();},
   memberships:async f=>{const ids=[...f.querySelectorAll('[name=membership]:checked')].map(e=>Number(e.value));if(!ids.length)throw new Error('קלייב כאטש איין משפחה');await api('/admin/users/'+f.dataset.id+'/family-group',{method:'PUT',body:{family_group_ids:ids}});closeModal();toast('משפחות צוגעטיילט — דער מעמבער דארף נאכאמאל לאגין');await loadMe();refresh();},
