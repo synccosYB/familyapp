@@ -159,13 +159,24 @@ advance. Members can follow an individual yahrzeit or the ancestors linked to
 their account. Email requires a verified address. WhatsApp uses the member's
 account phone and requires a separate opt-in. Changing the number clears that opt-in.
 
-To enable WhatsApp in production, configure the Meta Cloud API sender and an
-approved utility template. The template body takes two text parameters, the Hebrew
-date and the sign-in link. Example body: `A yahrzeit you follow is coming up on
-{{1}}. Open Kobor at {{2}} to view the details.` Set `WHATSAPP_PHONE_NUMBER_ID`,
-`WHATSAPP_GRAPH_API_VERSION`, `WHATSAPP_YAHRZEIT_TEMPLATE`, and
-`WHATSAPP_YAHRZEIT_LANGUAGE` in the runtime. Store `WHATSAPP_ACCESS_TOKEN` as
-a secret. The app enables WhatsApp opt-in once these settings are present.
+For Twilio, register a WhatsApp sender and submit a utility template named
+`kobor_yahrzeit_reminder` for WhatsApp approval. The template body takes two text
+parameters, the Hebrew date and a link to the yahrzeit or its Mishnayos list.
+
+```text
+Kobor reminder. A yahrzeit you follow falls on {{1}}. Open your family account at {{2}} to see the details and manage reminders.
+```
+
+Set `TWILIO_ACCOUNT_SID`, `TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET`,
+`TWILIO_WHATSAPP_FROM` (the approved sender in E.164 format), and
+`TWILIO_WHATSAPP_YAHRZEIT_CONTENT_SID` (the approved template SID) in Replit's
+production settings. Use an API key scoped to sending messages and keep its
+secret in Replit Secrets. Configure the template SID after approval.
+
+The same two parameters work with an existing Meta Cloud API sender via
+`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_GRAPH_API_VERSION`,
+`WHATSAPP_YAHRZEIT_TEMPLATE`, `WHATSAPP_YAHRZEIT_LANGUAGE`, and
+`WHATSAPP_ACCESS_TOKEN`. Kobor uses Twilio when its settings are complete.
 
 ## Live Yiddish wording
 
