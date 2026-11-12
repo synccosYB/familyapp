@@ -20,9 +20,10 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
  const env={...process.env,DATABASE_URL:conn.toString(),FAMILYE_DATA:data,ADMIN_NAME:'Build test admin',ADMIN_PHONE:'8455550100',SETUP_TOKEN_SHA256:createHash('sha256').update(setup).digest('hex'),QA_PHONE_PREFIX:'',COOKIE_SECURE:'false',PORT:'18080',HOST:'127.0.0.1',LOG_LEVEL:'error',RESEND_API_KEY:'test-only',RESEND_FROM_EMAIL:'Family <noreply@example.test>',FAMILYE_EMAIL_CAPTURE:capture,NODE_OPTIONS:'--import='+new URL('./resend-mock.mjs',import.meta.url).pathname};
  let child;let logs='';
  const run=(entry)=>{const p=spawn(process.execPath,[entry],{env,stdio:['ignore','pipe','pipe']});p.stdout.on('data',x=>logs+=x);p.stderr.on('data',x=>logs+=x);return p;};
+ let testFamily;
  const base='http://127.0.0.1:18080';
  const request=async(endpoint,body,cookie='',method=body===undefined?'GET':'POST',ip='127.0.0.1')=>{
-  const r=await fetch(base+'/api'+endpoint,{method,headers:{'x-familye':'1','x-forwarded-for':ip,...(body===undefined?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});
+  const r=await fetch(base+'/api'+endpoint,{method,headers:{'x-familye':'1','x-forwarded-for':ip,...(testFamily?{'x-family-group':String(testFamily)}:{}),...(body===undefined?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});
   return {status:r.status,body:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]||''};
  };
  try{
@@ -33,9 +34,12 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/people')).status,401);
   const admin=await request('/auth/set-password',{token:setup,password:'build-admin-password'});assert.equal(admin.status,200);
   assert.equal((await request('/auth/set-password',{token:setup,password:'build-admin-password'})).status,404);
-  const a=await request('/auth/signup',{name:'Side A test',phone:'8455550101',password:'build-member-password',sides:['a']});assert.equal(a.status,200);
-  const b=await request('/auth/signup',{name:'Side B test',phone:'8455550102',password:'build-member-password',sides:['b']});assert.equal(b.status,200);
-  assert.equal((await request('/people',undefined,a.cookie)).status,403);
+  testFamily=(await request('/admin/family-groups',{name:'Integration family'},admin.cookie)).body.group.id;
+  await adminPool.query(`UPDATE ${schema}.users SET family_group_id=$1 WHERE id=$2`,[testFamily,admin.body.user.id]);
+  const tokenFor=async side=>(await request('/family-invitations',{sides:[side]},admin.cookie)).body.link.split('#join=')[1];
+  const a=await request('/auth/signup',{name:'Side A test',phone:'8455550101',password:'build-member-password',sides:['a'],invitation_token:await tokenFor('a')});assert.equal(a.status,200);
+  const b=await request('/auth/signup',{name:'Side B test',phone:'8455550102',password:'build-member-password',sides:['b'],invitation_token:await tokenFor('b')});assert.equal(b.status,200);
+  assert.equal((await request('/people',undefined,a.cookie)).status,200);
   for(const u of [a,b])assert.equal((await request('/admin/users/'+u.body.user.id,{status:'active'},admin.cookie,'PATCH')).status,200);
   // Invitation audiences are fixed by the server, for one side or both.
   const inviteRequest=(endpoint,body,cookie='',method=body===undefined?'GET':'POST')=>request(endpoint,body,cookie,method,'127.0.0.44');
@@ -136,7 +140,7 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await adminPool.query(`SELECT octet_length(content)::int size FROM ${schema}.files WHERE id=$1`,[uploaded.file.id])).rows[0].size,Buffer.byteLength('%PDF-1.4\nTest attachment\n%%EOF'),'new attachment bytes live in the shared database');
   const legacyFileId='legacy-'+randomBytes(8).toString('hex'),legacyBytes=Buffer.from('%PDF-1.4 Legacy invitation');
   await writeFile(path.join(data,'uploads',legacyFileId),legacyBytes);
-  await adminPool.query(`INSERT INTO ${schema}.files(id,filename,mime,size,uploaded_by) VALUES($1,'legacy.pdf','application/pdf',$2,$3)`,[legacyFileId,legacyBytes.length,admin.body.user.id]);
+  await adminPool.query(`INSERT INTO ${schema}.files(id,filename,mime,size,uploaded_by,family_group_id) VALUES($1,'legacy.pdf','application/pdf',$2,$3,$4)`,[legacyFileId,legacyBytes.length,admin.body.user.id,testFamily]);
   await adminPool.query(`UPDATE ${schema}.simchas SET file_id=$1 WHERE id=$2`,[legacyFileId,simId]);
   const attachmentBootstrap=run('dist/bootstrap.js');assert.equal((await once(attachmentBootstrap,'exit'))[0],0,logs);
   assert.equal((await fetch(base+'/api/files/'+uploaded.file.id,{headers:{Cookie:admin.cookie}})).status,200,'bootstrap keeps chat attachments');
@@ -227,7 +231,7 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/people/'+son.id,{family_ids:memberships.map(f=>f.id)},admin.cookie,'PUT')).status,200);
   assert.equal((await request('/people/'+son.id,{note:'Preserve affiliations'},admin.cookie,'PUT')).status,200);
   assert.equal((await readPerson(son.id)).families.length,2);
-  assert.equal((await request('/people/'+son.id,{name:'Must roll back',family_ids:[2147483647],new_family:'Rollback family'},admin.cookie,'PUT')).status,400);
+  assert.equal((await request('/people/'+son.id,{name:'Must roll back',family_ids:[2147483647],new_family:'Rollback family'},admin.cookie,'PUT')).status,404);
   assert.equal((await readPerson(son.id)).name,'Structured son');
   assert.equal((await request('/people/'+son.id,{family_ids:[],new_family:'family a'},admin.cookie,'PUT')).status,200);
   assert.deepEqual((await readPerson(son.id)).families.map(f=>f.id),[familyA.id]);
@@ -249,7 +253,7 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits.length,0);
 
   // One canonical person drives family membership, burial and the yahrzeit projection.
-  const legacy=(await adminPool.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,kever,created_by) VALUES('Old memorial','a',12,'KISLEV','Old cemetery',$1) RETURNING id`,[admin.body.user.id])).rows[0];
+  const legacy=(await adminPool.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,kever,created_by,family_group_id) VALUES('Old memorial','a',12,'KISLEV','Old cemetery',$1,$2) RETURNING id`,[admin.body.user.id,testFamily])).rows[0];
   const legacyList=await request('/lists',{kind:'tehillim',yahrzeit_id:legacy.id},admin.cookie);assert.equal(legacyList.status,200);
   assert.equal((await request('/people/'+father.id,{legacy_yahrzeit_id:legacy.id,life_status:'deceased',death_hday:12,death_hmonth:'KISLEV',kever:'Har Hazeisim'},admin.cookie,'PUT')).status,200);
   const canonicalCalendar=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits;

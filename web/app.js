@@ -42,8 +42,9 @@ const sideTag = (c) => `<span class="tag ${c === 'a' || c === 'b' ? c : 'g'}">${
 const familyTags = (p) => (p.families || []).map(f=>`<span class="tag g">${esc(f.name)}</span>`).join(' ');
 const familyChoices = (rows) => [...new Map(rows.flatMap(p=>p.families || []).map(f=>[f.id,f])).values()].sort((a,b)=>a.name.localeCompare(b.name));
 const familySelector = (rows,key,label) => field(label,`<select data-change="familyfilter" data-key="${key}"><option value="">אלע משפחות</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`);
-const both = () => ME && (ME.is_admin || (ME.sides.includes('a') && ME.sides.includes('b')));
-const mySides = () => (ME.is_admin ? ['a', 'b'] : ME.sides);
+const isManager = () => ME && (ME.is_admin || ME.is_family_admin);
+const both = () => ME && (isManager() || (ME.sides.includes('a') && ME.sides.includes('b')));
+const mySides = () => (isManager() ? ['a', 'b'] : ME.sides);
 const vis = (s) => STATE.side === 'all' || s === STATE.side || s === 'both' || s === 'all';
 function seg() { if (!both()) return ''; return `<div class="seg">${[['all', 'ביידע סיידס'], ['a', famOf('a') || sideName('a')], ['b', famOf('b') || sideName('b')]].map(([k, t]) => `<button class="${STATE.side === k ? 'on' : ''}" data-act="side" data-v="${k}">${esc(t)}</button>`).join('')}</div>`; }
 function sideOptions(sel, withBoth = true, allLabel) {
@@ -64,7 +65,7 @@ const val = (id) => ($(id) ? $(id).value.trim() : '');
 const PAGES = [['home', '🏠', 'היים'], ['yz', '🕯️', 'יארצייטן'], ['tree', '🌳', 'פעמילי טרי'], ['learn', '📖', 'משניות און תהילים'], ['sim', '🎉', 'שמחות'], ['chat', '💬', 'טשעט'], ['people', '👥', 'קאזינס / אדרעסן']];
 let PENDING = 0, UNREAD = false;
 function renderNav(v) {
-  const extra = [['me', '👤', 'מיין אקאונט']]; if (ME.is_admin) extra.unshift(['admin', '🛡️', 'אדמין']);
+  const extra = [['me', '👤', 'מיין אקאונט']]; if (isManager()) extra.unshift(['admin', '🛡️', 'אדמין']);
   $('nav').innerHTML = `<div class="lg">${esc(S.family_yi)}</div><div class="sd">${esc(ME.name)} · ${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}</div>` +
     [...PAGES, ...extra].map(([k, i, t]) => `<a class="${v === k ? 'on' : ''}" href="#${k}">${i} ${t}${k === 'admin' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}</a>`).join('') +
     `<a data-act="logout" style="margin-top:14px;opacity:.7">↩ לאג אאוט</a>`;
@@ -74,7 +75,7 @@ function renderNav(v) {
   $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>`;
 }
 function moreSheet() {
-  const L = [['tree', '🌳', 'פעמילי טרי'], ['learn', '📖', 'משניות און תהילים'], ['people', '👥', 'קאזינס / אדרעסן'], ...(ME.is_admin ? [['admin', '🛡️', 'אדמין' + (PENDING ? ` (${PENDING} ווארטן)` : '')]] : []), ['me', '👤', 'מיין אקאונט']];
+  const L = [['tree', '🌳', 'פעמילי טרי'], ['learn', '📖', 'משניות און תהילים'], ['people', '👥', 'קאזינס / אדרעסן'], ...(isManager() ? [['admin', '🛡️', 'אדמין' + (PENDING ? ` (${PENDING} ווארטן)` : '')]] : []), ['me', '👤', 'מיין אקאונט']];
   modal(`<div class="sheet">${L.map(([k, i, t]) => `<a href="#${k}" data-act="close">${i} ${t}</a>`).join('')}<a data-act="logout">↩ לאג אאוט</a></div><button class="btn l" style="width:100%;margin-top:12px" data-act="close">צומאכן</button>`);
 }
 
@@ -84,19 +85,15 @@ V.login = () => {
   const mode = STATE.authMode || 'login';
   const sides = STATE.joinSides || STATE.pickSides || [];
   return `<div class="login"><div style="font-size:54px">🌳</div><h1>${esc(S.family_yi)}</h1><div class="cap">אלע קאזינס אין איין ארט: יארצייטן, פעמילי טרי, לערנען, שמחות און טשעט.</div>
-  <div class="seg"><button class="${mode === 'login' ? 'on' : ''}" data-act="authmode" data-v="login">לאג אין</button><button class="${mode === 'signup' ? 'on' : ''}" data-act="authmode" data-v="signup">נייער קאזין? מאך אן אקאונט</button></div>
+  <div class="seg"><button class="${mode === 'login' ? 'on' : ''}" data-act="authmode" data-v="login">לאג אין</button><button class="${mode === 'signup' ? 'on' : ''}" data-act="authmode" data-v="signup">מאך דיין אייגענע משפחה</button></div>
   <form data-form="${mode}" class="card" style="text-align:right">
   ${mode === 'signup' ? field('דיין נאמען (ווי די משפחה קען דיך)', '<input id="fn" autocomplete="name" placeholder="למשל: יואל באכנער">') : ''}
   ${field('טעלעפאן נומער', '<input id="fp" type="tel" inputmode="tel" autocomplete="tel" class="ltr" placeholder="845-555-1234">')}
   ${field('פאסווארט', `<input id="fw" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" ${mode === 'signup' ? 'placeholder="כאטש 6 אותיות"' : ''}>`)}
-  ${mode === 'signup' && STATE.joinSides ? `<div class="card" role="status"><b>איינגעלאדנט צו: ${STATE.joinSides.map(c => esc(sideLong(c))).join(' + ')}</b><p class="muted">די משפחה סייד איז שוין אויסגעקליבן דורכן לינק.</p></div>${field('וועמענס קינד/אייניקל ביסטו?', '<input id="fnote" placeholder="דיין פארבינדונג צו דער משפחה">')}` : mode === 'signup' ? `<div class="cap" style="margin:8px 0">פון וועלכע סייד ביסטו א קאזין?</div>
-   <button type="button" class="sidebtn ${sides.join() === 'a' ? 'on' : ''}" data-act="pick" data-v="a">👨 ${esc(S.side_a_yi)}<div class="muted">${famOf('a') ? 'משפחת ' + esc(famOf('a')) : ''}</div></button>
-   <button type="button" class="sidebtn ${sides.join() === 'b' ? 'on' : ''}" data-act="pick" data-v="b">👩 ${esc(S.side_b_yi)}<div class="muted">${famOf('b') ? 'משפחת ' + esc(famOf('b')) : ''}</div></button>
-   <button type="button" class="sidebtn ${sides.length === 2 ? 'on' : ''}" style="font-size:16px" data-act="pick" data-v="ab">ביידע סיידס</button>
-   ${field('וועמענס קינד/אייניקל ביסטו? (כדי דער אדמין זאל וויסן)', '<input id="fnote" placeholder="למשל: א זון פון משה באכנער">')}` : ''}
+  ${mode === 'signup' && STATE.joinSides ? `<div class="card" role="status"><b>איינגעלאדנט צו: ${esc(STATE.joinFamily || '')}</b><p>דו ווערסט אויטאמאטיש צוגעטיילט צו דער משפחה.</p></div>${field('וועמענס קינד/אייניקל ביסטו?', '<input id="fnote">')}` : mode === 'signup' ? `${field('נאמען פון דיין נייע משפחה', '<input id="newfamilyname" maxlength="120" required>')}<p class="muted">דאס מאכט א נייע, באזונדערע משפחה. דו וועסט זיין אדמין נאר פון דער משפחה. צו דזשוינען אן עקזיסטירנדיקע משפחה, בעט אן אינוויטעישן לינק.</p>` : ''}
   <div class="err" id="ferr"></div>
   <button class="btn" style="width:100%">${mode === 'signup' ? 'מאך אן אקאונט' : 'לאג אין'}</button>
-  ${mode === 'login' ? '<div class="muted" style="margin-top:12px"><button type="button" class="btn l" data-act="forgotpw">פארגעסן דאס פאסווארט?</button></div>' : `<div class="muted" style="margin-top:12px">${STATE.joinSides ? 'מיט דיין אינוויטעישן קענסטו גלייך אריין.' : 'נאכן רעדזשיסטרירן מוז דער אדמין דיך אפרובירן.'}</div>`}
+  ${mode === 'login' ? '<div class="muted" style="margin-top:12px"><button type="button" class="btn l" data-act="forgotpw">פארגעסן דאס פאסווארט?</button></div>' : `<div class="muted" style="margin-top:12px">${STATE.joinSides ? 'מיט דיין אינוויטעישן קענסטו גלייך אריין.' : 'דיין נייע משפחה וועט זיין באזונדער פון אלע אנדערע.'}</div>`}
   </form></div>`;
 };
 V.pending = () => `<div class="login"><div style="font-size:54px">⏳</div><h1>שלום ${esc(ME.name.split(' ')[0])}!</h1>
@@ -325,17 +322,17 @@ async function learnDetail(id) {
   <div class="card" style="margin-bottom:12px"><div class="bar"><div style="width:${Math.round(100 * taken / items.length)}%"></div></div><div class="muted">${taken} פון ${items.length} אינגאנצן גענומען${partial ? ` · ${partial} טיילווייז` : ''}</div>
   <div class="bar"><div class="dn" style="width:${Math.round(100 * done / items.length)}%"></div></div><div class="muted">${done} געענדיגט</div>
   <div class="muted" style="margin-top:6px"><span class="pk" style="padding:2px 8px">פריי</span> <span class="pk mine" style="padding:2px 8px">דיינס</span> <span class="pk t" style="padding:2px 8px">גענומען</span> <span class="pk done" style="padding:2px 8px">געענדיגט</span></div></div>
-  ${help.length ? `<section class="card" style="margin-bottom:14px"><h2>🙋 בקשות פאר הילף</h2>${help.map(h=>`<div class="row"><div class="grow"><b>${esc(h.requested_name)}</b> · ${esc(portionLabel(h.idx,h.chapter,h.mishnah))}<p>${esc(h.note)}</p><small>${h.helper_id ? esc(h.helper_name)+' העלפט' : 'ווארט אויף הילף'}</small></div><div class="btns">${h.requested_by!==ME.id && !h.helper_id ? `<button class="btn s" data-act="learninghelp" data-id="${h.id}" data-v="help">איך קען העלפן</button>`:''}${h.requested_by===ME.id||ME.is_admin ? `<button class="btn s l" data-act="learninghelp" data-id="${h.id}" data-v="resolve">✓ געלייזט</button>`:''}</div></div>`).join('')}</section>`:''}
+  ${help.length ? `<section class="card" style="margin-bottom:14px"><h2>🙋 בקשות פאר הילף</h2>${help.map(h=>`<div class="row"><div class="grow"><b>${esc(h.requested_name)}</b> · ${esc(portionLabel(h.idx,h.chapter,h.mishnah))}<p>${esc(h.note)}</p><small>${h.helper_id ? esc(h.helper_name)+' העלפט' : 'ווארט אויף הילף'}</small></div><div class="btns">${h.requested_by!==ME.id && !h.helper_id ? `<button class="btn s" data-act="learninghelp" data-id="${h.id}" data-v="help">איך קען העלפן</button>`:''}${h.requested_by===ME.id||isManager() ? `<button class="btn s l" data-act="learninghelp" data-id="${h.id}" data-v="resolve">✓ געלייזט</button>`:''}</div></div>`).join('')}</section>`:''}
   <div class="btns" style="margin-bottom:12px"><button class="btn" data-act="sharelearn">📲 לאדן צו נעמען משניות / תהילים</button></div>
   <div class="card">${body}</div>
-  ${ME.is_admin || l.created_by === ME.id ? `<button class="btn r s" style="margin-top:14px" data-act="dellist" data-id="${l.id}">🗑 מעק אויס די ליסט</button>` : ''}`;
+  ${isManager() || l.created_by === ME.id ? `<button class="btn r s" style="margin-top:14px" data-act="dellist" data-id="${l.id}">🗑 מעק אויס די ליסט</button>` : ''}`;
 }
 function itemLabel(idx) { const { l, masechtos } = STATE.list; return l.kind === 'tehillim' ? 'קאפיטל ' + heb(idx) : 'מסכתא ' + masechtos[idx].name; }
 async function onItem(idx) {
   const { l, items } = STATE.list; const it = items.find((i) => i.idx === idx);
   if (!it.taken_by) { await api(`/lists/${l.id}/items/${idx}`, { method: 'POST', body: { action: 'take' } }); toast('✓ דו האסט גענומען ' + itemLabel(idx)); return go(); }
   if (it.taken_by !== ME.id) {
-    if (ME.is_admin) return modal(`<h2 style="margin-top:0">${itemLabel(idx)}</h2><p>${esc(it.taken_name)} האט דאס גענומען.</p><div class="btns"><button class="btn r" data-act="itemact" data-idx="${idx}" data-v="give">ארויסנעמען (אדמין)</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+    if (isManager()) return modal(`<h2 style="margin-top:0">${itemLabel(idx)}</h2><p>${esc(it.taken_name)} האט דאס גענומען.</p><div class="btns"><button class="btn r" data-act="itemact" data-idx="${idx}" data-v="give">ארויסנעמען (אדמין)</button><button class="btn l" data-act="close">צומאכן</button></div>`);
     return toast(`${itemLabel(idx)} האט שוין ${it.taken_name}`);
   }
   modal(`<h2 style="margin-top:0">${itemLabel(idx)}</h2><p class="muted">דו האסט דאס גענומען.</p><div class="btns">
@@ -358,7 +355,7 @@ function openPortion(chapter,mishnah) {
   modal(`<h2>${esc(portionLabel(idx,chapter,mishnah))}</h2><p>${rows.filter(p=>p.taken_by).length}/${rows.length} משניות גענומען · ${rows.filter(p=>p.done).length} געענדיגט</p><div class="btns">
     ${available&&!own?'<button class="btn" data-act="portionaction" data-v="take">איך נעם דעם חלק</button>':''}
     ${own?`<button class="btn g" data-act="portionaction" data-v="${allDone?'undone':'done'}">${allDone?'נאך נישט געענדיגט':'✓ איך האב געענדיגט'}</button><button class="btn l" data-act="portionaction" data-v="give">גיב צוריק</button>`:''}
-    ${ME.is_admin&&!own&&rows.some(p=>p.taken_by)?'<button class="btn r" data-act="portionaction" data-v="give">באפריי דעם חלק (אדמין)</button>':''}
+    ${isManager()&&!own&&rows.some(p=>p.taken_by)?'<button class="btn r" data-act="portionaction" data-v="give">באפריי דעם חלק (אדמין)</button>':''}
     </div>${!available?'<p class="muted">א טייל איז שוין גענומען. קלייב א פרייען פרק אדער משנה.</p>':''}
     <form data-form="portionhelp" style="margin-top:18px"><h3>🙋 בעט הילף</h3>${field('וואס פאר הילף דארפסטו?', '<textarea id="helpnote" maxlength="500" placeholder="למשל: איך דארף א חברותא אדער הילף צו פארשטיין"></textarea>')}<div class="err" role="alert"></div><button class="btn l">בעט הילף פון דער משפחה</button></form><button class="btn l" style="margin-top:12px" data-act="backmasechta">צוריק צו די פרקים</button>`);
 }
@@ -383,7 +380,7 @@ V.sim = async () => {
   ${simchas.length ? `<div class="simgrid">${simchas.map(simCard).join('')}</div>` : empty('🎉', past ? 'נאך נישט קיין פארביי שמחות.' : 'נאך קיין שמחות. לייג צו די ערשטע!')}`;
 };
 function simCard(x) {
-  const mine = ME.is_admin || x.created_by === ME.id;
+  const mine = isManager() || x.created_by === ME.id;
   const file = x.file_id ? (x.file_mime === 'application/pdf'
     ? `<div class="pdf" data-act="showinv" data-id="${x.id}">📄 <div class="grow"><b>אינוויטעישן (PDF)</b><div class="muted">${esc(x.file_name)}</div></div></div>`
     : `<img class="inv" src="/api/files/${x.file_id}" alt="אינוויטעישן" loading="lazy" data-act="showinv" data-id="${x.id}">`) : '';
@@ -517,7 +514,7 @@ V.people = async () => {
 function dirCards(L) {
   return L.map((d) => `<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow"><b style="font-size:18px">${esc(d.husband)}${d.husband && d.wife ? ' · ' : ''}${esc(d.wife)}</b><div class="muted">${esc(d.parents)}</div></div>${sideTag(d.side)}</div>
   <div style="margin-top:10px;display:grid;gap:6px"><div>📍 <span dir="auto">${esc(d.address) || '—'}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap">${d.husband ? `<span><span class="muted">מאן:</span> ${tel(d.phone_h)}</span>` : ''}${d.wife ? `<span><span class="muted">ווייב:</span> ${tel(d.phone_w)}</span>` : ''}</div></div>
-  <div class="btns" style="margin-top:10px">${ME.is_admin || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">✏️ עדיט</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || '<div class="muted">גארנישט געטראפן</div>';
+  <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">✏️ עדיט</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || '<div class="muted">גארנישט געטראפן</div>';
 }
 async function dirForm(id, mine) {
   const {people}=await api('/people');
@@ -542,26 +539,31 @@ async function dirForm(id, mine) {
 
 // admin
 V.admin = async () => {
-  if (!ME.is_admin) return '<div class="muted">נאר פאר אדמין</div>';
+  if (!isManager()) return '<div class="muted">נאר פאר אדמין</div>';
+  const {groups}=await api('/admin/family-groups'); STATE.groups=groups;
+  const options=(id)=>'<option value="">— קלייב א משפחה —</option>'+groups.map(g=>`<option value="${g.id}" ${g.id===id?'selected':''}>${esc(g.name)}</option>`).join('');
   const { users, owner_phone } = await api('/admin/users'); STATE.users = users; PENDING = users.filter((u) => u.status === 'pending').length;
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
   const sidesBox = (u) => ['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
   return `<h1>🛡️ אדמין</h1><div class="cap">אפרובירן נייע קאזינס, טוישן סייד, מאכן אנדערע אדמין.</div>
+  ${ME.is_admin?`<section class="card"><h2>משפחה צוטריט</h2>${field('משפחה וואס דו קוקסט יעצט',`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`)}<form data-form="newgroup">${field('מאך א נייע משפחה','<input id="groupname" maxlength="120" required>')}<button class="btn">מאך משפחה</button></form><button class="btn l" data-act="unassigned">צוטיילן אלטע רעקארדס</button></section>`:''}
+  <form class="card" data-form="renamegroup">${field('עדיט משפחה נאמען',`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="דער ריכטיגער משפחה נאמען" required>`)}<button class="btn">סעיוו משפחה נאמען</button><div class="err"></div></form>
   <h2>🔑 פאסווארט בקשות (${resets.length})</h2><p class="muted">באשטעטיג ווער דער מענטש איז איידער דו שיקסט א לינק. דער לינק איז איינמאליג און גוט פאר איין שעה.</p>
   ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}">🔑 מאך א לינק</button></div>`).join('') || '<div class="muted">נאך קיין בקשות.</div>'}
   <h2>⏳ ווארטן אויף אפרוביישן (${pend.length})</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div></div>
    <div class="btns"><button class="btn s g" data-act="approve" data-id="${u.id}">✓ אפרובירן</button><button class="btn s r" data-act="reject" data-id="${u.id}">✗ אפזאגן</button></div></div>`).join('') || '<div class="muted">קיינער ווארט נישט.</div>'}
   <h2>👥 אלע מעמבערס (${rest.length})</h2><table class="t resp"><thead><tr><th>נאמען</th><th>טעלעפאן</th><th>סייד</th><th>סטאטוס</th><th></th></tr></thead><tbody>
-  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ' <span class="tag y">אדמין</span>' : ''}${u.has_password ? '' : ' <span class="tag">נאך קיין פאסווארט</span>'}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}</td>
+  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ' <span class="tag y">הויפט אדמין</span>' : u.is_family_admin?' <span class="tag y">משפחה אדמין</span>':''}${u.has_password ? '' : ' <span class="tag">נאך קיין פאסווארט</span>'}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<label>משפחה<select data-change="usergroup" data-id="${u.id}">${options(u.family_group_id)}</select></label>`:''}</td>
    <td>${u.status === 'active' ? '<span class="tag g">אקטיוו</span>' : '<span class="tag b">אפגעזאגט</span>'}</td>
    <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">אפרובירן</button>` : ''}
-   ${u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s l" data-act="mkadmin" data-id="${u.id}" data-v="${u.is_admin ? 0 : 1}">${u.is_admin ? 'נעם אוועק אדמין' : 'מאך אדמין'}</button>` : ''}
-   <button class="btn s l" data-act="resetlink" data-id="${u.id}">🔑 פאסווארט לינק</button>${u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s r" data-act="deluser" data-id="${u.id}">🗑</button>` : ''}</div></td></tr>`).join('')}</tbody></table>
-  <h2>⚙️ משפחה נעמען</h2><form data-form="settings" class="card">
+   ${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s l" data-act="mkadmin" data-id="${u.id}" data-v="${u.is_admin ? 0 : 1}">${u.is_admin ? 'נעם אוועק אדמין' : 'מאך אדמין'}</button>` : ''}
+   ${!u.is_admin&&u.id!==ME.id?`<button class="btn s l" data-act="familyadmin" data-id="${u.id}" data-v="${u.is_family_admin?'0':'1'}">${u.is_family_admin?'נעם אוועק משפחה אדמין':'מאך משפחה אדמין'}</button>`:''}
+   <button class="btn s l" data-act="resetlink" data-id="${u.id}">🔑 פאסווארט לינק</button>${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s r" data-act="deluser" data-id="${u.id}">🗑</button>` : ''}</div></td></tr>`).join('')}</tbody></table>
+  ${ME.is_admin?`<h2>⚙️ משפחה נעמען</h2><form data-form="settings" class="card">
   ${field('נאמען פון דער אפ (אידיש)', `<input id="st_family_yi" value="${esc(S.family_yi)}">`)}${field('Name (English)', `<input id="st_family_en" class="ltr" value="${esc(S.family_en)}">`)}
   <div class="grid g2"><div>${field('סייד א (אידיש)', `<input id="st_side_a_yi" value="${esc(S.side_a_yi)}">`)}${field('משפחה נאמען', `<input id="st_side_a_family_yi" value="${esc(S.side_a_family_yi)}">`)}${field('Side A (English)', `<input id="st_side_a_en" class="ltr" value="${esc(S.side_a_en)}">`)}${field('Family name (English)', `<input id="st_side_a_family_en" class="ltr" value="${esc(S.side_a_family_en)}">`)}</div>
   <div>${field('סייד ב (אידיש)', `<input id="st_side_b_yi" value="${esc(S.side_b_yi)}">`)}${field('משפחה נאמען', `<input id="st_side_b_family_yi" value="${esc(S.side_b_family_yi)}">`)}${field('Side B (English)', `<input id="st_side_b_en" class="ltr" value="${esc(S.side_b_en)}">`)}${field('Family name (English)', `<input id="st_side_b_family_en" class="ltr" value="${esc(S.side_b_family_en)}">`)}</div></div>
-  <div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>`;
+  <div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>`:''}`;
 };
 V.me = async () => `<h1>👤 מיין אקאונט</h1><div class="cap">${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ' · אדמין' : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
   <form data-form="me" class="card" style="margin-bottom:14px">${field('נאמען', `<input id="mn" value="${esc(ME.name)}">`)}${field('אימעיל (נישט מוז)', `<input id="mem" type="email" class="ltr" value="${esc(ME.email || '')}">`)}<div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>
@@ -584,7 +586,7 @@ async function go() {
     try {
       const invitation = await api('/family-invitations/' + encodeURIComponent(token));
       if (location.hash !== '#'+h) return;
-      STATE.joinSides = invitation.sides;
+      STATE.joinSides = invitation.sides; STATE.joinFamily=invitation.family_name;
       if (ME?.status==='active' && STATE.joinNext) {location.hash=STATE.joinNext;return;}
       if (ME) {
         $('m').innerHTML = `<div class="login"><h1>🌳 משפחה אינוויטעישן</h1><p>איינגעלאדנט צו: ${invitation.sides.map(c => esc(sideLong(c))).join(' + ')}</p><p>דו ביסט שוין איינגעשריבן אלס ${esc(ME.name)}. צו טוישן דיין סייד, רעד מיט דעם אדמין.</p><a class="btn" href="#home">צוריק צו מיין אקאונט</a></div>`;
@@ -592,13 +594,14 @@ async function go() {
     } catch (e) { if (location.hash === '#'+h) $('m').innerHTML = `<div class="login"><h1>אינוויטעישן</h1><p role="alert">${esc(e.message)}</p><a class="btn" href="#home">צוריק</a></div>`; }
     return;
   }
-  STATE.joinToken = null; STATE.joinSides = null; STATE.joinNext = null;
+  STATE.joinToken = null; STATE.joinSides = null; STATE.joinFamily=null; STATE.joinNext = null;
   if (h.startsWith('verifyemail=')) { stopPoll(); clearChrome(); STATE.verifyEmailToken = h.slice(12); $('m').innerHTML = V.verifyemail(); return; }
   if (h === 'emailverified') { stopPoll(); clearChrome(); $('m').innerHTML = `<div class="login"><h1>✓ אימעיל באשטעטיגט</h1><p>דו קענסט יעצט באקומען א פאסווארט לינק אויף דיין אימעיל.</p><a class="btn" href="${ME ? '#me' : '#home'}">${ME ? 'מיין אקאונט' : 'לאג אין'}</a></div>`; return; }
   if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); const token = STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(token)).then((r) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = 'שלום ' + r.name + '!'; $('setpwsubmit').disabled = false; }).catch((e) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = ''; $('ferr').textContent = e.message; }); return; }
   if (h === 'forgotpw') { stopPoll(); clearChrome(); $('m').innerHTML = V.forgotpw(); return; }
   if (!ME) { stopPoll(); clearChrome(); $('m').innerHTML = V.login(); return; }
   if (ME.status !== 'active') { stopPoll(); clearChrome(); $('m').innerHTML = V.pending(); return; }
+  if(ME.is_admin&&!ME.selected_family_group_id&&!['admin','me'].includes(h)){location.hash='#admin';return;}
   const [v, arg] = h.split('/'); const view = V[v] && !['login', 'pending', 'setpw'].includes(v) ? v : 'home';
   $('m').classList.toggle('tree-workspace',view==='tree' && STATE.treeView==='tree');
   if (view !== 'chat') stopPoll();
@@ -613,6 +616,12 @@ async function loadMe() { const r = await api('/me'); ME = r.user; EMAIL_READY =
 
 // ---------- actions ----------
 const ACT = {
+  familyadmin:async el=>{await api('/admin/users/'+el.dataset.id,{method:'PATCH',body:{is_family_admin:el.dataset.v==='1'}});refresh();},
+  unassigned:async()=>{
+    const {records}=await api('/admin/unassigned-records');
+    const names={people:'מענטשן',yahrzeits:'יארצייטן',learn_lists:'לערנען',directory:'אדרעסן',simchas:'שמחות',files:'פיילס',messages:'מעסעדזשעס',families:'משפחה נעמען'};
+    modal(`<h2>צוטיילן אלטע רעקארדס</h2><p>די רעקארדס זענען פארבארגן ביז מען טיילט זיי צו. קלייב בלויז רעקארדס פון איין משפחה, מיט זייערע פארבינדונגען. קיין רעקארד ווערט נישט אויסגעמעקט.</p><form data-form="assignrecords">${field('משפחה',`<select id="assigngroup" required><option value="">—</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)}${Object.entries(records).map(([table,rows])=>`<details><summary>${names[table]} (${rows.length}${rows.length===500?'+':''})</summary>${rows.map(r=>`<label style="display:block"><input type="checkbox" name="assignrecord" data-table="${table}" value="${esc(r.id)}"> #${esc(r.id)} ${esc(r.label)}</label>`).join('')}</details>`).join('')}<div class="err"></div><button class="btn">באשטעטיג צוטיילונג</button></form>`,true);
+  },
   viewperson: el=>personProfile(Number(el.dataset.id)),
   sharelearn: async ()=>{
     const l=STATE.list.l,lists=(await api('/lists')).lists;
@@ -680,6 +689,8 @@ const ACT = {
   copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast('✓ קאפירט'); },
 };
 const CHANGE = {
+  viewgroup:async el=>{await api('/admin/select-family-group',{method:'POST',body:{family_group_id:Number(el.value)}});location.reload();},
+  usergroup:async el=>{if(!el.value)return;await api('/admin/users/'+el.dataset.id+'/family-group',{method:'PUT',body:{family_group_id:Number(el.value)}});toast('משפחה צוגעטיילט — דער מעמבער דארף נאכאמאל לאגין');await loadMe();refresh();},
   privatechat: el=>{if(!el.value)return;const id=Number(el.value);STATE.room='dm:'+Math.min(ME.id,id)+':'+Math.max(ME.id,id);return go();},
   chatfile: el=>{const f=el.files[0];STATE.chatUpload=null;if(f&&f.size>10*1024*1024){el.value='';throw new Error('מאקסימום 10 MB');}$('chatfilename').textContent=f?' · '+f.name:'';},
   newrelative: el => { $('new_' + el.dataset.key).hidden = el.value !== 'new'; },
@@ -689,6 +700,9 @@ const CHANGE = {
     try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast('✓ סייד געטוישט'); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
 };
 const FORMS = {
+  renamegroup:async()=>{await api('/admin/family-groups/'+val('renamegroupid'),{method:'PATCH',body:{name:val('renamegroupname')}});await loadMe();refresh();},
+  newgroup:async()=>{await api('/admin/family-groups',{method:'POST',body:{name:val('groupname')}});refresh();},
+  assignrecords:async f=>{const records={};for(const e of f.querySelectorAll('[name=assignrecord]:checked'))(records[e.dataset.table]||=[]).push(e.value);await api('/admin/assign-records',{method:'POST',body:{family_group_id:Number(val('assigngroup')),records}});closeModal();toast('צוגעטיילט');refresh();},
   portionhelp: async ()=>{const scope=STATE.portionScope;await api(`/lists/${STATE.list.l.id}/items/${scope.idx}/help`,{method:'POST',body:{...scope,note:val('helpnote')}});closeModal();await go();toast('✓ דיין בקשה איז אין דער ליסט');},
   familyinvite: async () => {
     const side = val('inviteSide');
@@ -699,7 +713,7 @@ const FORMS = {
   },
   forgotpw: async () => { await api('/auth/forgot-password', { method: 'POST', body: { phone: val('resetphone') } }); STATE.resetRequested = true; go(); },
   login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast('ברוך הבא! ✓'); location.hash = STATE.joinNext || '#home'; go(); },
-  signup: async () => { const r = await api('/auth/signup', { method: 'POST', body: { name: val('fn'), phone: val('fp'), password: $('fw').value, sides: STATE.pickSides || [], invitation_token: STATE.joinToken || undefined, note: val('fnote') } }); ME = r.user; await loadMe(); location.hash = STATE.joinNext || '#home'; go(); },
+  signup: async () => { const r = await api('/auth/signup', { method: 'POST', body: { name: val('fn'), phone: val('fp'), password: $('fw').value, sides: STATE.pickSides || [], invitation_token: STATE.joinToken || undefined, create_family:STATE.joinToken?undefined:val('newfamilyname'), note: val('fnote') } }); ME = r.user; await loadMe(); location.hash = STATE.joinNext || '#home'; go(); },
   setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); go(); },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
@@ -748,11 +762,11 @@ document.addEventListener('input', (ev) => {
   $('dirlist').innerHTML = dirCards(L); $('qn').textContent = L.length + ' משפחות';
 });
 document.addEventListener('submit', async (ev) => {
-  const f = ev.target.closest('[data-form]'); if (!f) return; ev.preventDefault();
+  const f = ev.target.closest('[data-form]'); if (!f) return; ev.preventDefault(); if(f.dataset.busy)return;f.dataset.busy='1';
   const err = f.querySelector('.err'); if (err) err.textContent = '';
   const btn = f.querySelector('button:not([type=button])'); if (btn) btn.disabled = true;
   try { await FORMS[f.dataset.form](f); } catch (e) { if (e.status === 401 && f.dataset.form !== 'login') return fail(e); if (err) err.textContent = e.message; else fail(e); }
-  finally { if (btn && document.body.contains(btn)) btn.disabled = false; }
+  finally { delete f.dataset.busy; if (btn && document.body.contains(btn)) btn.disabled = false; }
 });
 document.addEventListener('change', (ev) => { if(ev.target.dataset.change==='familyfilter') { STATE[ev.target.dataset.key]=ev.target.value; refresh(); } if (ev.target.id === 'sk') $('skow').style.display = ev.target.value === 'אנדערע' ? '' : 'none';
   if (ev.target.id === 'sd' || ev.target.id === 'safter') $('sh').value = automaticHebrewDate(val('sd'), $('safter').checked);

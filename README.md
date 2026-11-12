@@ -5,8 +5,8 @@ Live: https://familye.sites.tab.bot/ (Bochner / Biderman — באכנער / בי
 `prototype/index.html` is the approved clickable mockup (made-up data, nothing saved): https://familye-proto.sites.tab.bot/
 
 ## What it does
-- **Sign up / log in**: name, phone, password, and which side you are a cousin on (father's, mother's, or both).
-  New cousins wait for an admin to approve them. No SMS provider needed.
+- **Sign up / log in**: join through a family invitation (automatically assigned to that family),
+  or create a new isolated family and become its family administrator. No unassigned signup. No SMS provider needed.
 - **My account**: edit name/email, change password, and change the login phone after confirming the current password.
   Phone changes reject an occupied number, retain the current browser session, and expire other sessions and unused
   recovery links. SMS verification is not connected. The configured owner's identity stays attached to the same
@@ -30,7 +30,10 @@ Live: https://familye.sites.tab.bot/ (Bochner / Biderman — באכנער / בי
 - **Chat** (💬): one group per side + one for all cousins; you only see the groups of your side(s). Polls every 3 s.
 - **Home**: next yahrzeits, learning lists, upcoming simchas, latest messages.
 
-Visibility: a member sees the items of his/her own side(s) plus everything marked "both"/"all". Admins see everything.
+Visibility: a member sees only records in their assigned access family, narrowed by their side(s).
+"Both"/"all" never crosses the family boundary. Family admins manage their own family only;
+the main admin can explicitly select and correct any family. See [family isolation and rollout](docs/family-isolation.md),
+including the required classification of legacy accounts and records before reopening member access.
 
 ## Structured family records
 
