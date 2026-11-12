@@ -114,6 +114,18 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.equal((await req('/people',{name:'Forbidden family label',side:'both',family_ids:[bLabel]},a.cookie)).status,404);
   assert.equal((await req('/people/'+daughter.id,{father_id:pa.id},root.cookie,'PUT',ga)).status,400,'unrelated families still cannot link');
 
+  const otherFamilyMiriam=ok(await req('/people',{name:'מרים',side:'both',family_ids:[aLabel]},root.cookie,'POST',ga)).person;
+  const miriam=ok(await req('/people',{name:'מרים',side:'both',family_ids:[bLabel]},root.cookie,'POST',ga)).person;
+  const sameFamilyMiriam={name:'מרים',side:'both',family_ids:[bLabel]};
+  const warningForMiriam=await req('/people',sameFamilyMiriam,root.cookie,'POST',ga);
+  assert.equal(warningForMiriam.status,409);
+  assert.deepEqual(warningForMiriam.body.details.matches.map(p=>p.id),[miriam.id]);
+  assert.equal((await req('/people/'+checkedMother.id,{name:'מרים'},root.cookie,'PUT',ga)).status,409,'renaming still checks for duplicates in the same family');
+  ok(await req('/people',{...sameFamilyMiriam,confirm_distinct:true,distinct_reason:'Another relative with the same name',request_key:randomBytes(16).toString('hex')},root.cookie,'POST',ga));
+  const linkedMiriam=ok(await req('/people/'+miriam.id,{name:'מרים',father_id:checkedFather.id,family_ids:[bLabel]},root.cookie,'PUT',ga)).person;
+  assert.equal(linkedMiriam.father_id,checkedFather.id,'editing the parent of an existing person bypasses the name-only duplicate prompt');
+  assert.equal(ok(await req('/people',undefined,a.cookie)).people.find(p=>p.id===otherFamilyMiriam.id).father_id,null);
+
   const spouse=ok(await req('/people',{name:'Checked family first spouse',side:'both',family_ids:[bLabel]},root.cookie,'POST',ga)).person;
   const remarried=ok(await req('/people/'+checkedMother.id,{family_ids:[bLabel],spouse_id:spouse.id,new_relatives:{second_spouse_id:{name:'Checked family second spouse'}}},root.cookie,'PUT',ga)).person;
   assert.equal(remarried.spouse_id,spouse.id);

@@ -74,13 +74,16 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/people/'+parent.body.person.id,{name:'Cross-side edit',side:'b'},b.cookie,'PUT')).status,404);
   const list=await request('/lists',{kind:'tehillim',niftar:'Test dedication',side:'both'},admin.cookie);assert.equal(list.status,200);
   const listId=list.body.list.id;
+  assert.equal((await request('/lists/'+listId,undefined,admin.cookie)).body.list.niftar,'Test dedication ז״ל');
   const competing=await Promise.all([a,b].map(u=>request(`/lists/${listId}/items/1`,{action:'take'},u.cookie)));
   assert.deepEqual(competing.map(r=>r.status).sort(),[200,409]);
   const owner=competing[0].status===200?a:b;
   assert.equal((await request(`/lists/${listId}/items/1`,{action:'done'},owner.cookie)).status,200);
-  const hidden=await request('/lists',{kind:'mishnayos',niftar:'Side A only',side:'a'},a.cookie);assert.equal(hidden.status,200);
+  const hidden=await request('/lists',{kind:'mishnayos',niftar:'Side A only ז"ל',side:'a'},a.cookie);assert.equal(hidden.status,200);
   assert.equal((await request('/lists/'+hidden.body.list.id,undefined,b.cookie)).status,404);
-  assert.equal((await request('/lists/'+hidden.body.list.id,undefined,a.cookie)).body.items.length,63);
+  const hiddenDetail=(await request('/lists/'+hidden.body.list.id,undefined,a.cookie)).body;
+  assert.equal(hiddenDetail.items.length,63);
+  assert.equal(hiddenDetail.list.niftar,'Side A only ז״ל');
   const sim=await request('/simchas',{kind:'Wedding',whose:'Test family',gdate:'2099-01-01',audience:'all'},a.cookie);assert.equal(sim.status,200);
   const simId=sim.body.simcha.id;
   assert.equal((await request('/simchas?id='+simId,undefined,a.cookie)).body.simchas[0].id,simId);
@@ -284,7 +287,12 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.ok((await adminPool.query(`SELECT archived_at FROM ${schema}.yahrzeits WHERE id=$1`,[legacy.id])).rows[0].archived_at,'keep legacy provenance');
   await request('/people/'+father.id,{name:'Canonical name',kever:'Updated cemetery',kever_address:'1 Cemetery Road, New York, NY'},admin.cookie,'PUT');
   const synced=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits[0];assert.equal(synced.id,canonicalCalendar[0].id);assert.equal(synced.kever,'Updated cemetery');assert.equal(synced.kever_address,'1 Cemetery Road, New York, NY');assert.match(synced.name,/Canonical name/);
-  const canonicalLearningIndex=await request('/lists',undefined,admin.cookie);assert.equal(canonicalLearningIndex.status,200,JSON.stringify(canonicalLearningIndex.body));assert.equal(canonicalLearningIndex.body.lists.find(l=>l.id===legacyList.body.list.id).families.length,2);assert.match(canonicalLearningIndex.body.lists.find(l=>l.id===legacyList.body.list.id).niftar,/Canonical name/);assert.match((await request('/lists/'+legacyList.body.list.id,undefined,admin.cookie)).body.list.niftar,/Canonical name/);
+  const canonicalLearningIndex=await request('/lists',undefined,admin.cookie);
+  assert.equal(canonicalLearningIndex.status,200,JSON.stringify(canonicalLearningIndex.body));
+  const canonicalList=canonicalLearningIndex.body.lists.find(l=>l.id===legacyList.body.list.id);
+  assert.equal(canonicalList.families.length,2);
+  assert.match(canonicalList.niftar,/Canonical name.* ז״ל$/);
+  assert.equal((await request('/lists/'+legacyList.body.list.id,undefined,admin.cookie)).body.list.niftar,canonicalList.niftar);
 
   // Public recovery never reveals account existence or creates a reset token.
   assert.equal((await request('/auth/forgot-password',{phone:'123'})).status,400);

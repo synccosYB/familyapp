@@ -786,11 +786,13 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
             WHERE pf.person_id=a.person_id AND f.family_group_id=a.family_group_id))`,[id,assignAccess])).rows;
       for(const grant of retained)accessGroups.add(grant.family_group_id);
     }
-    const visible=(await c.query(`${personSelect()} WHERE ${personSideSql('p',1)}`,[mySides(u)])).rows;
-    const matches=(value:string,exclude?:number)=>visible.filter(p=>p.id!==exclude&&nameKey(p.name)===nameKey(value));
-    const identityChanged=!old || ['name','father_id','mother_id','parent_id'].some(k=>String(b[k]||'')!==String(old[k]||''));
+    const matches=async(value:string,groups:number[],exclude?:number)=>{
+      const people=(await c.query(`${personSelect()} WHERE ${personSideSql('p',1)} AND ${personSql('p','$2::int[]')}`,[mySides(u),groups])).rows;
+      const key=nameKey(value);
+      return people.filter(p=>p.id!==exclude&&nameKey(p.name)===key);
+    };
     const proposal={...original,name,father_id:b.father_id,mother_id:b.mother_id,parent_id:b.parent_id,spouse_id:b.spouse_id};
-    const candidates=identityChanged?matches(name,id):[];
+    const candidates=!old || nameKey(name)!==nameKey(old.name)?await matches(name,[...accessGroups],id):[];
     let confirmationId:number|undefined;
     if(candidates.length&&!reviewId) {
       const reason=str(b.distinct_reason,500);
@@ -811,11 +813,11 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if (b[key]) throw bad('קלייב אן עקזיסטירנדיקן מענטש אדער לייג צו א נייעם');
       const relativeName = str(draft.name,120);
       if (!relativeName) throw bad('שרייב דעם נאמען פונעם נייעם מענטש');
-      const existing=matches(relativeName);
+      const existing=await matches(relativeName,[relativeGroup]);
       if(existing.length)throw new HttpError(409,'דער קרוב עקזיסטירט אפשר שוין. קלייב אים פון דער ליסטע. אויב דאס איז א צווייטער מענטש, לייג אים צו באזונדער מיט אן ערקלערונג.',{code:'person_matches',field:key,matches:existing.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
       const relative = (await c.query(`INSERT INTO people(name,title,side,life_status,lineage_term,created_by,family_group_id,known_as)
         VALUES($1,$2,$3,'unknown',$4,$5,$6,$7) RETURNING *`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id,relativeGroup,str(draft.known_as,160)])).rows[0];
-      visible.push(relative);b[key] = relative.id;
+      b[key] = relative.id;
     }
     const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id), secondSpouse = personId(b.second_spouse_id);
     const partners=[spouse,secondSpouse].filter((v):v is number=>v!==null);
@@ -959,11 +961,12 @@ app.post('/api/person-reviews/:id/resolve',async req=>{
 
 // ---------------- mishnayos & tehillim ----------------
 // Linked list titles are projections of the canonical person, not independently edited copies.
-const learningTitleSql = (param: number) => `coalesce(
+const learningTitleSql = (param: number) => `regexp_replace(btrim(coalesce(
   (SELECT concat_ws(' ',nullif(p.title,''),p.name,CASE WHEN f.id IS NOT NULL THEN concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) END)
     FROM yahrzeits y JOIN people p ON p.id=y.person_id LEFT JOIN people f ON f.id=p.father_id AND ${personSideSql('f',param)}
     WHERE y.id=l.yahrzeit_id AND ${personSideSql('p',param)}),
-  (SELECT concat_ws(' ',y.name,nullif(y.father_name,'')) FROM yahrzeits y WHERE y.id=l.yahrzeit_id AND y.person_id IS NULL AND ${sideSql('y.side',param)}),l.niftar)`;
+  (SELECT concat_ws(' ',y.name,nullif(y.father_name,'')) FROM yahrzeits y WHERE y.id=l.yahrzeit_id AND y.person_id IS NULL AND ${sideSql('y.side',param)}),l.niftar)),
+  '([[:space:]]+ז[״"“”]ל[.!?]?)+$', '') || ' ז״ל'`;
 app.get('/api/lists', async (req) => {
   const u = await member(req);
   const rows = await q(`SELECT l.*, ${learningTitleSql(1)} niftar, (SELECT coalesce(json_agg(json_build_object('id',fam.id,'name',fam.name)),'[]') FROM families fam JOIN person_families pf ON pf.family_id=fam.id JOIN yahrzeits y ON y.person_id=pf.person_id WHERE y.id=l.yahrzeit_id AND fam.family_group_id=l.family_group_id) families, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
