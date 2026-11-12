@@ -25,6 +25,32 @@ Yiddish / RTL app for the Bochner (באכנער, father's side) and Biderman (ב
 - Uploads are stored in PostgreSQL and downloaded as attachments; no virus scanning, object storage or inline PDF preview.
 - Chat history pagination beyond the newest 100 messages.
 
+## Run on Replit
+
+The repository includes `.replit` and `replit.nix` for a Node 22 server application. The Run command installs locked dependencies, compiles TypeScript, and starts the real app. Docker is not needed on Replit.
+
+1. Import this repository. Until PR #1 is merged, select branch `feat/familye-persistent-app`; `main` still contains only the mockup.
+2. Connect this app's development PostgreSQL database and set `DATABASE_URL` to its connection string in Secrets. Keep the connection string's SSL parameters intact; do not disable TLS verification.
+3. Set the following environment values in the workspace. Put credentials in **Secrets**, and public settings in **Configurations**:
+
+| Name | Workspace value |
+| --- | --- |
+| `DATABASE_URL` | This app's development PostgreSQL connection string |
+| `APP_ORIGIN` | Exact HTTPS preview origin, such as `https://your-preview-host`, with no trailing slash or path |
+| `NODE_ENV` | `development` |
+| `ADMIN_LOGIN` | Your chosen administrator login |
+| `ADMIN_NAME` | Your display name |
+| `ADMIN_PASSWORD` | Your chosen password, at least 8 characters |
+
+4. Click **Run**, open the web preview and sign in. Tables are created on startup. Prefer opening the preview as its own browser tab if the embedded preview blocks cookies.
+5. For publication, use **Autoscale**, with build `npm ci --include=dev && npm run build` and run `npm start`. The checked-in configuration provides these commands and maps port 3000.
+6. Set the **published environment** values separately: `NODE_ENV=production`, `APP_ORIGIN` to the exact published HTTPS origin, and `DATABASE_URL` to the production database. Bootstrap an administrator in that database too. Do not assume the development database or its accounts are copied to production.
+7. Verify `/health/ready`, sign-in/out, creating a record, refresh persistence, an invitation account, side permissions, a learning claim, RSVP, chat and invitation download on the published URL. Remove the bootstrap login/password values after first setup in each environment.
+
+A wrong `APP_ORIGIN` causes writes and login to be rejected; update the environment value when the preview or published URL changes. Keep `TRUST_PROXY_HOPS=0` unless the trusted proxy chain has been verified. SMS remains deferred.
+
+Replit references: [app configuration](https://docs.replit.com/features/project-setup/configuration), [Secrets](https://docs.replit.com/core-concepts/project-editor/app-setup/secrets), [database](https://docs.replit.com/features/data-and-storage/sql-database).
+
 ## Run with Docker
 
 1. Copy `.env.example` to `.env` and replace both passwords. Use URL-safe alphanumeric database passwords in Compose, since the password is part of `DATABASE_URL`.
