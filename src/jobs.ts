@@ -6,13 +6,14 @@ import path from 'node:path';
 import { runLearningReminders } from './learning-reminders.js';
 import { runInvitationEmails } from './invitation-emails.js';
 import { config } from './config.js';
+import { readWording } from './wording-store.js';
 
 export function startJobs(log: { info: (o: object, m: string) => void; error: (o: object, m: string) => void }) {
   let reminding = false;
   const remind = async () => {
     if (reminding) return;
     reminding = true;
-    try { await runLearningReminders(log); } catch(e) { log.error({error:String(e)}, 'learning reminder job failed'); }
+    try { await readWording().catch(()=>{}); await runLearningReminders(log); } catch(e) { log.error({error:String(e)}, 'learning reminder job failed'); }
     finally { reminding = false; }
   };
   setTimeout(remind, 5000).unref();

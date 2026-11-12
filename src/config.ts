@@ -20,6 +20,7 @@ export const config = {
   pgDumpBin: env.PG_DUMP_BIN || 'pg_dump',
   resendApiKey: env.RESEND_API_KEY || '',
   resendFromEmail: env.RESEND_FROM_EMAIL || '',
+  wordingSyncToken: env.KOBOR_WORDING_SYNC_TOKEN || '',
   // first admin, created by bootstrap if missing
   admin: {
     name: env.ADMIN_NAME || '',

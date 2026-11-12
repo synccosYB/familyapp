@@ -17,7 +17,8 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
  const data=await mkdtemp(path.join(tmpdir(),'familye-build-'));
  const setup=randomBytes(32).toString('hex');
  const capture=path.join(data,'email.jsonl');
- const env={...process.env,DATABASE_URL:conn.toString(),FAMILYE_DATA:data,ADMIN_NAME:'Build test admin',ADMIN_PHONE:'8455550100',SETUP_TOKEN_SHA256:createHash('sha256').update(setup).digest('hex'),QA_PHONE_PREFIX:'',COOKIE_SECURE:'false',PORT:'18080',HOST:'127.0.0.1',LOG_LEVEL:'error',RESEND_API_KEY:'test-only',RESEND_FROM_EMAIL:'Family <noreply@example.test>',FAMILYE_EMAIL_CAPTURE:capture,NODE_OPTIONS:'--import='+new URL('./resend-mock.mjs',import.meta.url).pathname};
+ const wordingToken = randomBytes(24).toString('hex');
+ const env={...process.env,DATABASE_URL:conn.toString(),FAMILYE_DATA:data,ADMIN_NAME:'Build test admin',ADMIN_PHONE:'8455550100',SETUP_TOKEN_SHA256:createHash('sha256').update(setup).digest('hex'),QA_PHONE_PREFIX:'',COOKIE_SECURE:'false',PORT:'18080',HOST:'127.0.0.1',LOG_LEVEL:'error',RESEND_API_KEY:'test-only',RESEND_FROM_EMAIL:'Family <noreply@example.test>',FAMILYE_EMAIL_CAPTURE:capture,NODE_OPTIONS:'--import='+new URL('./resend-mock.mjs',import.meta.url).pathname,KOBOR_WORDING_SYNC_TOKEN:wordingToken};
  let child;let logs='';
  const run=(entry)=>{const p=spawn(process.execPath,[entry],{env,stdio:['ignore','pipe','pipe']});p.stdout.on('data',x=>logs+=x);p.stderr.on('data',x=>logs+=x);return p;};
  let testFamily;
@@ -31,6 +32,21 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   child=run('dist/index.js');let ready=false;
   for(let i=0;i<80;i++){try{ready=(await fetch(base+'/api/health')).ok;if(ready)break;}catch{}await new Promise(r=>setTimeout(r,100));}
   assert.ok(ready,logs);
+  const sync = (overrides, token) => fetch(base+'/api/wording/sync', {
+    method:'PUT', headers:{'x-familye':'1','content-type':'application/json',authorization:'Bearer '+token},
+    body:JSON.stringify({overrides})
+  });
+  const wording = {'learning.heading':'לערנען & תהילים', 'home.01':'ברוך הבא, {name}'};
+  assert.equal((await sync(wording, 'wrong-token')).status,401);
+  assert.deepEqual((await request('/wording')).body,{revision:0,overrides:{}});
+  assert.deepEqual(await (await sync(wording,wordingToken)).json(),{revision:1,rejected:[]});
+  assert.deepEqual((await request('/wording')).body,{revision:1,overrides:wording});
+  assert.deepEqual((await request('/wording?revision=1')).body,{revision:1});
+  assert.deepEqual(await (await sync({...wording,'home.01':'Missing placeholder'},wordingToken)).json(),{revision:1,rejected:['home.01']});
+  assert.deepEqual((await request('/wording')).body.overrides,wording);
+  assert.equal((await fetch(base+'/wording.js')).status,200);
+  assert.deepEqual(await (await sync({},wordingToken)).json(),{revision:2,rejected:[]});
+  assert.deepEqual((await request('/wording')).body,{revision:2,overrides:{}});
   assert.equal((await request('/people')).status,401);
   const admin=await request('/auth/set-password',{token:setup,password:'build-admin-password'});assert.equal(admin.status,200);
   assert.equal((await request('/auth/set-password',{token:setup,password:'build-admin-password'})).status,404);

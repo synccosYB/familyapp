@@ -1,4 +1,5 @@
 'use strict';
+import { word, htmlWord, applyWording } from './wording.js';
 import { familyUnits, treeViewportLayout } from './tree-layout.js';
 import { marriageChildren, childParents } from './family-relationships.js';
 import { automaticHebrewDate } from './hebrew-date.js';
@@ -7,6 +8,33 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let ME = null, EMAIL_READY = false, S = {}, STATE = { side: 'all', room: 'all', q: '', treeView: window.innerWidth < 800 ? 'list' : 'tree', treeSide: null };
 let POLL = null, LASTMSG = 0, SEEN = JSON.parse(localStorage.getItem('fam_seen') || '{}');
+let wordingRevision = -1, wordingLoading = false, wordingNeedsRender = false, editingMainForm = false;
+
+async function loadWording() {
+  if (wordingLoading) return;
+  wordingLoading = true;
+  try {
+    const response = await fetch('/api/wording?revision=' + wordingRevision, { signal: AbortSignal.timeout(3500) });
+    if (!response.ok) return;
+    const snapshot = await response.json();
+    if (Number.isSafeInteger(snapshot.revision) && snapshot.revision > wordingRevision && snapshot.overrides) {
+      applyWording(snapshot.overrides);
+      wordingRevision = snapshot.revision;
+      wordingNeedsRender = true;
+      document.title = S.family_yi || word("account.load_me.01");
+      if ($('loading')) $('loading').textContent = word("shared.loading");
+    }
+  } catch { /* Keep the last available wording if the connection drops. */ }
+  finally { wordingLoading = false; }
+}
+
+async function checkWording() {
+  if (document.hidden) return;
+  await loadWording();
+  // A change can wait while someone is editing a form or using a dialog.
+  if (wordingNeedsRender && !editingMainForm && !$('md').classList.contains('on') &&
+    !document.activeElement?.matches('input, textarea, select')) await refresh();
+}
 
 function toast(t) { const e = $('ts'); e.textContent = t; e.style.display = 'block'; clearTimeout(e._t); e._t = setTimeout(() => (e.style.display = 'none'), 2600); }
 function modal(html, wide) { $('mb').className = 'mbox' + (wide ? ' wide' : ''); $('mb').innerHTML = html; $('md').classList.add('on'); const f = $('mb').querySelector('input:not([type=file]),select,textarea'); if (f && window.innerWidth > 800) f.focus(); }
@@ -28,41 +56,47 @@ async function api(path, opts = {}) {
   else if (opts.body !== undefined) { o.body = JSON.stringify(opts.body); o.headers['content-type'] = 'application/json'; }
   const r = await fetch('/api' + path, o);
   let j = {}; try { j = await r.json(); } catch { /* */ }
-  if (!r.ok) { const e = new Error(j.error || 'פעלער ' + r.status); e.status = r.status; e.details=j.details; throw e; }
+  if (!r.ok) { const e = new Error(j.error || `${word("shared.api.01")} ` + r.status); e.status = r.status; e.details=j.details; throw e; }
   return j;
 }
 const fail = (e) => { if (e && e.status === 401) { ME = null; go(); } toast('⚠️ ' + (e.message || e)); };
 
 // ---------- words ----------
-const DAYS = ['זונטאג', 'מאנטאג', 'דינסטאג', 'מיטוואך', 'דאנערשטאג', 'פרייטאג', 'שבת'];
-const MONTHS = ['יאנואר', 'פעברואר', 'מערץ', 'אפריל', 'מיי', 'יוני', 'יולי', 'אויגוסט', 'סעפטעמבער', 'אקטאבער', 'נאוועמבער', 'דעצעמבער'];
-const HMONTHS = [['TISHREI', 'תשרי'], ['CHESHVAN', 'חשון'], ['KISLEV', 'כסלו'], ['TEVET', 'טבת'], ['SHVAT', 'שבט'], ['ADAR', 'אדר (נישט קיין עיבור יאר)'], ['ADAR_I', 'אדר א'], ['ADAR_II', 'אדר ב'], ['NISAN', 'ניסן'], ['IYYAR', 'אייר'], ['SIVAN', 'סיון'], ['TAMUZ', 'תמוז'], ['AV', 'אב'], ['ELUL', 'אלול']];
-const SIMKINDS = ['חתונה', 'בר מצוה', 'בת מצוה', 'שלום זכר', 'ברית', 'קידוש', 'אופשערן', 'תנאים', 'ווארט', 'פדיון הבן', 'סיום', 'אנדערע'];
-function gdate(ymd) { if (!ymd) return ''; const [y, m, d] = ymd.split('-').map(Number); const dt = new Date(y, m - 1, d); return `${DAYS[dt.getDay()]}, ${d} ${MONTHS[m - 1]} ${y}`; }
-function inDays(n) { return n === 0 ? 'היינט!' : n === 1 ? 'מארגן' : n < 0 ? `פאר ${-n} טעג` : `אין ${n} טעג`; }
+const dayWords = ["calendar.01", "calendar.02", "calendar.03", "calendar.04", "calendar.05", "calendar.06", "calendar.07"];
+const monthWords = ["calendar.08", "calendar.09", "calendar.10", "calendar.11", "calendar.12", "calendar.13", "calendar.14", "calendar.15", "calendar.16", "calendar.17", "calendar.18", "calendar.19"];
+const HMONTHS = [["TISHREI","calendar.hebrew_month.tishrei"],["CHESHVAN","calendar.hebrew_month.cheshvan"],["KISLEV","calendar.hebrew_month.kislev"],["TEVET","calendar.hebrew_month.tevet"],["SHVAT","calendar.hebrew_month.shvat"],["ADAR","calendar.hebrew_month.adar"],["ADAR_I","calendar.hebrew_month.adar_i"],["ADAR_II","calendar.hebrew_month.adar_ii"],["NISAN","calendar.hebrew_month.nisan"],["IYYAR","calendar.hebrew_month.iyyar"],["SIVAN","calendar.hebrew_month.sivan"],["TAMUZ","calendar.hebrew_month.tamuz"],["AV","calendar.hebrew_month.av"],["ELUL","calendar.hebrew_month.elul"]];
+function hebrewMonthLabel(code) {
+  const month = HMONTHS.find(([value]) => value === code);
+  return month ? word(month[1]) : '';
+}
+const SIMKINDS = ["חתונה","בר מצוה","בת מצוה","שלום זכר","ברית","קידוש","אופשערן","תנאים","ווארט","פדיון הבן","סיום","אנדערע"];
+const simchaWordKeys = new Map([["חתונה","simchas.kind.wedding"],["בר מצוה","simchas.kind.bar_mitzvah"],["בת מצוה","simchas.kind.bat_mitzvah"],["שלום זכר","simchas.kind.shalom_zachar"],["ברית","simchas.kind.bris"],["קידוש","simchas.kind.kiddush"],["אופשערן","simchas.kind.upsherin"],["תנאים","simchas.kind.tenaim"],["ווארט","simchas.kind.vort"],["פדיון הבן","simchas.kind.pidyon_haben"],["סיום","simchas.kind.siyum"],["אנדערע","simchas.kind.other"],["שמחה","simchas.kind.simcha"]]);
+const simchaKind = value => simchaWordKeys.has(value) ? word(simchaWordKeys.get(value)) : value;
+function gdate(ymd) { if (!ymd) return ''; const [y, m, d] = ymd.split('-').map(Number); const dt = new Date(y, m - 1, d); return monthWords[m - 1] && Number.isFinite(dt.valueOf()) ? `${word(dayWords[dt.getDay()])}, ${d} ${word(monthWords[m - 1])} ${y}` : ''; }
+function inDays(n) { return n === 0 ? word("calendar.in_days.01") : n === 1 ? word("calendar.in_days.02") : n < 0 ? word("calendar.in_days.03", { value: -n }) : word("calendar.in_days.04", { count: n }); }
 function heb(n) { const o = ['', 'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט'], t = ['', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ']; let s = ''; if (n >= 100) { s += 'ק'; n -= 100; } if (n === 15) s += 'טו'; else if (n === 16) s += 'טז'; else s += t[Math.floor(n / 10)] + o[n % 10]; return s; }
 const hebD = (n) => { const s = heb(n); return s.length > 1 ? s.slice(0, -1) + '״' + s.slice(-1) : s + '׳'; };
 function hm(ts) { const d = new Date(ts); return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M/, ''); }
 function dayKey(ts) { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; }
-function dayLabel(ts) { const d = new Date(ts), t = new Date(); const diff = Math.round((new Date(t.getFullYear(), t.getMonth(), t.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5); return diff === 0 ? 'היינט' : diff === 1 ? 'נעכטן' : `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`; }
+function dayLabel(ts) { const d = new Date(ts), t = new Date(); if (!Number.isFinite(d.valueOf())) return ''; const diff = Math.round((new Date(t.getFullYear(), t.getMonth(), t.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5); return diff === 0 ? word("calendar.day_label.01") : diff === 1 ? word("calendar.day_label.02") : `${word(dayWords[d.getDay()])}, ${d.getDate()} ${word(monthWords[d.getMonth()])}`; }
 
 const famOf = (c) => (c === 'a' ? S.side_a_family_yi : c === 'b' ? S.side_b_family_yi : '');
-const sideName = (c) => (c === 'a' ? S.side_a_yi : c === 'b' ? S.side_b_yi : c === 'all' ? 'אלע קאזינס' : 'ביידע סיידס');
-const sideLong = (c) => sideName(c) + (famOf(c) ? ' · משפחת ' + famOf(c) : '');
-const sideTag = (c) => `<span class="tag ${c === 'a' || c === 'b' ? c : 'g'}">צוטריט: ${esc(c === 'a' || c === 'b' ? sideLong(c) : 'אלע אין דער משפחה')}</span>`;
-const familyTags = (p) => (p.families || []).map(f=>`<span class="tag g family-connection">משפחה: ${esc(f.name)}</span>`).join(' ');
+const sideName = (c) => (c === 'a' ? S.side_a_yi : c === 'b' ? S.side_b_yi : c === 'all' ? word("calendar.side_name.01") : word("calendar.side_name.02"));
+const sideLong = (c) => sideName(c) + (famOf(c) ? ` ${word("calendar.side_long.01")} ` + famOf(c) : '');
+const sideTag = (c) => `<span class="tag ${c === 'a' || c === 'b' ? c : 'g'}">${htmlWord("calendar.side_tag.02", { value: c === 'a' || c === 'b' ? sideLong(c) : word("calendar.side_tag.01") })}</span>`;
+const familyTags = (p) => (p.families || []).map(f=>`<span class="tag g family-connection">${htmlWord("calendar.family_tags.01", { name: f.name })}</span>`).join(' ');
 const knownAs = (p) => p.known_as ? `<span class="person-known-as" dir="auto">${esc(p.known_as)}</span>` : '';
 const familyChoices = (rows) => [...new Map(rows.flatMap(p=>p.families || []).map(f=>[f.id,f])).values()].sort((a,b)=>a.name.localeCompare(b.name));
-const familySelector = (rows,key,label) => field(label,`<select data-change="familyfilter" data-key="${key}"><option value="">אלע משפחות</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`);
+const familySelector = (rows,key,label) => field(label,`<select data-change="familyfilter" data-key="${key}"><option value="">${htmlWord("calendar.family_selector.01")}</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`);
 const isManager = () => ME && (ME.is_admin || ME.is_family_admin);
 const managesAccounts = () => isManager() && !ME.acting;
 const both = () => ME && (isManager() || (ME.sides.includes('a') && ME.sides.includes('b')));
 const mySides = () => (isManager() ? ['a', 'b'] : ME.sides);
 const vis = (s) => STATE.side === 'all' || s === STATE.side || s === 'both' || s === 'all';
-function seg() { if (!both()) return ''; return `<div class="seg">${[['all', 'אלע גרופעס'], ['a', famOf('a') || sideName('a')], ['b', famOf('b') || sideName('b')]].map(([k, t]) => `<button class="${STATE.side === k ? 'on' : ''}" data-act="side" data-v="${k}">${esc(t)}</button>`).join('')}</div>`; }
+function seg() { if (!both()) return ''; return `<div class="seg">${[['all', word("calendar.seg.01")], ['a', famOf('a') || sideName('a')], ['b', famOf('b') || sideName('b')]].map(([k, t]) => `<button class="${STATE.side === k ? 'on' : ''}" data-act="side" data-v="${k}">${esc(t)}</button>`).join('')}</div>`; }
 function sideOptions(sel, withBoth = true, allLabel) {
   const o = mySides().map((c) => [c, sideLong(c)]);
-  if (withBoth && both()) o.push([allLabel ? 'all' : 'both', allLabel || 'ביידע סיידס']);
+  if (withBoth && both()) o.push([allLabel ? 'all' : 'both', allLabel || word("calendar.side_name.02")]);
   else if (allLabel) o.push(['all', allLabel]);
   return o.map(([k, t]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${esc(t)}</option>`).join('');
 }
@@ -70,31 +104,31 @@ const gmap = (a) => 'https://www.google.com/maps/dir/?api=1&destination=' + enco
 const waze = (a) => 'https://waze.com/ul?q=' + encodeURIComponent(a) + '&navigate=yes';
 const navBtns = (a) => (a ? `<a class="btn s gm" href="${gmap(a)}" target="_blank" rel="noopener">🗺️ Google Maps</a><a class="btn s wz" href="${waze(a)}" target="_blank" rel="noopener">🚗 Waze</a>` : '');
 const tel = (p) => (p ? `<a href="tel:${esc(p.replace(/[^\d+]/g, ''))}" dir="ltr">📞 ${esc(p)}</a>` : '<span class="muted">—</span>');
-const empty = (e, t, btn = '') => `<div class="empty"><div class="e">${e}</div><div>${t}</div>${btn ? `<div style="margin-top:12px">${btn}</div>` : ''}</div>`;
-const field = (lbl, inner) => { const id=inner.match(/id="([^"]+)"/); return `<label${id ? ` for="${id[1]}"` : ''}>${lbl}</label>${inner}`; };
+const empty = (e, t, btn = '') => `<div class="empty"><div class="e">${e}</div><div>${esc(t)}</div>${btn ? `<div style="margin-top:12px">${btn}</div>` : ''}</div>`;
+const field = (lbl, inner) => { const id=inner.match(/id="([^"]+)"/); return `<label${id ? ` for="${id[1]}"` : ''}>${esc(lbl)}</label>${inner}`; };
 const val = (id) => ($(id) ? $(id).value.trim() : '');
 
 // ---------- nav ----------
-const PAGES = [['home', '🏠', 'היים'], ['yz', '🕯️', 'יארצייטן'], ['tree', '🌳', 'פעמילי טרי'], ['learn', '📖', 'משניות און תהילים'], ['sim', '🎉', 'שמחות'], ['chat', '💬', 'טשעט'], ['people', '👥', 'קאזינס / אדרעסן']];
+const pages = () => [['home', '🏠', word("navigation.home")], ['yz', '🕯️', word("navigation.yahrzeits")], ['tree', '🌳', word("navigation.tree")], ['learn', '📖', word("navigation.learning")], ['sim', '🎉', word("navigation.simchas")], ['chat', '💬', word("navigation.chat")], ['people', '👥', word("navigation.directory")]];
 let PENDING = 0, UNREAD = false;
 function actingBanner() {
-  const text=ME?.acting?`דו ביסט אריין אלס ${esc(ME.name)}`:'די צייט אלס מעמבער איז פארביי';
-  return `<div class="acting-banner" role="status"><strong>${text}</strong><button type="button" class="btn s l" data-act="stopacting">צוריק צו אדמין</button></div>`;
+  const text=ME?.acting?word("navigation.acting_banner.01", { name: ME.name }):word("navigation.acting_banner.02");
+  return `<div class="acting-banner" role="status"><strong>${esc(text)}</strong><button type="button" class="btn s l" data-act="stopacting">${htmlWord("navigation.acting_banner.03")}</button></div>`;
 }
 function renderNav(v) {
-  const extra = [['me', '👤', 'מיין אקאונט']]; if (managesAccounts()) extra.unshift(['admin', '🛡️', 'אדמין']);
+  const extra = [['me', '👤', word("navigation.account")]]; if (managesAccounts()) extra.unshift(['admin', '🛡️', word("navigation.admin")]);
   $('nav').innerHTML = `<div class="lg">${esc(S.family_yi)}</div><div class="sd">${esc(ME.name)} · ${esc(S.family_yi)}</div>` +
-    [...PAGES, ...extra].map(([k, i, t]) => `<a class="${v === k ? 'on' : ''}" href="#${k}">${i} ${t}${k === 'admin' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}</a>`).join('') +
-    `<a data-act="logout" style="margin-top:14px;opacity:.7">↩ לאג אאוט</a>`;
-  const tb = [['home', '🏠', 'היים'], ['yz', '🕯️', 'יארצייטן'], ['sim', '🎉', 'שמחות'], ['chat', '💬', 'טשעט'], ['more', '☰', 'מער']];
+    [...pages(), ...extra].map(([k, i, t]) => `<a class="${v === k ? 'on' : ''}" href="#${k}">${i} ${esc(t)}${k === 'admin' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}</a>`).join('') +
+    `<a data-act="logout" style="margin-top:14px;opacity:.7">${htmlWord("navigation.render_nav.01")}</a>`;
+  const tb = [['home', '🏠', word("navigation.home")], ['yz', '🕯️', word("navigation.yahrzeits")], ['sim', '🎉', word("navigation.simchas")], ['chat', '💬', word("navigation.chat")], ['more', '☰', word("navigation.render_nav.02")]];
   const inMore = !['home', 'yz', 'sim', 'chat'].includes(v);
-  $('tabs').innerHTML = tb.map(([k, i, t]) => `<a class="${(k === v || (k === 'more' && inMore)) ? 'on' : ''}" ${k === 'more' ? 'data-act="more"' : `href="#${k}"`}><span class="i">${i}</span>${t}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}${k === 'more' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}</a>`).join('');
-  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>${(ME.family_groups||[]).length>1?`<label class="family-switch">משפחה וואס דו קוקסט<select aria-label="משפחה וואס דו קוקסט" data-change="viewgroup">${ME.family_groups.map(g=>`<option value="${g.id}" ${g.id===ME.selected_family_group_id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label>`:''}`;
+  $('tabs').innerHTML = tb.map(([k, i, t]) => `<a class="${(k === v || (k === 'more' && inMore)) ? 'on' : ''}" ${k === 'more' ? 'data-act="more"' : `href="#${k}"`}><span class="i">${i}</span>${esc(t)}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}${k === 'more' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}</a>`).join('');
+  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>${(ME.family_groups||[]).length>1?`<label class="family-switch">${htmlWord("navigation.render_nav.03")}<select aria-label="${htmlWord("navigation.render_nav.03")}" data-change="viewgroup">${ME.family_groups.map(g=>`<option value="${g.id}" ${g.id===ME.selected_family_group_id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label>`:''}`;
   if(ME.acting)$('top').insertAdjacentHTML('afterbegin',actingBanner());
 }
 function moreSheet() {
-  const L = [['tree', '🌳', 'פעמילי טרי'], ['learn', '📖', 'משניות און תהילים'], ['people', '👥', 'קאזינס / אדרעסן'], ...(managesAccounts() ? [['admin', '🛡️', 'אדמין' + (PENDING ? ` (${PENDING} ווארטן)` : '')]] : []), ['me', '👤', 'מיין אקאונט']];
-  modal(`<div class="sheet">${L.map(([k, i, t]) => `<a href="#${k}" data-act="close">${i} ${t}</a>`).join('')}<a data-act="logout">↩ לאג אאוט</a></div><button class="btn l" style="width:100%;margin-top:12px" data-act="close">צומאכן</button>`);
+  const L = [['tree', '🌳', word("navigation.tree")], ['learn', '📖', word("navigation.learning")], ['people', '👥', word("navigation.directory")], ...(managesAccounts() ? [['admin', '🛡️', word("navigation.admin") + (PENDING ? ` ${word("navigation.more_sheet.01", { PENDING: PENDING })}` : '')]] : []), ['me', '👤', word("navigation.account")]];
+  modal(`<div class="sheet">${L.map(([k, i, t]) => `<a href="#${k}" data-act="close">${i} ${esc(t)}</a>`).join('')}<a data-act="logout">${htmlWord("navigation.render_nav.01")}</a></div><button class="btn l" style="width:100%;margin-top:12px" data-act="close">${htmlWord("navigation.more_sheet.02")}</button>`);
 }
 
 // ---------- views ----------
@@ -102,76 +136,76 @@ const V = {};
 V.login = () => {
   const mode = STATE.authMode || 'login';
   const sides = STATE.joinSides || STATE.pickSides || [];
-  return `<div class="login"><div style="font-size:54px">🌳</div><h1>${esc(S.family_yi)}</h1><div class="cap">אלע קאזינס אין איין ארט: יארצייטן, פעמילי טרי, לערנען, שמחות און טשעט.</div>
-  <div class="seg"><button class="${mode === 'login' ? 'on' : ''}" data-act="authmode" data-v="login">לאג אין</button><button class="${mode === 'signup' ? 'on' : ''}" data-act="authmode" data-v="signup">מאך דיין אייגענע משפחה</button></div>
+  return `<div class="login"><div style="font-size:54px">🌳</div><h1>${esc(S.family_yi)}</h1><div class="cap">${htmlWord("account.login.01")}</div>
+  <div class="seg"><button class="${mode === 'login' ? 'on' : ''}" data-act="authmode" data-v="login">${htmlWord("account.login.02")}</button><button class="${mode === 'signup' ? 'on' : ''}" data-act="authmode" data-v="signup">${htmlWord("account.login.03")}</button></div>
   <form data-form="${mode}" class="card" style="text-align:right">
-  ${mode === 'signup' ? field('דיין נאמען (ווי די משפחה קען דיך)', '<input id="fn" autocomplete="name" placeholder="למשל: יואל באכנער">') : ''}
-  ${field('טעלעפאן נומער', '<input id="fp" type="tel" inputmode="tel" autocomplete="tel" class="ltr" placeholder="845-555-1234">')}
-  ${field('פאסווארט', `<input id="fw" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" ${mode === 'signup' ? 'placeholder="כאטש 6 אותיות"' : ''}>`)}
-  ${mode === 'signup' && STATE.joinSides ? `<div class="card" role="status"><b>איינגעלאדנט צו: ${esc(STATE.joinFamily || '')}</b><p>דו ווערסט אויטאמאטיש צוגעטיילט צו דער משפחה.</p></div>${field('וועמענס קינד/אייניקל ביסטו?', '<input id="fnote">')}` : mode === 'signup' ? `${field('נאמען פון דיין נייע משפחה', '<input id="newfamilyname" maxlength="120" required>')}<p class="muted">דאס מאכט א נייע, באזונדערע משפחה. דו וועסט זיין אדמין נאר פון דער משפחה. צו דזשוינען אן עקזיסטירנדיקע משפחה, בעט אן אינוויטעישן לינק.</p>` : ''}
+  ${mode === 'signup' ? field(word("account.login.04"), `<input id="fn" autocomplete="name" placeholder="${htmlWord("account.login.05")}">`) : ''}
+  ${field(word("account.login.06"), '<input id="fp" type="tel" inputmode="tel" autocomplete="tel" class="ltr" placeholder="845-555-1234">')}
+  ${field(word("account.login.07"), `<input id="fw" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" ${mode === 'signup' ? `placeholder="${htmlWord("account.login.08")}"` : ''}>`)}
+  ${mode === 'signup' && STATE.joinSides ? `<div class="card" role="status"><b>${htmlWord("account.login.09", { value: STATE.joinFamily || '' })}</b><p>${htmlWord("account.login.10")}</p></div>${field(word("account.login.11"), '<input id="fnote">')}` : mode === 'signup' ? `${field(word("account.login.13"), '<input id="newfamilyname" maxlength="120" required>')}<p class="muted">${htmlWord("account.login.12")}</p>` : ''}
   <div class="err" id="ferr"></div>
-  <button class="btn" style="width:100%">${mode === 'signup' ? 'מאך אן אקאונט' : 'לאג אין'}</button>
-  ${mode === 'login' ? '<div class="muted" style="margin-top:12px"><button type="button" class="btn l" data-act="forgotpw">פארגעסן דאס פאסווארט?</button></div>' : `<div class="muted" style="margin-top:12px">${STATE.joinSides ? 'מיט דיין אינוויטעישן קענסטו גלייך אריין.' : 'דיין נייע משפחה וועט זיין באזונדער פון אלע אנדערע.'}</div>`}
+  <button class="btn" style="width:100%">${mode === 'signup' ? htmlWord("account.login.14") : htmlWord("account.login.02")}</button>
+  ${mode === 'login' ? `<div class="muted" style="margin-top:12px"><button type="button" class="btn l" data-act="forgotpw">${htmlWord("account.login.15")}</button></div>` : `<div class="muted" style="margin-top:12px">${STATE.joinSides ? htmlWord("account.login.16") : htmlWord("account.login.17")}</div>`}
   </form></div>`;
 };
-V.pending = () => `<div class="login"><div style="font-size:54px">⏳</div><h1>שלום ${esc(ME.name.split(' ')[0])}!</h1>
-  <div class="card"><b>${ME.status === 'rejected' ? 'דער אקאונט איז נישט אפרובירט געווארן.' : 'דיין אקאונט ווארט אויף אפרוביישן פון דעם אדמין.'}</b>
-  <div class="muted" style="margin-top:8px">${ME.status === 'rejected' ? 'רעד מיט דעם אדמין אויב דאס איז א טעות.' : 'ווען ער אפרובירט, קענסטו אריין. דו קענסט אים שרייבן אז דו האסט זיך רעדזשיסטרירט.'}</div>
-  <div class="btns" style="justify-content:center;margin-top:14px"><button class="btn" data-act="recheck">🔄 טשעק נאכאמאל</button><button class="btn l" data-act="logout">לאג אאוט</button></div></div></div>`;
-V.forgotpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>פארגעסן דאס פאסווארט?</h1>
-  ${STATE.resetRequested ? '<div class="card" role="status">אויב דער נומער האט אן אקאונט מיט א באשטעטיגטן אימעיל, וועט דארט אנקומען א פאסווארט לינק. קוק אויך אין ספעם. אויב עס קומט נישט אן, רעד מיט דעם אדמין פאר הילף.</div>' : `<p class="cap">שרייב דעם טעלעפאן נומער פון דיין אקאונט. א פאסווארט לינק וועט געשיקט ווערן צו דיין באשטעטיגטן אימעיל. אן א באשטעטיגטן אימעיל קען דער אדמין העלפן.</p><form data-form="forgotpw" class="card">
-  ${field('טעלעפאן נומער', `<input id="resetphone" type="tel" inputmode="tel" autocomplete="tel" class="ltr" value="${esc(STATE.resetPhone || '')}">`)}<div class="err" role="alert"></div><button class="btn">בעט א פאסווארט לינק</button></form>`}
-  <button class="btn l" style="margin-top:14px" data-act="backlogin">צוריק צו לאג אין</button></div>`;
-V.verifyemail = () => `<div class="login"><h1>באשטעטיג דיין אימעיל</h1><p class="cap">דריק אויפן קנעפל צו באשטעטיגן דעם אימעיל פאר דיין אקאונט.</p><form data-form="verifyemail" class="card"><div class="err" role="alert"></div><button class="btn">באשטעטיג מיין אימעיל</button></form></div>`;
-V.setpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>שטעל איין דיין פאסווארט</h1><div class="cap" id="spn">מען קאנטראלירט דעם לינק…</div>
-  <form data-form="setpw" class="card" style="text-align:right">${field('נייע פאסווארט', '<input id="sp1" type="password" autocomplete="new-password" placeholder="כאטש 6 אותיות">')}${field('נאכאמאל', '<input id="sp2" type="password" autocomplete="new-password">')}
-  <div class="err" id="ferr" role="alert"></div><button class="btn" id="setpwsubmit" disabled style="width:100%">סעיוו און לאג אין</button></form><button class="btn l" style="margin-top:14px" data-act="forgotpw">בעט א נייעם לינק</button></div>`;
+V.pending = () => `<div class="login"><div style="font-size:54px">⏳</div><h1>${htmlWord("account.pending.01", { name: ME.name.split(' ')[0] })}</h1>
+  <div class="card"><b>${ME.status === 'rejected' ? htmlWord("account.pending.04") : htmlWord("account.pending.05")}</b>
+  <div class="muted" style="margin-top:8px">${ME.status === 'rejected' ? htmlWord("account.pending.06") : htmlWord("account.pending.07")}</div>
+  <div class="btns" style="justify-content:center;margin-top:14px"><button class="btn" data-act="recheck">${htmlWord("account.pending.02")}</button><button class="btn l" data-act="logout">${htmlWord("account.pending.03")}</button></div></div></div>`;
+V.forgotpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>${htmlWord("account.login.15")}</h1>
+  ${STATE.resetRequested ? `<div class="card" role="status">${htmlWord("account.forgotpw.02")}</div>` : `<p class="cap">${htmlWord("account.forgotpw.03")}</p><form data-form="forgotpw" class="card">
+  ${field(word("account.login.06"), `<input id="resetphone" type="tel" inputmode="tel" autocomplete="tel" class="ltr" value="${esc(STATE.resetPhone || '')}">`)}<div class="err" role="alert"></div><button class="btn">${htmlWord("account.forgotpw.04")}</button></form>`}
+  <button class="btn l" style="margin-top:14px" data-act="backlogin">${htmlWord("account.forgotpw.01")}</button></div>`;
+V.verifyemail = () => `<div class="login"><h1>${htmlWord("account.verifyemail.01")}</h1><p class="cap">${htmlWord("account.verifyemail.02")}</p><form data-form="verifyemail" class="card"><div class="err" role="alert"></div><button class="btn">${htmlWord("account.verifyemail.03")}</button></form></div>`;
+V.setpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>${htmlWord("account.setpw.01")}</h1><div class="cap" id="spn">${htmlWord("account.setpw.02")}</div>
+  <form data-form="setpw" class="card" style="text-align:right">${field(word("account.setpw.05"), `<input id="sp1" type="password" autocomplete="new-password" placeholder="${htmlWord("account.login.08")}">`)}${field(word("account.setpw.06"), '<input id="sp2" type="password" autocomplete="new-password">')}
+  <div class="err" id="ferr" role="alert"></div><button class="btn" id="setpwsubmit" disabled style="width:100%">${htmlWord("account.setpw.03")}</button></form><button class="btn l" style="margin-top:14px" data-act="forgotpw">${htmlWord("account.setpw.04")}</button></div>`;
 
 V.home = async () => {
   const h = await api('/home'); PENDING = h.pending;
   const nx = h.yahrzeits[0];
-  return `<h1>שלום ${esc(ME.name.split(' ')[0])} 👋</h1><div class="cap">היינט: ${esc(h.today)} · משפחה וואס דו קוקסט: ${esc(S.family_yi)}</div>
-  ${h.pending ? `<a class="row" href="#admin" style="text-decoration:none;color:inherit;background:#fffbeb;border-color:#fcd34d"><div class="grow"><b>🛡️ ${h.pending} נייע קאזינס ווארטן אויף אפרוביישן</b></div><span class="btn s">קוק</span></a>` : ''}
-  <div class="grid g4"><a class="card" href="#yz" style="text-decoration:none;color:inherit"><div class="muted">נעקסטע יארצייט</div><div class="big" style="font-size:20px">${nx ? esc(nx.hebrew) : '—'}</div><div class="muted">${nx ? inDays(nx.next.days) : 'נאך נישטא'}</div></a>
-  <a class="card" href="#sim" style="text-decoration:none;color:inherit"><div class="muted">שמחות וואס קומען</div><div class="big">${h.simchas.length}</div></a>
-  <a class="card" href="#learn" style="text-decoration:none;color:inherit"><div class="muted">משניות / תהילים ליסטס</div><div class="big">${h.lists.length}</div></a>
-  <a class="card" href="#people" style="text-decoration:none;color:inherit"><div class="muted">קאזינס אין אפ</div><div class="big">${h.members}</div></a></div>
-  <h2>🕯️ קומט באלד</h2>${h.yahrzeits.length ? h.yahrzeits.map((y) => `<div class="row"><div class="grow"><b>${esc(y.name)} ${esc(y.father_name)}</b><div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}${esc(y.hebrew)} · ${gdate(y.next.ymd)} · <b>${inDays(y.next.days)}</b></div></div>${familyTags(y)}</div>`).join('')
-    : empty('🕯️', 'נאך קיין יארצייטן. לייג צו די זיידעס און באבעס.', '<a class="btn s" href="#yz">+ לייג צו א יארצייט</a>')}
-  ${h.lists.length ? `<h2>📖 לערנען</h2>${h.lists.map((l) => `<a class="row" href="#learn/${l.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${l.kind === 'tehillim' ? 'תהילים' : 'משניות'} · ${esc(l.niftar)}</b><div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${l.taken} פון ${l.total} גענומען${l.target_date ? ' · ביז ' + gdate(l.target_date) : ''}</div></div><span class="btn s">נעם</span></a>`).join('')}` : ''}
-  <h2>🎉 שמחות</h2>${h.simchas.length ? h.simchas.map((x) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(x.kind)} · ${esc(x.whose)}</b><div class="muted">${gdate(x.gdate)} · ${esc(x.hebrew)}${x.hall ? ' · ' + esc(x.hall) : ''} · ${inDays(x.days)}</div></div><div class="btns">${navBtns(x.address)}<a class="btn s l" href="#sim">RSVP</a></div></div>`).join('')
-    : empty('🎉', 'נאך קיין שמחות.', '<a class="btn s" href="#sim">+ נייע שמחה</a>')}
-  <h2>💬 לעצטע מעסעדזשעס</h2>${h.messages.length ? h.messages.map((m) => `<a class="row" href="#chat" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(m.name)}</b> <span class="muted">· ${esc(m.room === 'all' ? 'אלע קאזינס' : famOf(m.room) || sideName(m.room))} · ${hm(m.created_at)}</span><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.body)}</div></div></a>`).join('')
-    : empty('💬', 'נאך קיין מעסעדזשעס.', '<a class="btn s" href="#chat">שרייב די ערשטע</a>')}
-  <div style="margin-top:18px"><button class="btn l" data-act="familyinvite">📲 אינווייט א קאזין</button></div>`;
+  return `<h1>${htmlWord("home.01", { name: ME.name.split(' ')[0] })}</h1><div class="cap">${htmlWord("home.02", { today: h.today, family: S.family_yi })}</div>
+  ${h.pending ? `<a class="row" href="#admin" style="text-decoration:none;color:inherit;background:#fffbeb;border-color:#fcd34d"><div class="grow"><b>${htmlWord("home.11", { pending: h.pending })}</b></div><span class="btn s">${htmlWord("home.12")}</span></a>` : ''}
+  <div class="grid g4"><a class="card" href="#yz" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.03")}</div><div class="big" style="font-size:20px">${nx ? esc(nx.hebrew) : '—'}</div><div class="muted">${nx ? esc(inDays(nx.next.days)) : htmlWord("home.13")}</div></a>
+  <a class="card" href="#sim" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.04")}</div><div class="big">${h.simchas.length}</div></a>
+  <a class="card" href="#learn" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.05")}</div><div class="big">${h.lists.length}</div></a>
+  <a class="card" href="#people" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.06")}</div><div class="big">${h.members}</div></a></div>
+  <h2>${htmlWord("home.07")}</h2>${h.yahrzeits.length ? h.yahrzeits.map((y) => `<div class="row"><div class="grow"><b>${esc(y.name)} ${esc(y.father_name)}</b><div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}${esc(y.hebrew)} · ${esc(gdate(y.next.ymd))} · <b>${esc(inDays(y.next.days))}</b></div></div>${familyTags(y)}</div>`).join('')
+    : empty('🕯️', word("home.14"), `<a class="btn s" href="#yz">${htmlWord("home.15")}</a>`)}
+  ${h.lists.length ? `<h2>${htmlWord("home.16")}</h2>${h.lists.map((l) => `<a class="row" href="#learn/${l.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${l.kind === 'tehillim' ? htmlWord("home.19") : htmlWord("home.20")} · ${esc(l.niftar)}</b><div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${htmlWord("home.17", { taken: l.taken, total: l.total })}${l.target_date ? ` ${htmlWord("home.21")} ` + esc(gdate(l.target_date)) : ''}</div></div><span class="btn s">${htmlWord("home.18")}</span></a>`).join('')}` : ''}
+  <h2>${htmlWord("home.08")}</h2>${h.simchas.length ? h.simchas.map((x) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(simchaKind(x.kind))} · ${esc(x.whose)}</b><div class="muted">${esc(gdate(x.gdate))} · ${esc(x.hebrew)}${x.hall ? ' · ' + esc(x.hall) : ''} · ${esc(inDays(x.days))}</div></div><div class="btns">${navBtns(x.address)}<a class="btn s l" href="#sim">RSVP</a></div></div>`).join('')
+    : empty('🎉', word("home.22"), `<a class="btn s" href="#sim">${htmlWord("home.23")}</a>`)}
+  <h2>${htmlWord("home.09")}</h2>${h.messages.length ? h.messages.map((m) => `<a class="row" href="#chat" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(m.name)}</b> <span class="muted">· ${esc(m.room === 'all' ? word("home.24") : famOf(m.room) || sideName(m.room))} · ${hm(m.created_at)}</span><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.body)}</div></div></a>`).join('')
+    : empty('💬', word("home.25"), `<a class="btn s" href="#chat">${htmlWord("home.26")}</a>`)}
+  <div style="margin-top:18px"><button class="btn l" data-act="familyinvite">${htmlWord("home.10")}</button></div>`;
 };
 function familyInviteForm() {
-  modal(`<h2>📲 אינווייט א קאזין</h2><p class="muted">קלייב אויס איין סייד אדער ביידע. דער קאזין קען גלייך אריינלאגן מיט דעם לינק.</p>
-    <form data-form="familyinvite">${field('צו וועלכע משפחה סייד?', `<select id="inviteSide">${sideOptions(STATE.side === 'all' ? (both() ? 'both' : mySides()[0]) : STATE.side)}</select>`)}
-    <div class="err" role="alert"></div><div class="btns"><button class="btn">מאך א לינק</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>`);
+  modal(`<h2>${htmlWord("home.10")}</h2><p class="muted">${htmlWord("home.family_invite_form.01")}</p>
+    <form data-form="familyinvite">${field(word("home.family_invite_form.04"), `<select id="inviteSide">${sideOptions(STATE.side === 'all' ? (both() ? 'both' : mySides()[0]) : STATE.side)}</select>`)}
+    <div class="err" role="alert"></div><div class="btns"><button class="btn">${htmlWord("home.family_invite_form.02")}</button><button type="button" class="btn l" data-act="close">${htmlWord("home.family_invite_form.03")}</button></div></form>`);
 }
 
 // yahrzeits
 V.yz = async () => {
   const { yahrzeits } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
   const L = yahrzeits.filter(y => !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
-  return `<h1>🕯️ יארצייטן</h1><div class="cap">אלע זיידעס, באבעס און משפחה. דער דאטום פאר דעם יאר ווערט אויסגערעכנט פונעם אידישן דאטום.</div>${familySelector(yahrzeits,'yzFamily','משפחה')}
+  return `<h1>${htmlWord("yahrzeits.heading")}</h1><div class="cap">${htmlWord("yahrzeits.yz.01")}</div>${familySelector(yahrzeits,'yzFamily',word("yahrzeits.yz.03"))}
   ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(y.name)} ${esc(y.father_name)}</b>
    ${y.families?.length?`<div class="yahrzeit-families">${familyTags(y)}</div>`:''}
-   <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` · דעם יאר: ${gdate(y.next.ymd)} · <b style="color:#4338ca">${inDays(y.next.days)}</b>` : ''}</div>
+   <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` ${htmlWord("yahrzeits.yz.06", { date: gdate(y.next.ymd) })} <b style="color:#4338ca">${esc(inDays(y.next.days))}</b>` : ''}</div>
    ${y.kever ? `<div class="muted">🪦 ${esc(y.kever)}</div>` : ''}${y.kever_address?`<div class="muted" dir="auto">📍 ${esc(y.kever_address)}</div><div class="btns">${navBtns(y.kever_address)}</div>`:''}${y.note ? `<div class="muted">${esc(y.note)}</div>` : ''}</div>
-   <div class="btns"><button class="btn s ${y.remind ? 'g' : 'l'}" data-act="remind" data-id="${y.id}" data-on="${y.remind ? 0 : 1}">${y.remind ? '🔔 מען דערמאנט דיך' : '🔔 רימיינד מיר'}</button>
-   <button class="btn s l" data-act="newlist" data-yz="${y.id}">📖 מאך א ליסט</button><button class="btn s l" data-act="edityz" data-id="${y.id}">✏️ עדיט</button></div></div>`).join('') || empty('🕯️', 'נאך קיין יארצייטן.')}
-  <button class="btn" style="margin-top:10px" data-act="edityz" data-id="0">+ נייער יארצייט</button>
-  <div class="muted" style="margin-top:10px">🔔 "רימיינד מיר" ווערט געהאלטן פאר דיר; מעסעדזשעס/נאטיפיקעישנס קומען שפעטער.</div>`;
+   <div class="btns"><button class="btn s ${y.remind ? 'g' : 'l'}" data-act="remind" data-id="${y.id}" data-on="${y.remind ? 0 : 1}">${y.remind ? htmlWord("yahrzeits.yz.07") : htmlWord("yahrzeits.yz.08")}</button>
+   <button class="btn s l" data-act="newlist" data-yz="${y.id}">${htmlWord("yahrzeits.yz.04")}</button><button class="btn s l" data-act="edityz" data-id="${y.id}">${htmlWord("yahrzeits.yz.05")}</button></div></div>`).join('') || empty('🕯️', word("yahrzeits.yz.09"))}
+  <button class="btn" style="margin-top:10px" data-act="edityz" data-id="0">${htmlWord("yahrzeits.add")}</button>
+  <div class="muted" style="margin-top:10px">${htmlWord("yahrzeits.yz.02")}</div>`;
 };
 async function yzForm(id) {
   const y=(STATE.yzs||[]).find(x=>x.id===id);
   if(y?.person_id)return personForm(y.person_id);
   const {people}=await api('/people');STATE.yzLegacy=y||null;
-  modal(`<h2>${y?'פארבינד דעם יארצייט צום מענטש':'נייער יארצייט · אויסקלייבן א מענטש'}</h2><p class="muted">די משפחה, מקום קבורה און פטירה דאטום ווערן געהאלטן אין איין מענטשס פראפיל.</p>
-    ${field('א מענטש וואס איז שוין אין פעמילי טרי',`<select id="yzperson"><option value="">— קלייב אויס —</option>${people.map(p=>`<option value="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
-    <div class="btns"><button class="btn" data-act="yzexisting">עפן דעם פראפיל</button><button class="btn l" data-act="yznew">+ נייער מענטש</button><button class="btn l" data-act="close">קענסל</button></div>`);
+  modal(`<h2>${y?htmlWord("yahrzeits.yz_form.05"):htmlWord("yahrzeits.yz_form.06")}</h2><p class="muted">${htmlWord("yahrzeits.yz_form.01")}</p>
+    ${field(word("yahrzeits.yz_form.07"),`<select id="yzperson"><option value="">${htmlWord("yahrzeits.yz_form.08")}</option>${people.map(p=>`<option value="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
+    <div class="btns"><button class="btn" data-act="yzexisting">${htmlWord("yahrzeits.yz_form.02")}</button><button class="btn l" data-act="yznew">${htmlWord("yahrzeits.yz_form.03")}</button><button class="btn l" data-act="close">${htmlWord("yahrzeits.yz_form.04")}</button></div>`);
 }
 async function yahrzeitPerson(id) {
   const y=STATE.yzLegacy,defaults={life_status:'deceased',requireYahrzeit:true};
@@ -191,19 +225,19 @@ V.tree = async () => {
   const P = people; // Server permissions determine visibility; family membership never cuts spouse/ancestor links.
   const {units,edges,generationConflicts}=familyUnits(P); STATE.treeEdges=edges;
   const graphMode=STATE.treeView==='tree' && !generationConflicts.length;
-  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</strong>${knownAs(p)}${p.spouse_name?`<span class="muted">זיווג ראשון: ${esc(p.spouse_name)}</span>`:''}${p.second_spouse_name?`<span class="muted">זיווג שני: ${esc(p.second_spouse_name)}</span>`:''}${p.father_name?`<span class="muted tree-relation">טאטע: ${esc(p.father_name)}</span>`:''}${p.mother_name?`<span class="muted tree-relation">מאמע: ${esc(p.mother_name)}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">מאן / ווייב: ${esc(p.spouse)}</span>`:''}</button>`;
-  const couple = unit => `<section class="family-unit ${unit.members.length>1?'married':''}" aria-label="${unit.members.length>1?'זיווגים':'מענטש'}">${unit.members.length>1?'<div class="marriage-label">זיווגים</div>':''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
+  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?` ${htmlWord("tree.node.01")}`:''}</strong>${knownAs(p)}${p.spouse_name?`<span class="muted">${htmlWord("tree.node.02", { spouse_name: p.spouse_name })}</span>`:''}${p.second_spouse_name?`<span class="muted">${htmlWord("tree.node.03", { second_spouse_name: p.second_spouse_name })}</span>`:''}${p.father_name?`<span class="muted tree-relation">${htmlWord("tree.node.04", { father_name: p.father_name })}</span>`:''}${p.mother_name?`<span class="muted tree-relation">${htmlWord("tree.node.05", { mother_name: p.mother_name })}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">${htmlWord("tree.node.06", { spouse: p.spouse })}</span>`:''}</button>`;
+  const couple = unit => `<section class="family-unit ${unit.members.length>1?'married':''}" aria-label="${unit.members.length>1?htmlWord("tree.couple.01"):htmlWord("tree.couple.02")}">${unit.members.length>1?`<div class="marriage-label">${htmlWord("tree.couple.01")}</div>`:''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
   const treeHtml=graphMode
-    ? `<div class="tree-toolbar" aria-label="בוים פארגרעסערונג"><button class="btn s l" data-act="treezoom" data-v="fit">פאס צום עקראַן</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="פארקלענערן בוים">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="פארגרעסערן בוים">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">+ לייג צו אין בוים</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
-     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>נאמען</th><th>מאן / ווייב</th><th>טאטע</th><th>מאמע</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</button>${knownAs(p)} ${familyTags(p)}</td><td>${esc(p.spouse_name?'זיווג ראשון: '+p.spouse_name:p.spouse)||'—'}${p.second_spouse_name?'<br>זיווג שני: '+esc(p.second_spouse_name):''}</td><td>${esc(p.father_name)||'—'}</td><td>${esc(p.mother_name)||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
-  return `<h1>🌳 פעמילי טרי</h1><div class="cap">דער בוים ווייזט די מענטשן פון דיינע צוגעטיילטע משפחות, יעדער מענטש נאר איינמאל. דריק אויף א נאמען פאר פרטים.</div>
-  ${familySelector(P,'treeFamily','הדגש משפחה (אלע פארבינדונגען בלייבן אין בוים)')}
+    ? `<div class="tree-toolbar" aria-label="${htmlWord("tree.01")}"><button class="btn s l" data-act="treezoom" data-v="fit">${htmlWord("tree.02")}</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="${htmlWord("tree.03")}">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="${htmlWord("tree.04")}">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">${htmlWord("tree.05")}</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
+     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>${htmlWord("tree.06")}</th><th>${htmlWord("tree.07")}</th><th>${htmlWord("tree.08")}</th><th>${htmlWord("tree.09")}</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?` ${htmlWord("tree.node.01")}`:''}</button>${knownAs(p)} ${familyTags(p)}</td><td>${esc(p.spouse_name?`${word("tree.10")} `+p.spouse_name:p.spouse)||'—'}${p.second_spouse_name?`<br>${htmlWord("tree.11")} `+esc(p.second_spouse_name):''}</td><td>${esc(p.father_name)||'—'}</td><td>${esc(p.mother_name)||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
+  return `<h1>${htmlWord("tree.12")}</h1><div class="cap">${htmlWord("tree.13")}</div>
+  ${familySelector(P,'treeFamily',word("tree.16"))}
   <div class="btns" style="margin-bottom:6px">
-  <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">בוים</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">ליסט</button></div></div>
-  ${generationConflicts.length ? '<p class="err" role="alert">די משפחה לינקס שטימען נישט מיט די דורות. מען ווייזט א ליסט ביז די לינקס ווערן איבערגעקוקט.</p>' : ''}
-  ${units.length ? `<div class="card">${treeHtml}</div>` : empty('🌳','דער בוים איז נאך ליידיג. הייב אן מיט די זיידע און באבע.')}
-  ${graphMode && units.length ? '' : '<button class="btn" style="margin-top:12px" data-act="editp" data-id="0">+ לייג צו אין בוים</button>'}`;
+  <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">${htmlWord("tree.14")}</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">${htmlWord("tree.15")}</button></div></div>
+  ${generationConflicts.length ? `<p class="err" role="alert">${htmlWord("tree.17")}</p>` : ''}
+  ${units.length ? `<div class="card">${treeHtml}</div>` : empty('🌳',word("tree.18"))}
+  ${graphMode && units.length ? '' : `<button class="btn" style="margin-top:12px" data-act="editp" data-id="0">${htmlWord("tree.05")}</button>`}`;
 };
 let treeObserver;
 function drawFamilyLines() {
@@ -283,26 +317,26 @@ document.addEventListener('wheel',ev=>{
 },{passive:false});
 
 async function personProfile(id) {
-  const {people}=await api('/people'),p=people.find(p=>p.id===id);if(!p)throw new Error('נישט געטראפן');
-  const linked=(key,label)=>p[key]?`<div class="row"><span class="muted">${label}</span><button type="button" class="btn l" data-act="viewperson" data-id="${p[key]}">${esc([p[key.replace('_id','_title')],p[key.replace('_id','_name')]].filter(Boolean).join(' '))}</button></div>`:'';
-  const childRow=c=>`<div class="row"><button class="btn l" data-act="viewperson" data-id="${c.id}">${esc(c.name)}</button><span class="muted">טאטע: ${esc(c.father_name||'נישט באקאנט')} · מאמע: ${esc(c.mother_name||'נישט באקאנט')}</span></div>`;
-  const marriages=[['spouse_id','זיווג ראשון'],['second_spouse_id','זיווג שני']].map(([key,label])=>{
+  const {people}=await api('/people'),p=people.find(p=>p.id===id);if(!p)throw new Error(word("tree.person_profile.01"));
+  const linked=(key,label)=>p[key]?`<div class="row"><span class="muted">${esc(label)}</span><button type="button" class="btn l" data-act="viewperson" data-id="${p[key]}">${esc([p[key.replace('_id','_title')],p[key.replace('_id','_name')]].filter(Boolean).join(' '))}</button></div>`:'';
+  const childRow=c=>`<div class="row"><button class="btn l" data-act="viewperson" data-id="${c.id}">${esc(c.name)}</button><span class="muted">${htmlWord("tree.child_row.02", { value: c.father_name||word("tree.child_row.01"), value2: c.mother_name||word("tree.child_row.01") })}</span></div>`;
+  const marriages=[['spouse_id',word("tree.person_profile.02")],['second_spouse_id',word("tree.person_profile.03")]].map(([key,label])=>{
     const spouse=people.find(x=>x.id===p[key]);
-    return `<section class="card"><h3>${label}</h3>${spouse?linked(key,'מאן / ווייב'):`<button class="btn l" data-act="addmarriage" data-id="${id}" data-key="${key}">+ לייג צו ${label}</button>`}${spouse?`<h4>קינדער פון ${label}</h4>${marriageChildren(people,id,spouse.id).map(childRow).join('')||'<p class="muted">נאך קיין קינדער צוגעלייגט צו דעם זיווג.</p>'}<button class="btn l" data-act="marriagechild" data-id="${id}" data-spouse="${spouse.id}">+ קינד פון ${label}</button>`:''}</section>`;
+    return `<section class="card"><h3>${esc(label)}</h3>${spouse?linked(key,word("tree.07")):`<button class="btn l" data-act="addmarriage" data-id="${id}" data-key="${key}">${htmlWord("tree.person_profile.04", { label: label })}</button>`}${spouse?`<h4>${htmlWord("tree.person_profile.05", { label: label })}</h4>${marriageChildren(people,id,spouse.id).map(childRow).join('')||`<p class="muted">${htmlWord("tree.person_profile.07")}</p>`}<button class="btn l" data-act="marriagechild" data-id="${id}" data-spouse="${spouse.id}">${htmlWord("tree.person_profile.06", { label: label })}</button>`:''}</section>`;
   }).join('');
   const otherChildren=marriageChildren(people,id).filter(c=>![p.spouse_id,p.second_spouse_id].includes(c.father_id===id?c.mother_id:c.father_id));
-  modal(`<h2>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.life_status==='deceased'?' ז״ל':''}</h2>${knownAs(p)}<div class="btns">${familyTags(p)}</div>
-    <p class="muted">${p.life_status==='deceased'?'נפטר / נפטרת':p.life_status==='living'?'לעבט':'לעבנס סטאטוס נישט באקאנט'}</p>
-    ${linked('father_id','טאטע')}${linked('mother_id','מאמע')}${marriages}
-    ${otherChildren.length?`<h3>קינדער — אנדערער / נישט באקאנטער זיווג</h3>${otherChildren.map(childRow).join('')}`:''}
-    <button class="btn l" data-act="addchild" data-id="${id}">+ קינד / קלייב עלטערן</button>
-    ${p.death_hday&&p.death_hmonth?`<p><b>יארצייט:</b> ${hebD(p.death_hday)} ${esc(HMONTHS.find(([k])=>k===p.death_hmonth)?.[1]||'')}${p.death_year?' · '+esc(p.death_year):''}</p>`:''}
-    ${p.kever?`<p><b>בית החיים / מקום קבורה:</b> ${esc(p.kever)}</p>`:''}${p.kever_address?`<p dir="auto">📍 ${esc(p.kever_address)}</p><div class="btns">${navBtns(p.kever_address)}</div>`:''}${p.note?`<p>${esc(p.note)}</p>`:''}
-    <div class="btns"><button class="btn" data-act="editp" data-id="${p.id}">✏️ עדיט פראפיל</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+  modal(`<h2>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.life_status==='deceased'?` ${htmlWord("tree.node.01")}`:''}</h2>${knownAs(p)}<div class="btns">${familyTags(p)}</div>
+    <p class="muted">${p.life_status==='deceased'?htmlWord("tree.person_profile.11"):p.life_status==='living'?htmlWord("tree.person_profile.12"):htmlWord("tree.person_profile.13")}</p>
+    ${linked('father_id',word("tree.08"))}${linked('mother_id',word("tree.09"))}${marriages}
+    ${otherChildren.length?`<h3>${htmlWord("tree.person_profile.14")}</h3>${otherChildren.map(childRow).join('')}`:''}
+    <button class="btn l" data-act="addchild" data-id="${id}">${htmlWord("tree.person_profile.08")}</button>
+    ${p.death_hday&&p.death_hmonth?`<p><b>${htmlWord("tree.person_profile.15")}</b> ${esc(hebD(p.death_hday))} ${esc(hebrewMonthLabel(p.death_hmonth))}${p.death_year?' · '+esc(p.death_year):''}</p>`:''}
+    ${p.kever?`<p><b>${htmlWord("tree.person_profile.16")}</b> ${esc(p.kever)}</p>`:''}${p.kever_address?`<p dir="auto">📍 ${esc(p.kever_address)}</p><div class="btns">${navBtns(p.kever_address)}</div>`:''}${p.note?`<p>${esc(p.note)}</p>`:''}
+    <div class="btns"><button class="btn" data-act="editp" data-id="${p.id}">${htmlWord("tree.person_profile.09")}</button><button class="btn l" data-act="close">${htmlWord("tree.person_profile.10")}</button></div>`);
 }
 const personNameKey=value=>String(value||'').normalize('NFKD').replace(/\p{M}/gu,'').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]/gu,'');
 function matchCards(matches,field='person') {
-  return matches.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="muted">${p.father_name?'טאטע: '+esc(p.father_name)+' · ':''}${p.mother_name?'מאמע: '+esc(p.mother_name)+' · ':''}${p.spouse_name?'מאן/ווייב: '+esc(p.spouse_name):''}</div><button type="button" class="btn s" data-act="reuseperson" data-id="${p.id}" data-field="${field}">נוץ דעם עקזיסטירנדיקן מענטש</button></div>`).join('');
+  return matches.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="muted">${p.father_name?`${htmlWord("tree.match_cards.02")} `+esc(p.father_name)+' · ':''}${p.mother_name?`${htmlWord("tree.match_cards.03")} `+esc(p.mother_name)+' · ':''}${p.spouse_name?`${htmlWord("tree.match_cards.04")} `+esc(p.spouse_name):''}</div><button type="button" class="btn s" data-act="reuseperson" data-id="${p.id}" data-field="${field}">${htmlWord("tree.match_cards.01")}</button></div>`).join('');
 }
 function renderPersonMatches(field='person',forced) {
   const form=document.querySelector('[data-form="person"]');if(!form)return;
@@ -310,46 +344,46 @@ function renderPersonMatches(field='person',forced) {
   const people=STATE.people||[],id=Number(form.dataset.id);
   const existingName=field==='person'&&people.some(p=>p.id===id&&personNameKey(p.name)===query);
   const matches=forced||(query.length<2||existingName?[]:people.filter(p=>p.id!==id&&personNameKey(p.name).includes(query)).slice(0,12));
-  const target=$(field==='person'?'personmatches':'matches_'+field);if(target)target.innerHTML=matches.length?'<p>ביסטו שוין דא? קלייב אן עקזיסטירנדיקן מענטש כדי נישט צו מאכן א דאפלטן רעקארד.</p>'+matchCards(matches,field):'';
+  const target=$(field==='person'?'personmatches':'matches_'+field);if(target)target.innerHTML=matches.length?`<p>${htmlWord("tree.render_person_matches.01")}</p>`+matchCards(matches,field):'';
 }
 V.personreviews=async()=>{
   const {reviews}=await api('/person-reviews');
-  return `<h1>מענטשן איבערזיכט</h1><p>נוץ דעם עקזיסטירנדיקן מענטש, אדער אפרוביר א באזונדערן מענטש. קיינער ווערט נישט אויטאמאטיש צוזאמענגעשטעלט. ביים אויסקלייבן אן עקזיסטירנדיקן מענטש ווערן די פארגעשלאגענע ענדערונגען נישט אנגעווענדט.</p>${reviews.map(r=>`<section class="card"><h2>${esc(r.payload.name||'עדיט מענטש')}</h2><p>${esc(r.reason)}</p><p>פארגעשלאגענע פארבינדונגען: טאטע: ${esc(r.proposal.father||'נישט באקאנט')} · מאמע: ${esc(r.proposal.mother||'נישט באקאנט')} · מאן/ווייב: ${esc(r.proposal.spouse||'נישט באקאנט')}</p><p>סטאטוס: ${esc(({pending:'ווארט אויף אדמין',approved:'אפרובירט',confirmed:'באשטעטיגט אלס אנדערער מענטש',existing:'עקזיסטירנדיקער מענטש אויסגעקליבן',rejected:'אפגעזאגט'})[r.status])}</p>${r.result_id?`<button class="btn s" data-act="editp" data-id="${r.result_id}">עפן מענטש</button>`:''}${r.status==='pending'&&isManager()?`<div>${r.matches.map(p=>`<p>${esc(p.name)} · ${esc(p.father_name||'')} · ${esc(p.mother_name||'')} · ${esc(p.spouse_name||'')} <button class="btn s" data-act="reviewperson" data-id="${r.id}" data-v="existing" data-person="${p.id}">נוץ דעם</button></p>`).join('')}</div><button class="btn" data-act="reviewperson" data-id="${r.id}" data-v="approve">אפרוביר אלס צווייטער מענטש</button><button class="btn r" data-act="reviewperson" data-id="${r.id}" data-v="reject">אפזאגן</button>`:''}</section>`).join('')||'<p>נאך קיין בקשות</p>'}`;
+  return `<h1>${htmlWord("tree.personreviews.01")}</h1><p>${htmlWord("tree.personreviews.02")}</p>${reviews.map(r=>`<section class="card"><h2>${esc(r.payload.name||word("tree.personreviews.10"))}</h2><p>${esc(r.reason)}</p><p>${htmlWord("tree.personreviews.03", { value: r.proposal.father||word("tree.child_row.01"), value2: r.proposal.mother||word("tree.child_row.01"), value3: r.proposal.spouse||word("tree.child_row.01") })}</p><p>${htmlWord("tree.personreviews.09", { value: ({pending:word("tree.personreviews.04"),approved:word("tree.personreviews.05"),confirmed:word("tree.personreviews.06"),existing:word("tree.personreviews.07"),rejected:word("tree.personreviews.08")})[r.status] })}</p>${r.result_id?`<button class="btn s" data-act="editp" data-id="${r.result_id}">${htmlWord("tree.personreviews.11")}</button>`:''}${r.status==='pending'&&isManager()?`<div>${r.matches.map(p=>`<p>${esc(p.name)} · ${esc(p.father_name||'')} · ${esc(p.mother_name||'')} · ${esc(p.spouse_name||'')} <button class="btn s" data-act="reviewperson" data-id="${r.id}" data-v="existing" data-person="${p.id}">${htmlWord("tree.personreviews.14")}</button></p>`).join('')}</div><button class="btn" data-act="reviewperson" data-id="${r.id}" data-v="approve">${htmlWord("tree.personreviews.12")}</button><button class="btn r" data-act="reviewperson" data-id="${r.id}" data-v="reject">${htmlWord("tree.personreviews.13")}</button>`:''}</section>`).join('')||`<p>${htmlWord("tree.personreviews.15")}</p>`}`;
 };
 async function personForm(id, parentId, defaults={}) {
   const {people:P}=await api('/people'); STATE.people=P;
-  if(id&&!P.some(x=>x.id===id))throw new Error('דער מענטש איז נישט אין דיינע צוגעטיילטע משפחות');
+  if(id&&!P.some(x=>x.id===id))throw new Error(word("tree.person_form.01"));
   const p = {...(P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null}),...defaults};
   const yahrzeit = !!defaults.requireYahrzeit;
-  const knownAsField=(inputId,value='')=>field('באקאנט אלס',`<input id="${inputId}" maxlength="160" dir="auto" value="${esc(value)}" placeholder="למשל חוזה פון לובלין">`);
-  const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">— נישט באקאנט / קיין לינק —</option><option value="new">+ לייג צו א נייעם מענטש</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">ווערט צוגעלייגט און פארבונדן ווען דו סעיווסט.</p>${field('טיטל', `<input id="new_${key}_title" dir="auto">`)}${field('נאמען', `<input id="new_${key}_name" dir="auto">`)}${knownAsField('new_'+key+'_known_as')}<div id="matches_${key}" aria-live="polite"></div></div>`);
-  modal(`<h2 style="margin-top:0">${yahrzeit ? 'נייער יארצייט' : id ? '✏️ ' + esc(p.name) : '+ מענטש אין פעמילי טרי'}</h2><form data-form="person" data-id="${id}" data-yahrzeit="${yahrzeit ? '1' : ''}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?'<p class="muted">סעיוון וועט פארבינדן דעם אלטן יארצייט צו דעם פראפיל. די אלטע אינפארמאציע בלייבט געהאלטן.</p>':''}
-  <div class="grid g2"><div>${field('טיטל',`<input id="ptitle" value="${esc(p.title)}" placeholder="הרב / מרת">`)}</div><div>${field('נאמען',`<input id="pn" value="${esc(p.name)}">`)}</div></div>
+  const knownAsField=(inputId,value='')=>field(word("tree.known_as_field.01"),`<input id="${inputId}" maxlength="160" dir="auto" value="${esc(value)}" placeholder="${htmlWord("tree.known_as_field.02")}">`);
+  const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">${htmlWord("tree.choice.01")}</option><option value="new">${htmlWord("tree.choice.02")}</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">${htmlWord("tree.choice.03")}</p>${field(word("tree.choice.04"), `<input id="new_${key}_title" dir="auto">`)}${field(word("tree.06"), `<input id="new_${key}_name" dir="auto">`)}${knownAsField('new_'+key+'_known_as')}<div id="matches_${key}" aria-live="polite"></div></div>`);
+  modal(`<h2 style="margin-top:0">${yahrzeit ? htmlWord("tree.person_form.10") : id ? '✏️ ' + esc(p.name) : htmlWord("tree.person_form.11")}</h2><form data-form="person" data-id="${id}" data-yahrzeit="${yahrzeit ? '1' : ''}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?`<p class="muted">${htmlWord("tree.person_form.12")}</p>`:''}
+  <div class="grid g2"><div>${field(word("tree.choice.04"),`<input id="ptitle" value="${esc(p.title)}" placeholder="${htmlWord("tree.person_form.13")}">`)}</div><div>${field(word("tree.06"),`<input id="pn" value="${esc(p.name)}">`)}</div></div>
   <div id="personmatches" aria-live="polite"></div>
   ${knownAsField('pknownas',p.known_as)}
-  <label><input id="pdistinct" type="checkbox"> דאס איז א צווייטער מענטש</label>
-  ${field('פארוואס איז דאס א צווייטער מענטש? (אויב עס איז דא דער זעלבער נאמען)', '<textarea id="pdistinctreason" maxlength="500"></textarea>')}
-  <p class="muted">דער זעלבער נאמען מיט דעם זעלבן טאטע אדער מאמע דארף אדמין איבערזיכט.</p>
-  <fieldset class="person-family-picker"><legend>משפחות</legend>
-  <p class="muted">קלייב איין משפחה אדער מער.${ME.is_admin?' די בחירה באשטימט וואו מען קען זען דעם מענטש.':''}</p>
+  <label><input id="pdistinct" type="checkbox"> ${htmlWord("tree.person_form.02")}</label>
+  ${field(word("tree.person_form.14"), '<textarea id="pdistinctreason" maxlength="500"></textarea>')}
+  <p class="muted">${htmlWord("tree.person_form.03")}</p>
+  <fieldset class="person-family-picker"><legend>${htmlWord("tree.person_form.04")}</legend>
+  <p class="muted">${htmlWord("tree.person_form.05")}${ME.is_admin?` ${htmlWord("tree.person_form.15")}`:''}</p>
   <div class="person-family-options">${familyChoices(P).map(f=>`<label><input type="checkbox" name="person_family" value="${f.id}" ${(p.families || []).some(x=>x.id===f.id)?'checked':''}><strong>${esc(f.name)}</strong></label>`).join('')}</div>
-  <details><summary>צולייגן א משפחה נאמען</summary>${field('משפחה נאמען',`<input id="pnewfamily" maxlength="80">`)}</details></fieldset>
-  ${choice('father_id','טאטע')}${choice('mother_id','מאמע')}${choice('spouse_id','זיווג ראשון')}${choice('second_spouse_id','זיווג שני')}<p class="muted">ביי יעדן קינד קלייב דעם ריכטיגן טאטע און מאמע. א צווייטער זיווג טוישט נישט די עלטערן פון עקזיסטירנדיקע קינדער. די זיווג סדר איז פאר דעם מענטש; מען קען עדיטן דעם סדר ביים אנדערן פראפיל.</p>
-  ${p.parent_id ? choice('parent_id','פריערדיגער עלטערן לינק (נאכנישט באשטימט טאטע / מאמע)') : '<input type="hidden" id="pparent_id" value="">'}
-  ${p.spouse && !p.spouse_id ? `<p class="muted">פריערדיגער מאן / ווייב נאמען: ${esc(p.spouse)}. קלייב דעם מענטש אויבן צו פארבינדן.</p>` : ''}
-  ${field('ייחוס',`<select id="plineage"><option value="">נישט באקאנט</option><option value="בן" ${p.lineage_term==='בן'?'selected':''}>בן</option><option value="בת" ${p.lineage_term==='בת'?'selected':''}>בת</option></select>`)}
-  ${field('ווער קען זען (צוטריט גרופע)',`<select id="pside">${sideOptions(p.side)}</select>`)}
-  ${yahrzeit ? '<input id="plife" type="hidden" value="deceased">' : field('לעבנס סטאטוס',`<select id="plife"><option value="unknown" ${!p.life_status||p.life_status==='unknown'?'selected':''}>נישט באקאנט</option><option value="living" ${p.life_status==='living'?'selected':''}>לעבט</option><option value="deceased" ${p.life_status==='deceased'?'selected':''}>נפטר / נפטרת</option></select>`)}
-  ${yahrzeit ? '<section><h3>אידישער פטירה דאטום</h3>' : `<details ${p.niftar||p.life_status==='deceased'?'open':''}><summary>אידישער פטירה דאטום (אויב באקאנט)</summary>`}
-  <div class="grid g2"><div>${field('טאג פון פטירה',`<select id="pday" ${yahrzeit?'required':''}><option value="">— קלייב אויס —</option>${Array.from({length:30},(_,i)=>`<option value="${i+1}" ${p.death_hday===i+1?'selected':''}>${hebD(i+1)}</option>`).join('')}</select>`)}</div>
-  <div>${field('חודש פון פטירה',`<select id="pmonth" ${yahrzeit?'required':''}><option value="">— קלייב אויס —</option>${HMONTHS.map(([k,t])=>`<option value="${k}" ${p.death_hmonth===k?'selected':''}>${t}</option>`).join('')}</select>`)}</div></div>
-  ${field('יאר פון פטירה',`<input id="pyear" type="number" min="5001" max="5999" value="${esc(p.death_year||'')}">`)}
-  <p class="muted">א באקאנטער טאג און חודש לייגן אויטאמאטיש צו דעם יארצייט.</p>${yahrzeit ? '</section>' : '</details>'}
-  ${field('בית החיים / מקום קבורה',`<input id="pkever" value="${esc(p.kever)}" placeholder="למשל: הר הזיתים, חלקה / שורה / מספר קבר">`)}
-  ${field('אדרעס פון בית החיים (פאר GPS)',`<input id="pkeveraddress" dir="auto" value="${esc(p.kever_address)}" placeholder="גאס, שטאט און לאנד">`)}
-  ${field('נאטיץ',`<input id="pno" value="${esc(p.note)}">`)}
-  <div class="err" id="ferr"></div><div class="btns"><button class="btn">${yahrzeit ? 'סעיוו דעם יארצייט' : 'סעיוו'}</button><button type="button" class="btn l" data-act="close">קענסל</button>
-  ${id ? `<button type="button" class="btn l" data-act="addchild" data-id="${id}">+ קינד</button><button type="button" class="btn r" data-act="delp" data-id="${id}">🗑</button>` : ''}</div></form>`);
+  <details><summary>${htmlWord("tree.person_form.06")}</summary>${field(word("tree.person_form.16"),`<input id="pnewfamily" maxlength="80">`)}</details></fieldset>
+  ${choice('father_id',word("tree.08"))}${choice('mother_id',word("tree.09"))}${choice('spouse_id',word("tree.person_profile.02"))}${choice('second_spouse_id',word("tree.person_profile.03"))}<p class="muted">${htmlWord("tree.person_form.07")}</p>
+  ${p.parent_id ? choice('parent_id',word("tree.person_form.17")) : '<input type="hidden" id="pparent_id" value="">'}
+  ${p.spouse && !p.spouse_id ? `<p class="muted">${htmlWord("tree.person_form.18", { spouse: p.spouse })}</p>` : ''}
+  ${field(word("tree.person_form.19"),`<select id="plineage"><option value="">${htmlWord("tree.child_row.01")}</option><option value="בן" ${p.lineage_term==='בן'?'selected':''}>${htmlWord("tree.person_form.20")}</option><option value="בת" ${p.lineage_term==='בת'?'selected':''}>${htmlWord("tree.person_form.21")}</option></select>`)}
+  ${field(word("tree.person_form.22"),`<select id="pside">${sideOptions(p.side)}</select>`)}
+  ${yahrzeit ? '<input id="plife" type="hidden" value="deceased">' : field(word("tree.person_form.23"),`<select id="plife"><option value="unknown" ${!p.life_status||p.life_status==='unknown'?'selected':''}>${htmlWord("tree.child_row.01")}</option><option value="living" ${p.life_status==='living'?'selected':''}>${htmlWord("tree.person_profile.12")}</option><option value="deceased" ${p.life_status==='deceased'?'selected':''}>${htmlWord("tree.person_profile.11")}</option></select>`)}
+  ${yahrzeit ? `<section><h3>${htmlWord("tree.person_form.24")}</h3>` : `<details ${p.niftar||p.life_status==='deceased'?'open':''}><summary>${htmlWord("tree.person_form.25")}</summary>`}
+  <div class="grid g2"><div>${field(word("tree.person_form.26"),`<select id="pday" ${yahrzeit?'required':''}><option value="">${htmlWord("tree.person_form.27")}</option>${Array.from({length:30},(_,i)=>`<option value="${i+1}" ${p.death_hday===i+1?'selected':''}>${esc(hebD(i+1))}</option>`).join('')}</select>`)}</div>
+  <div>${field(word("tree.person_form.28"),`<select id="pmonth" ${yahrzeit?'required':''}><option value="">${htmlWord("tree.person_form.27")}</option>${HMONTHS.map(([k,t])=>`<option value="${k}" ${p.death_hmonth===k?'selected':''}>${htmlWord(t)}</option>`).join('')}</select>`)}</div></div>
+  ${field(word("tree.person_form.29"),`<input id="pyear" type="number" min="5001" max="5999" value="${esc(p.death_year||'')}">`)}
+  <p class="muted">${htmlWord("tree.person_form.08")}</p>${yahrzeit ? '</section>' : '</details>'}
+  ${field(word("tree.person_form.30"),`<input id="pkever" value="${esc(p.kever)}" placeholder="${htmlWord("tree.person_form.31")}">`)}
+  ${field(word("tree.person_form.32"),`<input id="pkeveraddress" dir="auto" value="${esc(p.kever_address)}" placeholder="${htmlWord("tree.person_form.33")}">`)}
+  ${field(word("tree.person_form.34"),`<input id="pno" value="${esc(p.note)}">`)}
+  <div class="err" id="ferr"></div><div class="btns"><button class="btn">${yahrzeit ? htmlWord("tree.person_form.35") : htmlWord("tree.person_form.36")}</button><button type="button" class="btn l" data-act="close">${htmlWord("tree.person_form.09")}</button>
+  ${id ? `<button type="button" class="btn l" data-act="addchild" data-id="${id}">${htmlWord("tree.person_form.37")}</button><button type="button" class="btn r" data-act="delp" data-id="${id}">🗑</button>` : ''}</div></form>`);
   renderPersonMatches();
   if(defaults.openRelative){const key=defaults.openRelative;$('p'+key).value='new';$('new_'+key).hidden=false;$('new_'+key+'_name').focus();}
 }
@@ -358,11 +392,11 @@ async function personForm(id, parentId, defaults={}) {
 V.learn = async (arg) => {
   if (arg) return learnDetail(Number(arg));
   const [{ lists },{people}] = await Promise.all([api('/lists'),api('/people')]); STATE.learningLists=lists; const L = lists.filter(l => vis(l.side) && (!STATE.learnFamily || (l.families||[]).some(f=>f.id===Number(STATE.learnFamily))));
-  return `<header class="learning-header"><h1>📖 משניות און תהילים</h1><button type="button" class="btn" data-act="newlist">+ נייע ליסט</button></header>
-  <p><a href="#me">✉ טעגליכע אימעיל דערמאנונגען — איינשטעלונגען</a></p><div class="cap">פילטער לויט צוטריט גרופע</div>${seg()}${familySelector([...lists,...people],'learnFamily','משפחה')}
-  ${L.map((l) => `<a class="card" href="#learn/${l.id}" style="display:block;text-decoration:none;color:inherit;margin-bottom:10px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:18px">${l.kind === 'tehillim' ? '📜 תהילים' : '📚 משניות'} · לעילוי נשמת ${esc(l.niftar)}</b>${familyTags(l)}</div>
-  <div class="muted">${l.target_date ? `ביז ${gdate(l.target_date)} (${inDays(l.days)})` : 'קיין דאטום'}${l.mine ? ` · דו האסט ${l.mine}` : ''}</div>
-  <div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${l.taken} פון ${l.total} אינגאנצן גענומען${l.partial?` · ${l.partial} טיילווייז`: ''} · ${l.done} געענדיגט</div></a>`).join('') || empty('📖', 'קיין ליסטס צו ווייזן.')}`;
+  return `<header class="learning-header"><h1>${htmlWord("learning.heading")}</h1><button type="button" class="btn" data-act="newlist">${htmlWord("learning.new_list")}</button></header>
+  <p><a href="#me">${htmlWord("learning.learn.01")}</a></p><div class="cap">${htmlWord("learning.learn.03")}</div>${seg()}${familySelector([...lists,...people],'learnFamily',word("learning.learn.04"))}
+  ${L.map((l) => `<a class="card" href="#learn/${l.id}" style="display:block;text-decoration:none;color:inherit;margin-bottom:10px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:18px">${l.kind === 'tehillim' ? htmlWord("learning.learn.08") : htmlWord("learning.learn.09")} ${htmlWord("learning.learn.05", { name: l.niftar })}</b>${familyTags(l)}</div>
+  <div class="muted">${l.target_date ? htmlWord("learning.learn.10", { date: gdate(l.target_date), days: inDays(l.days) }) : htmlWord("learning.learn.11")}${l.mine ? ` ${htmlWord("learning.learn.12", { mine: l.mine })}` : ''}</div>
+  <div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${htmlWord("learning.learn.06", { taken: l.taken, total: l.total })}${l.partial?` ${htmlWord("learning.learn.13", { partial: l.partial })}`: ''} ${htmlWord("learning.learn.07", { done: l.done })}</div></a>`).join('') || empty('📖', word("learning.learn.15"))}`;
 };
 async function learnDetail(id) {
   const group=Number(location.hash.split('/')[2]);
@@ -376,53 +410,53 @@ async function learnDetail(id) {
   const cls = i => i.done?'pk done':i.taken_by===ME.id?'pk mine':i.taken_by||i.parts?.taken?'pk t':'pk';
   const assignees=i=>{
     const people=i.parts?.assignees||[];
-    return people.length?`<small>גענומען דורך ${people.map(p=>esc(p.name)+(people.length>1?' ('+p.count+')':'')).join(' · ')}</small>`:'';
+    return people.length?`<small>${htmlWord("learning.assignees.01")} ${people.map(p=>esc(p.name)+(people.length>1?' ('+p.count+')':'')).join(' · ')}</small>`:'';
   };
   const body = l.kind === 'tehillim'
     ? `<div class="perek">${items.map((i) => `<button class="${cls(i)}" data-act="item" data-idx="${i.idx}" title="${esc(i.taken_name || '')}">${heb(i.idx)}</button>`).join('')}</div>`
-    : [...new Set(masechtos.map((m) => m.seder))].map((sd) => `<h2 style="font-size:17px">סדר ${sd}</h2><div class="ms">${items.filter((i) => masechtos[i.idx].seder === sd).map((i) => `<button class="${cls(i)}" data-act="masechta" data-idx="${i.idx}">${masechtos[i.idx].name} ▾<small>${i.parts ? i.parts.taken + ' / ' + i.parts.total + ' משניות גענומען' : i.taken_by ? esc(i.taken_name || '') + (i.done ? ' ✓' : '') : 'פריי · עפן פרקים / משניות'}</small>${assignees(i)}</button>`).join('')}</div>`).join('');
-  return `<a href="#learn" class="muted">→ צוריק צו אלע ליסטס</a><h1 class="learning-title">${l.kind === 'tehillim' ? '📜 תהילים' : '📚 משניות'} לעילוי נשמת ${esc(l.niftar)}</h1>
-  <div class="cap">${l.target_date ? `ביז ${gdate(l.target_date)} (${inDays(l.days)})` : ''} ${sideTag(l.side)}${familyTags(l)}</div>
-  <div class="card" style="margin-bottom:12px"><div class="bar"><div style="width:${Math.round(100 * taken / items.length)}%"></div></div><div class="muted">${taken} פון ${items.length} אינגאנצן גענומען${partial ? ` · ${partial} טיילווייז` : ''}</div>
-  <div class="bar"><div class="dn" style="width:${Math.round(100 * done / items.length)}%"></div></div><div class="muted">${done} געענדיגט</div>
-  <div class="muted" style="margin-top:6px"><span class="pk" style="padding:2px 8px">פריי</span> <span class="pk mine" style="padding:2px 8px">דיינס</span> <span class="pk t" style="padding:2px 8px">גענומען</span> <span class="pk done" style="padding:2px 8px">געענדיגט</span></div></div>
-  <section class="card" style="margin-bottom:14px"><h2>📖 מיין לימוד פאר היינט</h2><p>${esc(plan_date || '')} · ${remaining_units || 0} ${l.kind==='tehillim'?'קאפיטלעך':'משניות'} איבעריג${daily_plan?.days ? ' · '+daily_plan.days+' טעג מיט היינט' : ''}</p>${daily_plan ? `<details open><summary>${daily_plan.lines.length} חלקים פאר היינט</summary><ul>${daily_plan.lines.map(line=>`<li>${esc(line)}</li>`).join('')}</ul></details>${!l.target_date?'<p class="muted">קיין ענד דאטום — געוויזן ווערן אלע דיינע איבעריגע חלקים.</p>':''}<p>צייכן אפ אונטן וואס דו האסט געענדיגט. דער פלאן ווערט איבערגערעכנט לויט די איבעריגע חלקים.</p>` : `<p>${remaining_units ? 'דער ענד דאטום איז שוין פארביי. די איבעריגע חלקים בלייבן אין דער ליסט; מען שיקט נישט קיין טעגליכע אימעילס.' : 'דו האסט נישט קיין אומגעענדיגטע חלקים אין דער ליסט.'}</p>`}<p><a href="#me">✉ ${ME.learning_email_reminders?'טעגליכע אימעילס איינגעשאלטן':'איינשאלטן טעגליכע אימעילס'}</a> · ${reminder_hour}:00 (${esc(reminder_timezone || '')})</p></section>
-  ${help.length ? `<section class="card" style="margin-bottom:14px"><h2>🙋 בקשות פאר הילף</h2>${help.map(h=>`<div class="row"><div class="grow"><b>${esc(h.requested_name)}</b> · ${esc(portionLabel(h.idx,h.chapter,h.mishnah))}<p>${esc(h.note)}</p><small>${h.helper_id ? esc(h.helper_name)+' העלפט' : 'ווארט אויף הילף'}</small></div><div class="btns">${h.requested_by!==ME.id && !h.helper_id ? `<button class="btn s" data-act="learninghelp" data-id="${h.id}" data-v="help">איך קען העלפן</button>`:''}${h.requested_by===ME.id||isManager() ? `<button class="btn s l" data-act="learninghelp" data-id="${h.id}" data-v="resolve">✓ געלייזט</button>`:''}</div></div>`).join('')}</section>`:''}
-  <div class="btns" style="margin-bottom:12px"><button class="btn" data-act="sharelearn">📲 לאדן צו נעמען משניות / תהילים</button>${l.kind==='mishnayos'&&managesAccounts()?'<button class="btn l" data-act="emaillearn">✉️ שיק אן אימעיל בקשה</button>':''}</div>
+    : [...new Set(masechtos.map((m) => m.seder))].map((sd) => `<h2 style="font-size:17px">${htmlWord("learning.learn_detail.01", { sd: sd })}</h2><div class="ms">${items.filter((i) => masechtos[i.idx].seder === sd).map((i) => `<button class="${cls(i)}" data-act="masechta" data-idx="${i.idx}">${masechtos[i.idx].name} ▾<small>${i.parts ? i.parts.taken + ' / ' + i.parts.total + ` ${htmlWord("learning.learn_detail.02")}` : i.taken_by ? esc(i.taken_name || '') + (i.done ? ' ✓' : '') : htmlWord("learning.learn_detail.03")}</small>${assignees(i)}</button>`).join('')}</div>`).join('');
+  return `<a href="#learn" class="muted">${htmlWord("learning.learn_detail.04")}</a><h1 class="learning-title">${l.kind === 'tehillim' ? htmlWord("learning.learn.08") : htmlWord("learning.learn.09")} ${htmlWord("learning.learn_detail.05", { name: l.niftar })}</h1>
+  <div class="cap">${l.target_date ? htmlWord("learning.learn.10", { date: gdate(l.target_date), days: inDays(l.days) }) : ''} ${sideTag(l.side)}${familyTags(l)}</div>
+  <div class="card" style="margin-bottom:12px"><div class="bar"><div style="width:${Math.round(100 * taken / items.length)}%"></div></div><div class="muted">${htmlWord("learning.learn_detail.06", { taken: taken, length: items.length })}${partial ? ` ${htmlWord("learning.learn.13", { partial: partial })}` : ''}</div>
+  <div class="bar"><div class="dn" style="width:${Math.round(100 * done / items.length)}%"></div></div><div class="muted">${htmlWord("learning.learn_detail.07", { done: done })}</div>
+  <div class="muted" style="margin-top:6px"><span class="pk" style="padding:2px 8px">${htmlWord("learning.learn_detail.08")}</span> <span class="pk mine" style="padding:2px 8px">${htmlWord("learning.learn_detail.09")}</span> <span class="pk t" style="padding:2px 8px">${htmlWord("learning.learn_detail.10")}</span> <span class="pk done" style="padding:2px 8px">${htmlWord("learning.learn_detail.11")}</span></div></div>
+  <section class="card" style="margin-bottom:14px"><h2>${htmlWord("learning.learn_detail.12")}</h2><p>${esc(plan_date || '')} · ${remaining_units || 0} ${l.kind==='tehillim'?htmlWord("learning.learn_detail.15"):htmlWord("learning.learn_detail.16")} ${htmlWord("learning.learn_detail.13")}${daily_plan?.days ? ' · '+daily_plan.days+` ${htmlWord("learning.learn_detail.17")}` : ''}</p>${daily_plan ? `<details open><summary>${htmlWord("learning.learn_detail.18", { length: daily_plan.lines.length })}</summary><ul>${daily_plan.lines.map(line=>`<li>${esc(line)}</li>`).join('')}</ul></details>${!l.target_date?`<p class="muted">${htmlWord("learning.learn_detail.20")}</p>`:''}<p>${htmlWord("learning.learn_detail.19")}</p>` : `<p>${remaining_units ? htmlWord("learning.learn_detail.21") : htmlWord("learning.learn_detail.22")}</p>`}<p><a href="#me">✉ ${ME.learning_email_reminders?htmlWord("learning.learn_detail.23"):htmlWord("learning.learn_detail.24")}</a> · ${reminder_hour}:00 (${esc(reminder_timezone || '')})</p></section>
+  ${help.length ? `<section class="card" style="margin-bottom:14px"><h2>${htmlWord("learning.learn_detail.25")}</h2>${help.map(h=>`<div class="row"><div class="grow"><b>${esc(h.requested_name)}</b> · ${esc(portionLabel(h.idx,h.chapter,h.mishnah))}<p>${esc(h.note)}</p><small>${h.helper_id ? esc(h.helper_name)+` ${htmlWord("learning.learn_detail.26")}` : htmlWord("learning.learn_detail.27")}</small></div><div class="btns">${h.requested_by!==ME.id && !h.helper_id ? `<button class="btn s" data-act="learninghelp" data-id="${h.id}" data-v="help">${htmlWord("learning.learn_detail.28")}</button>`:''}${h.requested_by===ME.id||isManager() ? `<button class="btn s l" data-act="learninghelp" data-id="${h.id}" data-v="resolve">${htmlWord("learning.learn_detail.29")}</button>`:''}</div></div>`).join('')}</section>`:''}
+  <div class="btns" style="margin-bottom:12px"><button class="btn" data-act="sharelearn">${htmlWord("learning.learn_detail.14")}</button>${l.kind==='mishnayos'&&managesAccounts()?`<button class="btn l" data-act="emaillearn">${htmlWord("learning.learn_detail.30")}</button>`:''}</div>
   <div class="card">${body}</div>
-  ${isManager() || l.created_by === ME.id ? `<button class="btn r s" style="margin-top:14px" data-act="dellist" data-id="${l.id}">🗑 מעק אויס די ליסט</button>` : ''}`;
+  ${isManager() || l.created_by === ME.id ? `<button class="btn r s" style="margin-top:14px" data-act="dellist" data-id="${l.id}">${htmlWord("learning.learn_detail.31")}</button>` : ''}`;
 }
-function itemLabel(idx) { const { l, masechtos } = STATE.list; return l.kind === 'tehillim' ? 'קאפיטל ' + heb(idx) : 'מסכתא ' + masechtos[idx].name; }
+function itemLabel(idx) { const { l, masechtos } = STATE.list; return l.kind === 'tehillim' ? `${word("learning.item_label.01")} ` + heb(idx) : `${word("learning.item_label.02")} ` + masechtos[idx].name; }
 async function onItem(idx) {
   const { l, items } = STATE.list; const it = items.find((i) => i.idx === idx);
-  if (!it.taken_by) { await api(`/lists/${l.id}/items/${idx}`, { method: 'POST', body: { action: 'take' } }); toast('✓ דו האסט גענומען ' + itemLabel(idx)); return go(); }
+  if (!it.taken_by) { await api(`/lists/${l.id}/items/${idx}`, { method: 'POST', body: { action: 'take' } }); toast(`${word("learning.on_item.01")} ` + itemLabel(idx)); return go(); }
   if (it.taken_by !== ME.id) {
-    if (isManager()) return modal(`<h2 style="margin-top:0">${itemLabel(idx)}</h2><p>${esc(it.taken_name)} האט דאס גענומען.</p><div class="btns"><button class="btn r" data-act="itemact" data-idx="${idx}" data-v="give">ארויסנעמען (אדמין)</button><button class="btn l" data-act="close">צומאכן</button></div>`);
-    return toast(`${itemLabel(idx)} האט שוין ${it.taken_name}`);
+    if (isManager()) return modal(`<h2 style="margin-top:0">${esc(itemLabel(idx))}</h2><p>${htmlWord("learning.on_item.02", { taken_name: it.taken_name })}</p><div class="btns"><button class="btn r" data-act="itemact" data-idx="${idx}" data-v="give">${htmlWord("learning.on_item.03")}</button><button class="btn l" data-act="close">${htmlWord("learning.on_item.04")}</button></div>`);
+    return toast(word("learning.on_item.05", { portion: itemLabel(idx), taken_name: it.taken_name }));
   }
-  modal(`<h2 style="margin-top:0">${itemLabel(idx)}</h2><p class="muted">דו האסט דאס גענומען.</p><div class="btns">
-  ${it.done ? `<button class="btn l" data-act="itemact" data-idx="${idx}" data-v="undone">נאך נישט געענדיגט</button>` : `<button class="btn g" data-act="itemact" data-idx="${idx}" data-v="done">✓ איך האב געענדיגט</button>`}
-  <button class="btn r" data-act="itemact" data-idx="${idx}" data-v="give">גיב צוריק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+  modal(`<h2 style="margin-top:0">${esc(itemLabel(idx))}</h2><p class="muted">${htmlWord("learning.on_item.06")}</p><div class="btns">
+  ${it.done ? `<button class="btn l" data-act="itemact" data-idx="${idx}" data-v="undone">${htmlWord("learning.on_item.08")}</button>` : `<button class="btn g" data-act="itemact" data-idx="${idx}" data-v="done">${htmlWord("learning.on_item.09")}</button>`}
+  <button class="btn r" data-act="itemact" data-idx="${idx}" data-v="give">${htmlWord("learning.on_item.07")}</button><button class="btn l" data-act="close">${htmlWord("learning.on_item.04")}</button></div>`);
 }
 function portionLabel(idx,chapter=0,mishnah=0) {
-  return itemLabel(idx)+(chapter?' · פרק '+hebD(chapter):'')+(mishnah?' · משנה '+hebD(mishnah):'');
+  return itemLabel(idx)+(chapter?` ${word("learning.portion_label.01")} `+hebD(chapter):'')+(mishnah?` ${word("learning.portion_label.02")} `+hebD(mishnah):'');
 }
 async function openMasechta(idx) {
   const {items}=await api(`/lists/${STATE.list.l.id}/items/${idx}/parts`); STATE.portions={idx,items};
   const chapters=STATE.list.masechtos[idx].chapters;
-  modal(`<h2>${esc(itemLabel(idx))}</h2><p class="muted">נעם א גאנצע מסכתא, א פרק, אדער א משנה. עפן א פרק צו זען יעדע משנה.</p><button class="btn" data-act="portion" data-c="0" data-m="0">גאנצע מסכתא · אויסקלייבן / הילף</button>
-    ${chapters.map((n,c)=>{const rows=items.filter(p=>p.chapter===c+1);return `<details class="card" style="margin-top:10px"><summary style="cursor:pointer;padding:8px">פרק ${hebD(c+1)} · ${rows.filter(p=>p.taken_by).length}/${n} גענומען</summary><button class="btn s l" data-act="portion" data-c="${c+1}" data-m="0">גאנצער פרק · אויסקלייבן / הילף</button><div class="ms" style="margin-top:10px">${rows.map(p=>`<button class="pk ${p.done?'done':p.taken_by===ME.id?'mine':p.taken_by?'t':''}" data-act="portion" data-c="${p.chapter}" data-m="${p.mishnah}">משנה ${hebD(p.mishnah)}<small>${p.taken_by?esc(p.taken_name):'פריי'}${p.done?' ✓':''}</small></button>`).join('')}</div></details>`;}).join('')}<button class="btn l" data-act="close">צומאכן</button>`,true);
+  modal(`<h2>${esc(itemLabel(idx))}</h2><p class="muted">${htmlWord("learning.open_masechta.01")}</p><button class="btn" data-act="portion" data-c="0" data-m="0">${htmlWord("learning.open_masechta.02")}</button>
+    ${chapters.map((n,c)=>{const rows=items.filter(p=>p.chapter===c+1);return `<details class="card" style="margin-top:10px"><summary style="cursor:pointer;padding:8px">${htmlWord("learning.open_masechta.03", { number: hebD(c+1), count: rows.filter(p=>p.taken_by).length, count2: n })}</summary><button class="btn s l" data-act="portion" data-c="${c+1}" data-m="0">${htmlWord("learning.open_masechta.04")}</button><div class="ms" style="margin-top:10px">${rows.map(p=>`<button class="pk ${p.done?'done':p.taken_by===ME.id?'mine':p.taken_by?'t':''}" data-act="portion" data-c="${p.chapter}" data-m="${p.mishnah}">${htmlWord("learning.open_masechta.05", { number: hebD(p.mishnah) })}<small>${p.taken_by?esc(p.taken_name):htmlWord("learning.learn_detail.08")}${p.done?' ✓':''}</small></button>`).join('')}</div></details>`;}).join('')}<button class="btn l" data-act="close">${htmlWord("learning.on_item.04")}</button>`,true);
 }
 function openPortion(chapter,mishnah) {
   const {idx,items}=STATE.portions, rows=items.filter(p=>(!chapter||p.chapter===chapter)&&(!mishnah||p.mishnah===mishnah));
   const own=rows.every(p=>p.taken_by===ME.id),available=rows.every(p=>!p.taken_by||p.taken_by===ME.id),allDone=rows.every(p=>p.done);
   STATE.portionScope={idx,chapter,mishnah};
-  modal(`<h2>${esc(portionLabel(idx,chapter,mishnah))}</h2><p>${rows.filter(p=>p.taken_by).length}/${rows.length} משניות גענומען · ${rows.filter(p=>p.done).length} געענדיגט</p><div class="btns">
-    ${available&&!own?'<button class="btn" data-act="portionaction" data-v="take">איך נעם דעם חלק</button>':''}
-    ${own?`<button class="btn g" data-act="portionaction" data-v="${allDone?'undone':'done'}">${allDone?'נאך נישט געענדיגט':'✓ איך האב געענדיגט'}</button><button class="btn l" data-act="portionaction" data-v="give">גיב צוריק</button>`:''}
-    ${isManager()&&!own&&rows.some(p=>p.taken_by)?'<button class="btn r" data-act="portionaction" data-v="give">באפריי דעם חלק (אדמין)</button>':''}
-    </div>${!available?'<p class="muted">א טייל איז שוין גענומען. קלייב א פרייען פרק אדער משנה.</p>':''}
-    <form data-form="portionhelp" style="margin-top:18px"><h3>🙋 בעט הילף</h3>${field('וואס פאר הילף דארפסטו?', '<textarea id="helpnote" maxlength="500" placeholder="למשל: איך דארף א חברותא אדער הילף צו פארשטיין"></textarea>')}<div class="err" role="alert"></div><button class="btn l">בעט הילף פון דער משפחה</button></form><button class="btn l" style="margin-top:12px" data-act="backmasechta">צוריק צו די פרקים</button>`);
+  modal(`<h2>${esc(portionLabel(idx,chapter,mishnah))}</h2><p>${htmlWord("learning.open_portion.01", { count: rows.filter(p=>p.taken_by).length, length: rows.length, count2: rows.filter(p=>p.done).length })}</p><div class="btns">
+    ${available&&!own?`<button class="btn" data-act="portionaction" data-v="take">${htmlWord("learning.open_portion.05")}</button>`:''}
+    ${own?`<button class="btn g" data-act="portionaction" data-v="${allDone?'undone':'done'}">${allDone?htmlWord("learning.on_item.08"):htmlWord("learning.on_item.09")}</button><button class="btn l" data-act="portionaction" data-v="give">${htmlWord("learning.on_item.07")}</button>`:''}
+    ${isManager()&&!own&&rows.some(p=>p.taken_by)?`<button class="btn r" data-act="portionaction" data-v="give">${htmlWord("learning.open_portion.06")}</button>`:''}
+    </div>${!available?`<p class="muted">${htmlWord("learning.open_portion.07")}</p>`:''}
+    <form data-form="portionhelp" style="margin-top:18px"><h3>${htmlWord("learning.open_portion.02")}</h3>${field(word("learning.open_portion.08"), `<textarea id="helpnote" maxlength="500" placeholder="${htmlWord("learning.open_portion.09")}"></textarea>`)}<div class="err" role="alert"></div><button class="btn l">${htmlWord("learning.open_portion.03")}</button></form><button class="btn l" style="margin-top:12px" data-act="backmasechta">${htmlWord("learning.open_portion.04")}</button>`);
 }
 const memorialName = (y) => [y.name,y.father_name].filter(Boolean).join(' ');
 const memorialSearch = (text) => text.normalize('NFKD').replace(/\p{M}|[׳״'"’“”]/gu,'').toLowerCase();
@@ -436,41 +470,41 @@ async function listForm(yzId, trigger) {
   const eligibleMemorials=rows=>rows.filter(y=>y.side==='both'||mySides().includes(y.side));
   const memorials=eligibleMemorials(yahrzeits);
   let byId=new Map(memorials.map(y=>[y.id,y]));
-  if (yzId&&!byId.has(yzId)) throw new Error('דער יארצייט איז נישטא אין דער איצטיגער משפחה.');
+  if (yzId&&!byId.has(yzId)) throw new Error(word("learning.list_form.15"));
   const defaultSide=STATE.side==='all' ? mySides()[0] : STATE.side;
   const familyName=ME.family_groups?.find(g=>g.id===group)?.name || S.family_yi;
   const optionsMarkup=(rows,selected)=>rows.map(y=>`<label class="dedication-option" data-search="${esc(memorialSearch(`${memorialName(y)} ${y.hebrew}`))}">
     <input type="checkbox" name="learning-yahrzeit" value="${y.id}" ${selected.has(y.id)?'checked':''}>
     <span><strong>${esc(memorialName(y))}</strong><small>${esc(y.hebrew)}</small></span></label>`).join('');
-  modal(`<h2 id="learning-create-title" tabindex="-1">נייע ליסט</h2>
+  modal(`<h2 id="learning-create-title" tabindex="-1">${htmlWord("learning.list_form.16")}</h2>
   <form id="learning-create-form" data-form="list">
   <div class="learning-form-body">
-    ${field('וואס לערנט מען?', '<select id="lk"><option value="tehillim">תהילים · 150 קאפיטלעך</option><option value="mishnayos">משניות · 63 מסכתות</option></select>')}
-    <fieldset class="dedication-picker"><legend>לעילוי נשמת · ${esc(familyName)}</legend>
+    ${field(word("learning.list_form.22"), `<select id="lk"><option value="tehillim">${htmlWord("learning.list_form.23")}</option><option value="mishnayos">${htmlWord("learning.list_form.24")}</option></select>`)}
+    <fieldset class="dedication-picker"><legend>${htmlWord("learning.list_form.17", { familyName: familyName })}</legend>
       <div class="learning-source">
-        <label><input type="radio" name="learning-source" checked> קלייב יארצייטן</label>
-        <label><input type="radio" name="learning-source" id="learning-custom"> שרייב א נאמען</label>
+        <label><input type="radio" name="learning-source" checked> ${htmlWord("learning.list_form.18")}</label>
+        <label><input type="radio" name="learning-source" id="learning-custom"> ${htmlWord("learning.list_form.19")}</label>
       </div>
       <div id="learning-picker">
         <div class="learning-search-row">
-          <div>${field('זוך א יארצייט', '<input id="learning-search" type="search" autocomplete="off">')}</div>
-          <button type="button" id="learning-refresh" class="btn s l">לאד נאכאמאל</button>
+          <div>${field(word("learning.list_form.03"), '<input id="learning-search" type="search" autocomplete="off">')}</div>
+          <button type="button" id="learning-refresh" class="btn s l">${htmlWord("learning.list_form.04")}</button>
         </div>
         <div class="dedication-options" id="learning-options">${optionsMarkup(memorials,new Set([yzId]))}</div>
-        <p id="learning-no-results" class="muted" hidden>קיין יארצייט געפונען.</p>
+        <p id="learning-no-results" class="muted" hidden>${htmlWord("learning.list_form.20")}</p>
         <div id="learning-selection" class="learning-selection">
           <p id="learning-selected-count" class="muted" role="status"></p>
           <div id="learning-selected-names"></div>
         </div>
       </div>
-      <div id="learning-manual" hidden>${field('נאמען', '<input id="ln" maxlength="150" placeholder="ר׳ … בן ר׳ …">')}</div>
+      <div id="learning-manual" hidden>${field(word("learning.list_form.25"), `<input id="ln" maxlength="150" placeholder="${htmlWord("learning.list_form.26")}">`)}</div>
     </fieldset>
     <div class="learning-list-settings">
-      <div>${field('ביז ווען?', '<input id="ld" type="date" aria-describedby="learning-due-hint">')}<p id="learning-due-hint" class="muted"></p></div>
-      <div>${field('ווער קען אנטייל נעמען?', `<select id="ls" aria-describedby="learning-side-hint">${sideOptions(defaultSide)}</select>`)}<p id="learning-side-hint" class="muted" hidden>די יארצייטן קומען פון ביידע זייטן. קלייב ווער קען זען די ליסט.</p></div>
+      <div>${field(word("learning.list_form.27"), '<input id="ld" type="date" aria-describedby="learning-due-hint">')}<p id="learning-due-hint" class="muted"></p></div>
+      <div>${field(word("learning.list_form.28"), `<select id="ls" aria-describedby="learning-side-hint">${sideOptions(defaultSide)}</select>`)}<p id="learning-side-hint" class="muted" hidden>${htmlWord("learning.list_form.21")}</p></div>
     </div>
   </div>
-  <div class="learning-form-footer"><div class="err" role="alert"></div><div class="btns"><button type="submit" class="btn">מאך די ליסט</button><button type="button" class="btn l" data-act="close">קענסל</button></div></div>
+  <div class="learning-form-footer"><div class="err" role="alert"></div><div class="btns"><button type="submit" class="btn">${htmlWord("learning.list_form.06")}</button><button type="button" class="btn l" data-act="close">${htmlWord("learning.list_form.07")}</button></div></div>
   </form>`);
 
   const box=$('mb'), form=$('learning-create-form'), search=$('learning-search'), audience=$('ls');
@@ -482,10 +516,10 @@ async function listForm(yzId, trigger) {
     $('learning-picker').hidden=custom;
     $('learning-manual').hidden=!custom;
     $('ln').required=custom;
-    $('learning-selected-count').textContent=selected.length?`${selected.length} אויסגעקליבן`:'קלייב איין יארצייט אדער עטליכע.';
-    $('learning-selected-names').innerHTML=selected.map(y=>`<button type="button" data-remove="${y.id}" aria-label="נעם אראפ ${esc(memorialName(y))}"><span>${esc(memorialName(y))}</span><span aria-hidden="true">×</span></button>`).join('');
+    $('learning-selected-count').textContent=selected.length?word("learning.update_selection.01", { length: selected.length }):word("learning.update_selection.02");
+    $('learning-selected-names').innerHTML=selected.map(y=>`<button type="button" data-remove="${y.id}" aria-label="${htmlWord("learning.update_selection.03", { value: memorialName(y) })}"><span>${esc(memorialName(y))}</span><span aria-hidden="true">×</span></button>`).join('');
     const date=selected.map(y=>y.next?.ymd).filter(Boolean).sort()[0];
-    $('learning-due-hint').textContent=date?`לאז ליידיג פאר ${gdate(date)}${selected.length>1?' (דער ערשטער יארצייט)':''}`:'מען קען עס לאזן ליידיג.';
+    $('learning-due-hint').textContent=date?word("learning.update_selection.05", { date: gdate(date), value2: selected.length>1?` ${word("learning.update_selection.04")}`:'' }):word("learning.update_selection.06");
     const sides=[...new Set(selected.map(y=>y.side).filter(side=>side==='a'||side==='b'))];
     if (!audienceChanged) {
       audience.value=sides.length===1?sides[0]:selected.length&&!sides.length&&both()?'both':defaultSide;
@@ -551,67 +585,67 @@ V.sim = async (id) => {
   }
   const past = STATE.simPast;
   const { simchas } = await api('/simchas' + (id ? '?id='+encodeURIComponent(id) : past ? '?past=1' : '')); STATE.sims = simchas;
-  if (id) return `<h1>🎉 אינוויטעישן</h1><p><a href="#sim">אלע שמחות</a></p>${simchas.length ? simchas.map(simCard).join('') : empty('🎉','די אינוויטעישן איז נישט פאראן אדער דו האסט נישט קיין צוטריט.')}`;
-  return `<h1>🎉 שמחות</h1><div class="cap">אינוויטעישנס פאר די משפחה. דריק "איך קום" און זאג וויפיל מענטשן.</div>
-  <div class="btns" style="margin-bottom:12px"><button class="btn" data-act="editsim" data-id="0">+ נייע שמחה / אינוויטעישן</button><div class="seg" style="margin:0"><button class="${past ? '' : 'on'}" data-act="simpast" data-v="0">וואס קומט</button><button class="${past ? 'on' : ''}" data-act="simpast" data-v="1">פארביי</button></div></div>
-  ${simchas.length ? `<div class="simgrid">${simchas.map(simCard).join('')}</div>` : empty('🎉', past ? 'נאך נישט קיין פארביי שמחות.' : 'נאך קיין שמחות. לייג צו די ערשטע!')}`;
+  if (id) return `<h1>${htmlWord("simchas.sim.01")}</h1><p><a href="#sim">${htmlWord("simchas.sim.02")}</a></p>${simchas.length ? simchas.map(simCard).join('') : empty('🎉',word("simchas.sim.03"))}`;
+  return `<h1>${htmlWord("simchas.sim.04")}</h1><div class="cap">${htmlWord("simchas.sim.05")}</div>
+  <div class="btns" style="margin-bottom:12px"><button class="btn" data-act="editsim" data-id="0">${htmlWord("simchas.sim.06")}</button><div class="seg" style="margin:0"><button class="${past ? '' : 'on'}" data-act="simpast" data-v="0">${htmlWord("simchas.sim.07")}</button><button class="${past ? 'on' : ''}" data-act="simpast" data-v="1">${htmlWord("simchas.sim.08")}</button></div></div>
+  ${simchas.length ? `<div class="simgrid">${simchas.map(simCard).join('')}</div>` : empty('🎉', past ? word("simchas.sim.09") : word("simchas.sim.10"))}`;
 };
 function simCard(x) {
   const mine = isManager() || x.created_by === ME.id;
   const file = x.file_id ? (x.file_mime === 'application/pdf'
-    ? `<div class="pdf" data-act="showinv" data-id="${x.id}">📄 <div class="grow"><b>אינוויטעישן (PDF)</b><div class="muted">${esc(x.file_name)}</div></div></div>`
-    : `<img class="inv" src="/api/files/${x.file_id}" alt="אינוויטעישן" loading="lazy" data-act="showinv" data-id="${x.id}">`) : '';
+    ? `<div class="pdf" data-act="showinv" data-id="${x.id}">📄 <div class="grow"><b>${htmlWord("simchas.sim_card.01")}</b><div class="muted">${esc(x.file_name)}</div></div></div>`
+    : `<img class="inv" src="/api/files/${x.file_id}" alt="${htmlWord("simchas.sim_card.02")}" loading="lazy" data-act="showinv" data-id="${x.id}">`) : '';
   const people = x.my_people || 1;
-  return `<div class="card"><div style="display:flex;gap:8px;align-items:flex-start"><div class="grow"><b style="font-size:19px">${esc(x.kind)} · ${esc(x.whose)}</b></div>${sideTag(x.audience)}</div>
-  <div style="margin:6px 0 10px;display:grid;gap:3px"><div>📅 ${gdate(x.gdate)} <span class="muted">· ${esc(x.hebrew)} · ${inDays(x.days)}</span></div>${x.time_text ? `<div>🕖 ${esc(x.time_text)}</div>` : ''}
+  return `<div class="card"><div style="display:flex;gap:8px;align-items:flex-start"><div class="grow"><b style="font-size:19px">${esc(simchaKind(x.kind))} · ${esc(x.whose)}</b></div>${sideTag(x.audience)}</div>
+  <div style="margin:6px 0 10px;display:grid;gap:3px"><div>📅 ${esc(gdate(x.gdate))} <span class="muted">· ${esc(x.hebrew)} · ${esc(inDays(x.days))}</span></div>${x.time_text ? `<div>🕖 ${esc(x.time_text)}</div>` : ''}
   ${x.hall ? `<div>🏛️ ${esc(x.hall)}</div>` : ''}${x.address ? `<div>📍 <span dir="auto">${esc(x.address)}</span></div>` : ''}${x.note ? `<div class="muted">${esc(x.note)}</div>` : ''}</div>
   ${x.address ? `<div class="btns" style="margin-bottom:10px">${navBtns(x.address)}</div>` : ''}
   ${file}
-  <div class="btns" style="margin:10px 0">${x.file_id ? `<button class="btn s l" data-act="showinv" data-id="${x.id}">🔍 זע גרויס</button><a class="btn s l" href="/api/files/${x.file_id}?dl=1">⬇ דאונלאוד</a>` : ''}
-  ${mine ? `<label class="btn s l" style="cursor:pointer">⬆ ${x.file_id ? 'טויש' : 'אפלאוד'} אינוויטעישן<input type="file" accept="image/*,application/pdf" style="display:none" data-change="upinv" data-id="${x.id}"></label>` : ''}</div>
+  <div class="btns" style="margin:10px 0">${x.file_id ? `<button class="btn s l" data-act="showinv" data-id="${x.id}">${htmlWord("simchas.sim_card.09")}</button><a class="btn s l" href="/api/files/${x.file_id}?dl=1">${htmlWord("simchas.sim_card.10")}</a>` : ''}
+  ${mine ? `<label class="btn s l" style="cursor:pointer">⬆ ${x.file_id ? htmlWord("simchas.sim_card.11") : htmlWord("simchas.sim_card.12")} ${htmlWord("simchas.sim_card.02")}<input type="file" accept="image/*,application/pdf" style="display:none" data-change="upinv" data-id="${x.id}"></label>` : ''}</div>
   <div style="border-top:1px solid #eef0f3;padding-top:10px">
-  <div class="btns"><button class="btn s ${x.my_answer === 'yes' ? 'g' : 'l'}" data-act="rsvp" data-id="${x.id}" data-v="yes">✓ איך קום</button>
-  <span class="stepper"><button data-act="ppl" data-id="${x.id}" data-d="-1">−</button><span id="ppl${x.id}">${people}</span><button data-act="ppl" data-id="${x.id}" data-d="1">+</button></span><span class="muted">מענטשן</span>
-  <button class="btn s ${x.my_answer === 'no' ? 'r' : 'l'}" data-act="rsvp" data-id="${x.id}" data-v="no">✗ קען נישט</button></div>
-  <div class="muted" style="margin-top:8px"><a href="#" data-act="who" data-id="${x.id}">${x.yes_count} קומען (${x.yes_people} מענטשן) · ${x.no_count} נישט</a></div></div>
-  <div class="btns" style="margin-top:10px"><button class="btn s l" data-act="sharesim" data-id="${x.id}">📲 טייל אינוויטעישן</button><button class="btn s l" data-act="mazeltov" data-id="${x.id}">🎉 שיק א מזל טוב</button>${mine ? `<button class="btn s l" data-act="editsim" data-id="${x.id}">✏️ עדיט</button>` : ''}</div></div>`;
+  <div class="btns"><button class="btn s ${x.my_answer === 'yes' ? 'g' : 'l'}" data-act="rsvp" data-id="${x.id}" data-v="yes">${htmlWord("simchas.sim_card.03")}</button>
+  <span class="stepper"><button data-act="ppl" data-id="${x.id}" data-d="-1">−</button><span id="ppl${x.id}">${people}</span><button data-act="ppl" data-id="${x.id}" data-d="1">+</button></span><span class="muted">${htmlWord("simchas.sim_card.04")}</span>
+  <button class="btn s ${x.my_answer === 'no' ? 'r' : 'l'}" data-act="rsvp" data-id="${x.id}" data-v="no">${htmlWord("simchas.sim_card.05")}</button></div>
+  <div class="muted" style="margin-top:8px"><a href="#" data-act="who" data-id="${x.id}">${htmlWord("simchas.sim_card.06", { yes_count: x.yes_count, yes_people: x.yes_people, no_count: x.no_count })}</a></div></div>
+  <div class="btns" style="margin-top:10px"><button class="btn s l" data-act="sharesim" data-id="${x.id}">${htmlWord("simchas.sim_card.07")}</button><button class="btn s l" data-act="mazeltov" data-id="${x.id}">${htmlWord("simchas.sim_card.08")}</button>${mine ? `<button class="btn s l" data-act="editsim" data-id="${x.id}">${htmlWord("simchas.sim_card.13")}</button>` : ''}</div></div>`;
 }
 function shareSim(x) {
   const link = `${location.origin}/#sim/${x.id}/${ME.selected_family_group_id}`;
-  const subject = `${x.kind} · ${x.whose}`;
+  const subject = `${simchaKind(x.kind)} · ${x.whose}`;
   const message = [subject, gdate(x.gdate), x.time_text, x.hall, x.address, link].filter(Boolean).join('\n');
   const body = encodeURIComponent(message);
-  modal(`<h2>📲 טייל אינוויטעישן</h2><p>דער לינק עפנט די שמחה. מען דארף זיין איינגעלאגט און האבן צוטריט צו דער משפחה.</p><textarea id="rl" readonly rows="7" aria-label="Invitation message">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">וואטסעפ</a>${(isManager()||x.created_by===ME.id)?`<button class="btn l" data-act="emailsim" data-id="${x.id}">שיק אימעיל צו מעמבערס</button>`:''}<a class="btn l" href="sms:?body=${body}">SMS</a><button class="btn l" data-act="copy">קאפי מעסעדזש און לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+  modal(`<h2>${htmlWord("simchas.sim_card.07")}</h2><p>${htmlWord("simchas.share_sim.01")}</p><textarea id="rl" readonly rows="7" aria-label="Invitation message">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">${htmlWord("simchas.share_sim.02")}</a>${(isManager()||x.created_by===ME.id)?`<button class="btn l" data-act="emailsim" data-id="${x.id}">${htmlWord("simchas.share_sim.05")}</button>`:''}<a class="btn l" href="sms:?body=${body}">SMS</a><button class="btn l" data-act="copy">${htmlWord("simchas.share_sim.03")}</button><button class="btn l" data-act="close">${htmlWord("simchas.share_sim.04")}</button></div>`);
 }
 async function emailSim(id,scope=ME.is_admin?'all':'family') {
   const p=await api(`/simchas/${id}/email?scope=${scope}`);
-  modal(`<h2>שיק אינוויטעישן דורך אימעיל</h2><p>דער סיסטעם שיקט דעם אימעיל גלייך צו יעדן מעמבער באזונדער.</p>${ME.is_admin?field('פאר וועמען',`<select data-change="emailscope" data-id="${id}"><option value="all" ${scope==='all'?'selected':''}>אלע מעמבערס אין אלע משפחות</option><option value="family" ${scope==='family'?'selected':''}>נאר די משפחה פון דער שמחה</option></select>`):''}<p><b>${p.recipients} אימעיל אדרעסן</b> · ${p.skipped} אן א גילטיגן אימעיל / דאפלטע אדרעסן</p>${scope==='all'?'<p>מעמבערס פון אנדערע משפחות באקומען די פרטים אין אימעיל, אבער דער לינק פארלאנגט צוטריט צו דער משפחה.</p>':''}<p>${p.sent} אנגענומען צום שיקן · ${p.queued} אין ריי · ${p.failed} נישט געשיקט</p>${!p.configured?'<p role="alert">אימעיל איז נאך נישט פארבונדן.</p>':''}<form data-form="simemail" data-id="${id}" data-scope="${scope}"><label><input type="checkbox" id="emailconfirm" required> איך באשטעטיג שיקן צו די אויסגעקליבענע מעמבערס</label><p>די זעלבע אינוויטעישן ווערט נאר איינמאל געשיקט צו יעדן אימעיל אדרעס.</p><div class="err" role="alert"></div><div class="btns"><button class="btn" ${!p.configured||!p.recipients?'disabled':''}>שיק דורך אימעיל</button><button type="button" class="btn l" data-act="emailstatus" data-id="${id}" data-scope="${scope}">דערפריש סטאטוס</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>`);
+  modal(`<h2>${htmlWord("simchas.email_sim.01")}</h2><p>${htmlWord("simchas.email_sim.02")}</p>${ME.is_admin?field(word("simchas.email_sim.11"),`<select data-change="emailscope" data-id="${id}"><option value="all" ${scope==='all'?'selected':''}>${htmlWord("simchas.email_sim.12")}</option><option value="family" ${scope==='family'?'selected':''}>${htmlWord("simchas.email_sim.13")}</option></select>`):''}<p><b>${htmlWord("simchas.email_sim.03", { recipients: p.recipients })}</b> ${htmlWord("simchas.email_sim.04", { skipped: p.skipped })}</p>${scope==='all'?`<p>${htmlWord("simchas.email_sim.14")}</p>`:''}<p>${htmlWord("simchas.email_sim.05", { sent: p.sent, queued: p.queued, failed: p.failed })}</p>${!p.configured?`<p role="alert">${htmlWord("simchas.email_sim.15")}</p>`:''}<form data-form="simemail" data-id="${id}" data-scope="${scope}"><label><input type="checkbox" id="emailconfirm" required> ${htmlWord("simchas.email_sim.06")}</label><p>${htmlWord("simchas.email_sim.07")}</p><div class="err" role="alert"></div><div class="btns"><button class="btn" ${!p.configured||!p.recipients?'disabled':''}>${htmlWord("simchas.email_sim.08")}</button><button type="button" class="btn l" data-act="emailstatus" data-id="${id}" data-scope="${scope}">${htmlWord("simchas.email_sim.09")}</button><button type="button" class="btn l" data-act="close">${htmlWord("simchas.email_sim.10")}</button></div></form>`);
 }
 function simForm(id) {
   const x = (STATE.sims || []).find((s) => s.id === id) || { audience: 'all', whose: ME.name, kind: SIMKINDS[0] };
   const afterSunset = !!x.gdate && x.hdate_text === automaticHebrewDate(x.gdate, true);
   const kinds = SIMKINDS.includes(x.kind) ? SIMKINDS : [x.kind, ...SIMKINDS];
-  modal(`<h2 style="margin-top:0">${id ? '✏️ עדיט שמחה' : '+ נייע שמחה'}</h2><form data-form="sim" data-id="${id}">
-  ${field('וואס', `<select id="sk">${kinds.map((k) => `<option ${x.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select>`)}
-  <div id="skow" style="display:none">${field('וואס פאר א שמחה', '<input id="sko">')}</div>
-  ${field('פון וועמען', `<input id="sw" value="${esc(x.whose)}">`)}
-  <div class="grid g2"><div>${field('דאטום', `<input id="sd" type="date" value="${esc(x.gdate || '')}">`)}</div><div>${field('צייט', `<input id="stt" value="${esc(x.time_text || '')}" placeholder="למשל: 7:00 נאכמיטאג">`)}</div></div>
-  ${field('אידישער דאטום (אויטאמאטיש)', `<input id="sh" value="${esc(x.hdate_text || automaticHebrewDate(x.gdate || ''))}" placeholder="קלייב אויס א דאטום אויבן">`)}
-  <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="safter" ${afterSunset?'checked':''}>די שמחה איז נאכן שקיעה</label>
-  ${field('ווו (נאמען פון זאל / הויז)', `<input id="sp" value="${esc(x.hall || '')}">`)}
-  ${field('אדרעס (פאר GPS)', `<input id="sa" dir="auto" value="${esc(x.address || '')}" placeholder="51 Forest Rd, Monroe, NY">`)}
-  ${field('נאטיץ', `<input id="sn" value="${esc(x.note || '')}">`)}
-  ${id ? '' : field('אינוויטעישן (בילד אדער PDF)', '<input type="file" id="sf" accept="image/*,application/pdf">')}<div id="ip"></div>
-  ${field('שיק צו', `<select id="ss">${sideOptions(x.audience, true, 'אלע קאזינס')}</select>`)}
-  <div class="err" id="ferr"></div><div class="btns"><button class="btn" id="simsave">${id ? 'סעיוו' : 'סעיוו און טייל אינוויטעישן'}</button><button type="button" class="btn l" data-act="close">קענסל</button>
-  ${id ? `${x.file_id ? `<button type="button" class="btn l" data-act="delinv" data-id="${id}">אוועק אינוויטעישן</button>` : ''}<button type="button" class="btn r" style="margin-right:auto" data-act="delsim" data-id="${id}">🗑</button>` : ''}</div></form>`);
+  modal(`<h2 style="margin-top:0">${id ? htmlWord("simchas.sim_form.02") : htmlWord("simchas.sim_form.03")}</h2><form data-form="sim" data-id="${id}">
+  ${field(word("simchas.sim_form.04"), `<select id="sk">${kinds.map((k) => `<option value="${esc(k)}" ${x.kind === k ? 'selected' : ''}>${esc(simchaKind(k))}</option>`).join('')}</select>`)}
+  <div id="skow" style="display:none">${field(word("simchas.sim_form.05"), '<input id="sko">')}</div>
+  ${field(word("simchas.sim_form.06"), `<input id="sw" value="${esc(x.whose)}">`)}
+  <div class="grid g2"><div>${field(word("simchas.sim_form.07"), `<input id="sd" type="date" value="${esc(x.gdate || '')}">`)}</div><div>${field(word("simchas.sim_form.08"), `<input id="stt" value="${esc(x.time_text || '')}" placeholder="${htmlWord("simchas.sim_form.09")}">`)}</div></div>
+  ${field(word("simchas.sim_form.10"), `<input id="sh" value="${esc(x.hdate_text || automaticHebrewDate(x.gdate || ''))}" placeholder="${htmlWord("simchas.sim_form.11")}">`)}
+  <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="safter" ${afterSunset?'checked':''}>${htmlWord("simchas.sim_form.01")}</label>
+  ${field(word("simchas.sim_form.12"), `<input id="sp" value="${esc(x.hall || '')}">`)}
+  ${field(word("simchas.sim_form.13"), `<input id="sa" dir="auto" value="${esc(x.address || '')}" placeholder="51 Forest Rd, Monroe, NY">`)}
+  ${field(word("simchas.sim_form.14"), `<input id="sn" value="${esc(x.note || '')}">`)}
+  ${id ? '' : field(word("simchas.sim_form.15"), '<input type="file" id="sf" accept="image/*,application/pdf">')}<div id="ip"></div>
+  ${field(word("simchas.sim_form.16"), `<select id="ss">${sideOptions(x.audience, true, word("simchas.sim_form.17"))}</select>`)}
+  <div class="err" id="ferr"></div><div class="btns"><button class="btn" id="simsave">${id ? htmlWord("simchas.sim_form.18") : htmlWord("simchas.sim_form.19")}</button><button type="button" class="btn l" data-act="close">${htmlWord("simchas.email_sim.10")}</button>
+  ${id ? `${x.file_id ? `<button type="button" class="btn l" data-act="delinv" data-id="${id}">${htmlWord("simchas.sim_form.20")}</button>` : ''}<button type="button" class="btn r" style="margin-right:auto" data-act="delsim" data-id="${id}">🗑</button>` : ''}</div></form>`);
 }
 function showInv(id) {
   const x = STATE.sims.find((s) => s.id === id); const u = '/api/files/' + x.file_id;
-  modal(`<h2 style="margin-top:0">${esc(x.kind)} · ${esc(x.whose)}</h2>${x.file_mime === 'application/pdf' && window.innerWidth <= 800
-    ? `<a class="pdf" href="${u}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;padding:28px">📄 <div class="grow"><b>עפן די PDF אינוויטעישן</b><div class="muted">${esc(x.file_name)}</div></div></a>`
+  modal(`<h2 style="margin-top:0">${esc(simchaKind(x.kind))} · ${esc(x.whose)}</h2>${x.file_mime === 'application/pdf' && window.innerWidth <= 800
+    ? `<a class="pdf" href="${u}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;padding:28px">📄 <div class="grow"><b>${htmlWord("simchas.show_inv.02")}</b><div class="muted">${esc(x.file_name)}</div></div></a>`
     : x.file_mime === 'application/pdf' ? `<iframe src="${u}" style="width:100%;height:65vh;border:1px solid #e6e8ec;border-radius:10px"></iframe>` : `<img src="${u}" style="width:100%;border-radius:10px;border:1px solid #e6e8ec">`}
-  <div class="btns" style="margin-top:12px"><a class="btn l" href="${u}?dl=1">⬇ דאונלאוד</a><a class="btn l" href="${u}" target="_blank" rel="noopener">↗ עפן</a><button class="btn l" data-act="close">צומאכן</button></div>`, true);
+  <div class="btns" style="margin-top:12px"><a class="btn l" href="${u}?dl=1">${htmlWord("simchas.sim_card.10")}</a><a class="btn l" href="${u}" target="_blank" rel="noopener">${htmlWord("simchas.show_inv.01")}</a><button class="btn l" data-act="close">${htmlWord("simchas.share_sim.04")}</button></div>`, true);
 }
 
 // chat
@@ -625,22 +659,22 @@ V.chat = async () => {
   const {messages,members}=await api('/chat/'+STATE.room);STATE.chatMembers=members;STATE.chatMessages=messages;
   LASTMSG=messages.length?messages[messages.length-1].id:0;markSeen(STATE.room,LASTMSG);
   setTimeout(()=>{checkUnread();const c=$('cb');if(c)c.scrollTop=c.scrollHeight;startChatPoll();},0);
-  return `<h1>💬 ${dm?'פריוואטע שמועס · '+esc(peers.find(p=>p.id===dm)?.name||''):'משפחה טשעט'}</h1>
-    <div class="seg">${rooms.map(k=>`<button class="${STATE.room===k?'on':''}" data-act="room" data-v="${k}">${k==='all'?'אלע קאזינס':esc(famOf(k)||sideName(k))}</button>`).join('')}</div>
-    ${field('פריוואטע שמועס',`<select data-change="privatechat"><option value="">— קלייב א קאזין —</option>${peers.filter(p=>p.id!==ME.id).map(p=>`<option value="${p.id}" ${p.id===dm?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`)}
+  return `<h1>💬 ${dm?`${htmlWord("chat.04")} `+esc(peers.find(p=>p.id===dm)?.name||''):htmlWord("chat.05")}</h1>
+    <div class="seg">${rooms.map(k=>`<button class="${STATE.room===k?'on':''}" data-act="room" data-v="${k}">${k==='all'?htmlWord("chat.06"):esc(famOf(k)||sideName(k))}</button>`).join('')}</div>
+    ${field(word("chat.07"),`<select data-change="privatechat"><option value="">${htmlWord("chat.08")}</option>${peers.filter(p=>p.id!==ME.id).map(p=>`<option value="${p.id}" ${p.id===dm?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`)}
     <div class="card"><div id="chatpresence" class="muted" aria-live="polite">${chatPresence(members)}</div>
-    <div class="chat" id="cb">${messages.length?renderMsgs(messages):'<div class="muted" id="cempty">נאך קיין מעסעדזשעס. זאג גוט מארגן! 👋</div>'}</div>
+    <div class="chat" id="cb">${messages.length?renderMsgs(messages):`<div class="muted" id="cempty">${htmlWord("chat.09")}</div>`}</div>
     <div id="chatreply"></div><div id="mentionchoices" class="btns"></div>
-    <form data-form="chat"><div style="display:flex;gap:8px;margin-top:10px"><input id="ci" placeholder="שרייב א מעסעדזש… @ צו דערמאנען" style="margin:0" autocomplete="off" enterkeyhint="send"><button class="btn">שיק</button></div>
-    <label class="btn l" style="display:inline-block;margin-top:8px;cursor:pointer">📎 לייג צו א פייל<input id="cf" type="file" style="display:none" data-change="chatfile"></label><span id="chatfilename" class="muted"></span><div class="err" role="alert"></div></form></div>`;
+    <form data-form="chat"><div style="display:flex;gap:8px;margin-top:10px"><input id="ci" placeholder="${htmlWord("chat.01")}" style="margin:0" autocomplete="off" enterkeyhint="send"><button class="btn">${htmlWord("chat.02")}</button></div>
+    <label class="btn l" style="display:inline-block;margin-top:8px;cursor:pointer">${htmlWord("chat.03")}<input id="cf" type="file" style="display:none" data-change="chatfile"></label><span id="chatfilename" class="muted"></span><div class="err" role="alert"></div></form></div>`;
 };
 function chatPresence(members) {
   const online=members.filter(p=>p.online);
-  return online.length?online.map(p=>`<span style="display:inline-block;margin:4px 0 8px 12px">🟢 ${esc(p.name)} · ${p.active?'אקטיוו':'אנליין'}</span>`).join(''):'קיינער איז יעצט נישט אקטיוו אין דעם שמועס';
+  return online.length?online.map(p=>`<span style="display:inline-block;margin:4px 0 8px 12px">🟢 ${esc(p.name)} · ${p.active?htmlWord("chat.chat_presence.01"):htmlWord("chat.chat_presence.02")}</span>`).join(''):word("chat.chat_presence.03");
 }
 function showChatReply() {
   const m=STATE.chatReply;
-  $('chatreply').innerHTML=m?`<div class="card" style="padding:8px"><b>ענטפער צו ${esc(m.name)}</b><div>${esc((m.body||m.filename||'פייל').slice(0,160))}</div><button type="button" class="btn s l" data-act="cancelreply">✕ קענסל ענטפער</button></div>`:'';
+  $('chatreply').innerHTML=m?`<div class="card" style="padding:8px"><b>${htmlWord("chat.show_chat_reply.01", { name: m.name })}</b><div>${esc((m.body||m.filename||word("chat.show_chat_reply.03")).slice(0,160))}</div><button type="button" class="btn s l" data-act="cancelreply">${htmlWord("chat.show_chat_reply.02")}</button></div>`:'';
 }
 function mentionChoices() {
   const input=$('ci');if(!input)return;const match=/@([^@\n]*)$/.exec(input.value);
@@ -650,13 +684,13 @@ function mentionChoices() {
 let LASTDAY = '';
 function renderMsgs(ms, cont) {
   if(!cont)LASTDAY='';
-  return ms.map(m=>{const k=dayKey(m.created_at),sep=k!==LASTDAY?`<div class="daysep">${dayLabel(m.created_at)}</div>`:'';LASTDAY=k;
-    return `${sep}<div class="bub ${m.user_id===ME.id?'me':''}" data-mid="${m.id}"><span class="muted">${m.user_id===ME.id?'דו':esc(m.name)} · ${hm(m.created_at)}</span>
-      ${m.reply_to?`<blockquote style="margin:6px 0;padding:6px;border-right:3px solid #818cf8"><small>ענטפער צו ${esc(m.reply_name||'מעסעדזש')}</small><div>${esc((m.reply_body||'פייל').slice(0,160))}</div></blockquote>`:''}
+  return ms.map(m=>{const k=dayKey(m.created_at),sep=k!==LASTDAY?`<div class="daysep">${esc(dayLabel(m.created_at))}</div>`:'';LASTDAY=k;
+    return `${sep}<div class="bub ${m.user_id===ME.id?'me':''}" data-mid="${m.id}"><span class="muted">${m.user_id===ME.id?htmlWord("chat.render_msgs.02"):esc(m.name)} · ${hm(m.created_at)}</span>
+      ${m.reply_to?`<blockquote style="margin:6px 0;padding:6px;border-right:3px solid #818cf8"><small>${htmlWord("chat.render_msgs.04", { value: m.reply_name||word("chat.render_msgs.03") })}</small><div>${esc((m.reply_body||word("chat.show_chat_reply.03")).slice(0,160))}</div></blockquote>`:''}
       ${(m.mentions||[]).length?`<small>${m.mentions.map(p=>`<span class="tag ${p.id===ME.id?'y':'g'}">@${esc(p.name)}</span>`).join(' ')}</small>`:''}
       <div style="white-space:pre-wrap">${esc(m.body)}</div>
       ${m.file_id?`<a class="btn s l" href="/api/files/${encodeURIComponent(m.file_id)}?dl=1" target="_blank" rel="noopener">📎 ${esc(m.filename)} · ${Math.ceil(m.size/1024)} KB</a>`:''}
-      <button type="button" class="btn s l" data-act="replymessage" data-id="${m.id}">↩ ענטפער</button></div>`;
+      <button type="button" class="btn s l" data-act="replymessage" data-id="${m.id}">${htmlWord("chat.render_msgs.01")}</button></div>`;
   }).join('');
 }
 function startChatPoll() {
@@ -694,10 +728,10 @@ V.people = async () => {
   const Q = STATE.q.trim(); const L = families.filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
   const hasMine = families.some((d) => d.owner_id === ME.id);
   const groupNames=new Map(groups.map(g=>[g.id,g.name]));
-  const memberCard=member=>`<div class="card"><b>${esc(member.name)}</b>${member.id===ME.id?' <span class="tag g">דו</span>':''}
+  const memberCard=member=>`<div class="card"><b>${esc(member.name)}</b>${member.id===ME.id?` <span class="tag g">${htmlWord("directory.member_card.01")}</span>`:''}
     <div class="muted">${member.group_ids.map(id=>esc(groupNames.get(id))).join(' · ')}</div><div class="btns">
-    ${member.id===ME.id?`<button class="btn s l" data-act="editdir" data-id="${families.find(d=>d.owner_id===member.id)?.id||0}" data-mine="1">מיין פרטים</button>`:''}
-    ${ME.is_admin?`<button class="btn s l" data-act="linkcousin" data-id="${member.id}">${member.person_id?'טויש בוים פראפיל':'פארבינד צום בוים'}</button>`:''}</div></div>`;
+    ${member.id===ME.id?`<button class="btn s l" data-act="editdir" data-id="${families.find(d=>d.owner_id===member.id)?.id||0}" data-mine="1">${htmlWord("directory.member_card.02")}</button>`:''}
+    ${ME.is_admin?`<button class="btn s l" data-act="linkcousin" data-id="${member.id}">${member.person_id?htmlWord("directory.member_card.03"):htmlWord("directory.member_card.04")}</button>`:''}</div></div>`;
   const byFather=new Map();
   for(const member of members){
     if(!member.father_id)continue;
@@ -706,95 +740,97 @@ V.people = async () => {
   }
   const siblingSets=[...byFather.values()].filter(set=>set.length>1);
   const siblingIds=new Set(siblingSets.flatMap(set=>set.map(member=>member.id)));
-  return `<h1>👥 קאזינס · אדרעסן און טעלעפאנען</h1><div class="cap">יעדער קאזין מיט מאן און ווייב, אדרעס און טעלעפאן. יעדער קען עדיטן זיינע אייגענע פרטים.</div>${seg()}
-  <h2>${members.length} קאזינס אין אפ</h2>
-  ${groups.length>1?`<fieldset class="person-family-picker"><legend>משפחות</legend><div class="person-family-options">${groups.map(g=>`<label><input type="checkbox" name="cousin-family" data-change="cousinfamily" value="${g.id}" ${selected.includes(g.id)?'checked':''}><strong>${esc(g.name)}</strong></label>`).join('')}</div></fieldset>`:''}
-  <div id="memberlist">${siblingSets.map(set=>`<section><h3>${set.every(member=>member.lineage_term==='בן')?'ברידער':'געשוויסטער'} · קינדער פון ${esc(set[0].father_name)}</h3><div class="grid g2">${set.map(memberCard).join('')}</div></section>`).join('')}
-  <div class="grid g2">${members.filter(member=>!siblingIds.has(member.id)).map(memberCard).join('')}</div>${members.length?'':'<p class="muted">נאך קיין מעמבערס אין די אויסגעקליבענע משפחות.</p>'}</div><h2>אדרעס בוך · ${esc(S.family_yi)}</h2>
-  ${hasMine ? '' : `<div class="row" style="background:#eef2ff;border-color:#c7d2fe"><div class="grow"><b>לייג צו דיין משפחה</b><div class="muted">אז די קאזינס זאלן האבן דיין אדרעס און טעלעפאן</div></div><button class="btn s" data-act="editdir" data-id="0" data-mine="1">+ מיין משפחה</button></div>`}
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" type="search" placeholder="🔍 סוירטש נאמען, שטאט, טעלעפאן…" value="${esc(STATE.q)}" style="margin:0;max-width:340px" data-input="q"><span class="muted" id="qn">${L.length} משפחות</span>
-  <a class="btn s l" href="/api/directory.csv" download>⬇ דאונלאוד ליסט (Excel)</a><button class="btn s" data-act="editdir" data-id="0">+ לייג צו</button></div>
+  return `<h1>${htmlWord("directory.people.01")}</h1><div class="cap">${htmlWord("directory.people.02")}</div>${seg()}
+  <h2>${htmlWord("directory.people.03", { length: members.length })}</h2>
+  ${groups.length>1?`<fieldset class="person-family-picker"><legend>${htmlWord("directory.people.10")}</legend><div class="person-family-options">${groups.map(g=>`<label><input type="checkbox" name="cousin-family" data-change="cousinfamily" value="${g.id}" ${selected.includes(g.id)?'checked':''}><strong>${esc(g.name)}</strong></label>`).join('')}</div></fieldset>`:''}
+  <div id="memberlist">${siblingSets.map(set=>`<section><h3>${set.every(member=>member.lineage_term==='בן')?htmlWord("directory.people.12"):htmlWord("directory.people.13")} ${htmlWord("directory.people.11", { father_name: set[0].father_name })}</h3><div class="grid g2">${set.map(memberCard).join('')}</div></section>`).join('')}
+  <div class="grid g2">${members.filter(member=>!siblingIds.has(member.id)).map(memberCard).join('')}</div>${members.length?'':`<p class="muted">${htmlWord("directory.people.14")}</p>`}</div><h2>${htmlWord("directory.people.04", { family: S.family_yi })}</h2>
+  ${hasMine ? '' : `<div class="row" style="background:#eef2ff;border-color:#c7d2fe"><div class="grow"><b>${htmlWord("directory.people.15")}</b><div class="muted">${htmlWord("directory.people.16")}</div></div><button class="btn s" data-act="editdir" data-id="0" data-mine="1">${htmlWord("directory.people.17")}</button></div>`}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" type="search" placeholder="${htmlWord("directory.people.05")}" value="${esc(STATE.q)}" style="margin:0;max-width:340px" data-input="q"><span class="muted" id="qn">${htmlWord("directory.people.06", { length: L.length })}</span>
+  <a class="btn s l" href="/api/directory.csv" download>${htmlWord("directory.people.07")}</a><button class="btn s" data-act="editdir" data-id="0">${htmlWord("directory.people.08")}</button></div>
   <div class="grid g2" id="dirlist">${dirCards(L)}</div>
-  <button class="btn" style="margin-top:14px" data-act="familyinvite">📲 אינווייט א קאזין</button>`;
+  <button class="btn" style="margin-top:14px" data-act="familyinvite">${htmlWord("directory.people.09")}</button>`;
 };
 function dirCards(L) {
   return L.map((d) => `<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow"><b style="font-size:18px">${esc(d.husband)}${d.husband && d.wife ? ' · ' : ''}${esc(d.wife)}</b><div class="muted">${esc(d.parents)}</div></div>${sideTag(d.side)}</div>
-  <div style="margin-top:10px;display:grid;gap:6px"><div>📍 <span dir="auto">${esc(d.address) || '—'}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap">${d.husband ? `<span><span class="muted">מאן:</span> ${tel(d.phone_h)}</span>` : ''}${d.wife ? `<span><span class="muted">ווייב:</span> ${tel(d.phone_w)}</span>` : ''}</div></div>
-  <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">✏️ עדיט</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || '<div class="muted">גארנישט געטראפן</div>';
+  <div style="margin-top:10px;display:grid;gap:6px"><div>📍 <span dir="auto">${esc(d.address) || '—'}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap">${d.husband ? `<span><span class="muted">${htmlWord("directory.dir_cards.01")}</span> ${tel(d.phone_h)}</span>` : ''}${d.wife ? `<span><span class="muted">${htmlWord("directory.dir_cards.02")}</span> ${tel(d.phone_w)}</span>` : ''}</div></div>
+  <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">${htmlWord("directory.dir_cards.03")}</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || `<div class="muted">${htmlWord("directory.dir_cards.04")}</div>`;
 }
 async function dirForm(id, mine) {
   const {people}=await api('/directory-people');
   const d = (STATE.dir || []).find((x) => x.id === id) || { side: mySides()[0], husband: mine ? ME.name : '' };
-  modal(`<h2 style="margin-top:0">${id ? '✏️ עדיט' : mine ? '+ מיין משפחה' : '+ לייג צו א משפחה'}</h2><form data-form="dir" data-id="${id}" data-mine="${mine ? 1 : 0}">
-  <p class="muted">קלייב באזונדערע מענטשן פון פעמילי טרי. זייערע עלטערן און פרטים ווערן גענוצט אין ביידע ערטער.</p>
-  ${field('מאן — מענטש אין בוים',`<select id="dhperson"><option value="">— נאכנישט פארבונדן —</option>${people.map(p=>`<option value="${p.id}" ${d.husband_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
-  ${field('ווייב — מענטש אין בוים',`<select id="dwperson"><option value="">— נאכנישט פארבונדן —</option>${people.map(p=>`<option value="${p.id}" ${d.wife_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
-  <a href="#tree">🌳 לייג צו / עדיט א מענטש אין פעמילי טרי</a>
-  <p class="muted">מען קען אויך אריינשרייבן נעמען אן א פארבינדונג צום בוים.</p>
-  ${field('מאן', `<input id="dh" value="${esc(d.husband)}">`)}${field('ווייב', `<input id="dw" value="${esc(d.wife)}">`)}
-  ${field('וועמענס קינד', `<input id="dp" value="${esc(d.parents)}" placeholder="למשל: זון פון ר׳ משה באכנער">`)}
-  ${field('סייד', `<select id="ds">${sideOptions(d.side)}</select>`)}
-  <h3>אדרעס</h3>${field('גאס און הויז נומער', `<input id="da" dir="auto" autocomplete="address-line1" value="${esc(d.address_line1 ?? d.address)}" placeholder="12 Main St">`)}
-  ${field('דירה / אפארטמענט', `<input id="da2" dir="auto" autocomplete="address-line2" value="${esc(d.address_line2)}" placeholder="Apt 2B">`)}
-  <div class="grid g2"><div>${field('שטאט', `<input id="dcity" dir="auto" autocomplete="address-level2" value="${esc(d.city)}">`)}</div><div>${field('סטעיט / פראווינץ', `<input id="dstate" dir="auto" autocomplete="address-level1" value="${esc(d.state)}">`)}</div></div>
-  <div class="grid g2"><div>${field('זיפ / פאסט קאוד', `<input id="dzip" class="ltr" autocomplete="postal-code" value="${esc(d.postal_code)}">`)}</div><div>${field('לאנד', `<input id="dcountry" dir="auto" autocomplete="country-name" value="${esc(d.country)}">`)}</div></div>
-  <div class="grid g2"><div>${field('טעלעפאן מאן', `<input id="dph" type="tel" class="ltr" value="${esc(d.phone_h)}">`)}</div><div>${field('טעלעפאן ווייב', `<input id="dpw" type="tel" class="ltr" value="${esc(d.phone_w)}">`)}</div></div>
-  <div class="err" id="ferr"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button>${id ? `<button type="button" class="btn r" style="margin-right:auto" data-act="deldir" data-id="${id}">🗑</button>` : ''}</div></form>`);
+  modal(`<h2 style="margin-top:0">${id ? htmlWord("directory.dir_cards.03") : mine ? htmlWord("directory.people.17") : htmlWord("directory.dir_form.07")}</h2><form data-form="dir" data-id="${id}" data-mine="${mine ? 1 : 0}">
+  <p class="muted">${htmlWord("directory.dir_form.01")}</p>
+  ${field(word("directory.dir_form.08"),`<select id="dhperson"><option value="">${htmlWord("directory.dir_form.09")}</option>${people.map(p=>`<option value="${p.id}" ${d.husband_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
+  ${field(word("directory.dir_form.10"),`<select id="dwperson"><option value="">${htmlWord("directory.dir_form.09")}</option>${people.map(p=>`<option value="${p.id}" ${d.wife_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
+  <a href="#tree">${htmlWord("directory.dir_form.02")}</a>
+  <p class="muted">${htmlWord("directory.dir_form.03")}</p>
+  ${field(word("directory.dir_form.11"), `<input id="dh" value="${esc(d.husband)}">`)}${field(word("directory.dir_form.12"), `<input id="dw" value="${esc(d.wife)}">`)}
+  ${field(word("directory.dir_form.13"), `<input id="dp" value="${esc(d.parents)}" placeholder="${htmlWord("directory.dir_form.14")}">`)}
+  ${field(word("directory.dir_form.15"), `<select id="ds">${sideOptions(d.side)}</select>`)}
+  <h3>${htmlWord("directory.dir_form.04")}</h3>${field(word("directory.dir_form.16"), `<input id="da" dir="auto" autocomplete="address-line1" value="${esc(d.address_line1 ?? d.address)}" placeholder="12 Main St">`)}
+  ${field(word("directory.dir_form.17"), `<input id="da2" dir="auto" autocomplete="address-line2" value="${esc(d.address_line2)}" placeholder="Apt 2B">`)}
+  <div class="grid g2"><div>${field(word("directory.dir_form.18"), `<input id="dcity" dir="auto" autocomplete="address-level2" value="${esc(d.city)}">`)}</div><div>${field(word("directory.dir_form.19"), `<input id="dstate" dir="auto" autocomplete="address-level1" value="${esc(d.state)}">`)}</div></div>
+  <div class="grid g2"><div>${field(word("directory.dir_form.20"), `<input id="dzip" class="ltr" autocomplete="postal-code" value="${esc(d.postal_code)}">`)}</div><div>${field(word("directory.dir_form.21"), `<input id="dcountry" dir="auto" autocomplete="country-name" value="${esc(d.country)}">`)}</div></div>
+  <div class="grid g2"><div>${field(word("directory.dir_form.22"), `<input id="dph" type="tel" class="ltr" value="${esc(d.phone_h)}">`)}</div><div>${field(word("directory.dir_form.23"), `<input id="dpw" type="tel" class="ltr" value="${esc(d.phone_w)}">`)}</div></div>
+  <div class="err" id="ferr"></div><div class="btns"><button class="btn">${htmlWord("directory.dir_form.05")}</button><button type="button" class="btn l" data-act="close">${htmlWord("directory.dir_form.06")}</button>${id ? `<button type="button" class="btn r" style="margin-right:auto" data-act="deldir" data-id="${id}">🗑</button>` : ''}</div></form>`);
 }
 
 async function assignFamilies(id,selected) {
   const u=STATE.users.find(u=>u.id===id);if(!u)return;
   const {groups}=await api('/admin/family-groups');STATE.groups=groups;
   const chosen=selected||(u.family_group_ids||[]).filter(id=>groups.some(g=>g.id===id));
-  modal(`<h2>בחר משפחות — ${esc(u.name)}</h2><p>קלייב איינס ביז פיר משפחות. דער מעמבער קען זען נאר די צוגעטיילטע משפחות. דאס מאכט נישט קיין קאפיעס פון מענטשן.</p>
-  ${!groups.length?'<p role="status">נאך נישטא קיין משפחות. מאך די ערשטע משפחה אונטן.</p>':''}
-  <form data-form="memberships" data-id="${id}"><fieldset><legend>משפחות <span id="membershipcount">${chosen.length} / 4</span></legend>
-  ${groups.map(g=>`<label style="display:flex;align-items:center;gap:12px;min-height:48px"><input type="checkbox" name="membership" data-change="membershippick" value="${g.id}" ${chosen.includes(g.id)?'checked':chosen.length>=4?'disabled':''}>${esc(g.name)}${g.id===u.family_group_id?' (הויפט משפחה)':''}</label>`).join('')}</fieldset>
-  <div class="err" role="alert"></div><div class="btns"><button class="btn" ${groups.length?'':'disabled'}>סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>
-  <hr><label for="assignnewgroup">פעלט א משפחה? מאך א נייע</label><input id="assignnewgroup" maxlength="120"><button type="button" class="btn l" data-act="createassigngroup" data-id="${id}">מאך משפחה</button>`);
+  modal(`<h2>${htmlWord("directory.assign_families.01", { name: u.name })}</h2><p>${htmlWord("directory.assign_families.02")}</p>
+  ${!groups.length?`<p role="status">${htmlWord("directory.assign_families.05")}</p>`:''}
+  <form data-form="memberships" data-id="${id}"><fieldset><legend>${htmlWord("directory.people.10")} <span id="membershipcount">${chosen.length} / 4</span></legend>
+  ${groups.map(g=>`<label style="display:flex;align-items:center;gap:12px;min-height:48px"><input type="checkbox" name="membership" data-change="membershippick" value="${g.id}" ${chosen.includes(g.id)?'checked':chosen.length>=4?'disabled':''}>${esc(g.name)}${g.id===u.family_group_id?` ${htmlWord("directory.assign_families.06")}`:''}</label>`).join('')}</fieldset>
+  <div class="err" role="alert"></div><div class="btns"><button class="btn" ${groups.length?'':'disabled'}>${htmlWord("directory.dir_form.05")}</button><button type="button" class="btn l" data-act="close">${htmlWord("directory.dir_form.06")}</button></div></form>
+  <hr><label for="assignnewgroup">${htmlWord("directory.assign_families.03")}</label><input id="assignnewgroup" maxlength="120"><button type="button" class="btn l" data-act="createassigngroup" data-id="${id}">${htmlWord("directory.assign_families.04")}</button>`);
 }
 
 // admin
 V.admin = async () => {
-  if (!managesAccounts()) return '<div class="muted">נאר פאר אדמין</div>';
+  if (!managesAccounts()) return `<div class="muted">${htmlWord("admin.01")}</div>`;
   const {groups}=await api('/admin/family-groups'); STATE.groups=groups;
-  const options=(id)=>'<option value="">— קלייב א משפחה —</option>'+groups.map(g=>`<option value="${g.id}" ${g.id===id?'selected':''}>${esc(g.name)}</option>`).join('');
+  const options=(id)=>`<option value="">${htmlWord("admin.options.01")}</option>`+groups.map(g=>`<option value="${g.id}" ${g.id===id?'selected':''}>${esc(g.name)}</option>`).join('');
   const { users, owner_phone } = await api('/admin/users'); STATE.users = users; PENDING = users.filter((u) => u.status === 'pending').length;
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
-  const sidesBox = (u) => !ME.is_admin&&(u.family_group_ids||[]).length>1?'<span class="muted">מערערע משפחות — נאר דער הויפט אדמין קען עדיטן</span>':['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
-  return `<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>🛡️ אדמין</h1><div class="cap">אפרובירן נייע קאזינס, טוישן סייד, מאכן אנדערע אדמין.</div>
-  ${ME.is_admin?`<section class="card"><h2>משפחה צוטריט</h2>${groups.length?field('משפחה וואס דו קוקסט',`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):'<p role="status">נאך נישטא קיין צוטריט משפחות. מאך קודם די משפחות אונטן, דערנאך קלייב ביי יעדן מעמבער איינס ביז פיר משפחות.</p>'}<form data-form="newgroup">${field('מאך א נייע משפחה','<input id="groupname" maxlength="120" required>')}<button class="btn">מאך משפחה</button></form><button class="btn l" data-act="unassigned">צוטיילן אלטע רעקארדס</button></section>`:''}
-  <form class="card" data-form="renamegroup">${field('עדיט משפחה נאמען',`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="דער ריכטיגער משפחה נאמען" required>`)}<button class="btn">סעיוו משפחה נאמען</button><div class="err"></div></form>
-  <h2>🔑 פאסווארט בקשות (${resets.length})</h2><p class="muted">באשטעטיג ווער דער מענטש איז איידער דו שיקסט א לינק. דער לינק איז איינמאליג און גוט פאר איין שעה.</p>
-  ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>🔑 מאך א לינק</button></div>`).join('') || '<div class="muted">נאך קיין בקשות.</div>'}
-  <h2>⏳ ווארטן אויף אפרוביישן (${pend.length})</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div></div>
-   <div class="btns">${ME.is_admin?`<button class="btn s l" data-act="assignfamilies" data-id="${u.id}">בחר משפחות (ביז 4)</button>`:''}<button class="btn s g" data-act="approve" data-id="${u.id}">✓ אפרובירן</button><button class="btn s r" data-act="reject" data-id="${u.id}">✗ אפזאגן</button></div></div>`).join('') || '<div class="muted">קיינער ווארט נישט.</div>'}
-  <h2>👥 אלע מעמבערס (${rest.length})</h2>${ME.is_admin?'<p>געפין דעם מעמבער, דריק <b>בחר משפחות</b>, צייכן אן ביז פיר משפחות און סעיוו. דער מעמבער קען דערנאך טוישן צווישן די צוגעטיילטע משפחות אויבן אין דער אפ.</p>':''}<table class="t resp"><thead><tr><th>נאמען</th><th>טעלעפאן</th><th>סייד</th><th>סטאטוס</th><th></th></tr></thead><tbody>
-  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ' <span class="tag y">הויפט אדמין</span>' : u.is_family_admin?' <span class="tag y">משפחה אדמין</span>':''}${u.has_password ? '' : ' <span class="tag">נאך קיין פאסווארט</span>'}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<div>${groups.filter(g=>(u.family_group_ids||[]).includes(g.id)).map(g=>`<span class="tag g">${esc(g.name)}</span>`).join(' ')||'<span class="tag">נאך נישט צוגעטיילט</span>'}</div><button class="btn s l" data-act="assignfamilies" data-id="${u.id}">בחר משפחות (ביז 4)</button>`:''}</td>
-   <td>${u.status === 'active' ? '<span class="tag g">אקטיוו</span>' : '<span class="tag b">אפגעזאגט</span>'}</td>
-   <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">אפרובירן</button>` : ''}
-   ${ME.is_admin && u.status==='active' && !u.is_admin && groups.some(g=>g.id===u.family_group_id)?`<button class="btn s l" data-act="actas" data-id="${u.id}">אריין אלס מעמבער</button>`:''}
-   ${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s l" data-act="mkadmin" data-id="${u.id}" data-v="${u.is_admin ? 0 : 1}">${u.is_admin ? 'נעם אוועק אדמין' : 'מאך אדמין'}</button>` : ''}
-   ${!u.is_admin&&u.id!==ME.id&&(ME.is_admin||(u.family_group_ids||[]).length===1)?`<button class="btn s l" data-act="familyadmin" data-id="${u.id}" data-v="${u.is_family_admin?'0':'1'}">${u.is_family_admin?'נעם אוועק משפחה אדמין':'מאך משפחה אדמין'}</button>`:''}
-   <button class="btn s l" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>🔑 פאסווארט לינק</button>${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s r" data-act="deluser" data-id="${u.id}">🗑</button>` : ''}</div></td></tr>`).join('')}</tbody></table>
-  ${ME.is_admin?`<h2>⚙️ משפחה נעמען</h2><form data-form="settings" class="card">
-  ${field('נאמען פון דער אפ (אידיש)', `<input id="st_family_yi" value="${esc(S.family_yi)}">`)}${field('Name (English)', `<input id="st_family_en" class="ltr" value="${esc(S.family_en)}">`)}
-  <div class="grid g2"><div>${field('סייד א (אידיש)', `<input id="st_side_a_yi" value="${esc(S.side_a_yi)}">`)}${field('משפחה נאמען', `<input id="st_side_a_family_yi" value="${esc(S.side_a_family_yi)}">`)}${field('Side A (English)', `<input id="st_side_a_en" class="ltr" value="${esc(S.side_a_en)}">`)}${field('Family name (English)', `<input id="st_side_a_family_en" class="ltr" value="${esc(S.side_a_family_en)}">`)}</div>
-  <div>${field('סייד ב (אידיש)', `<input id="st_side_b_yi" value="${esc(S.side_b_yi)}">`)}${field('משפחה נאמען', `<input id="st_side_b_family_yi" value="${esc(S.side_b_family_yi)}">`)}${field('Side B (English)', `<input id="st_side_b_en" class="ltr" value="${esc(S.side_b_en)}">`)}${field('Family name (English)', `<input id="st_side_b_family_en" class="ltr" value="${esc(S.side_b_family_en)}">`)}</div></div>
-  <div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>`:''}`;
+  const sidesBox = (u) => !ME.is_admin&&(u.family_group_ids||[]).length>1?`<span class="muted">${htmlWord("admin.sides_box.01")}</span>`:['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
+  return `<a class="btn l" href="#personreviews">${htmlWord("admin.02")}</a><h1>${htmlWord("admin.03")}</h1><div class="cap">${htmlWord("admin.04")}</div>
+  ${ME.is_admin?`<section class="card"><h2>${htmlWord("admin.14")}</h2>${groups.length?field(word("admin.17"),`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):`<p role="status">${htmlWord("admin.18")}</p>`}<form data-form="newgroup">${field(word("admin.19"),'<input id="groupname" maxlength="120" required>')}<button class="btn">${htmlWord("admin.15")}</button></form><button class="btn l" data-act="unassigned">${htmlWord("admin.16")}</button></section>`:''}
+  <form class="card" data-form="renamegroup">${field(word("admin.20"),`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="${htmlWord("admin.21")}" required>`)}<button class="btn">${htmlWord("admin.05")}</button><div class="err"></div></form>
+  <h2>${htmlWord("admin.06", { length: resets.length })}</h2><p class="muted">${htmlWord("admin.07")}</p>
+  ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>${htmlWord("admin.22")}</button></div>`).join('') || `<div class="muted">${htmlWord("admin.23")}</div>`}
+  <h2>${htmlWord("admin.08", { length: pend.length })}</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div></div>
+   <div class="btns">${ME.is_admin?`<button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.24")}</button><button class="btn s r" data-act="reject" data-id="${u.id}">${htmlWord("admin.25")}</button></div></div>`).join('') || `<div class="muted">${htmlWord("admin.27")}</div>`}
+  <h2>${htmlWord("admin.09", { length: rest.length })}</h2>${ME.is_admin?`<p>${htmlWord("admin.28")} <b>${htmlWord("admin.29")}</b>${htmlWord("admin.30")}</p>`:''}<table class="t resp"><thead><tr><th>${htmlWord("admin.10")}</th><th>${htmlWord("admin.11")}</th><th>${htmlWord("admin.12")}</th><th>${htmlWord("admin.13")}</th><th></th></tr></thead><tbody>
+  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ` <span class="tag y">${htmlWord("admin.32")}</span>` : u.is_family_admin?` <span class="tag y">${htmlWord("admin.33")}</span>`:''}${u.has_password ? '' : ` <span class="tag">${htmlWord("admin.34")}</span>`}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<div>${groups.filter(g=>(u.family_group_ids||[]).includes(g.id)).map(g=>`<span class="tag g">${esc(g.name)}</span>`).join(' ')||`<span class="tag">${htmlWord("admin.35")}</span>`}</div><button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}</td>
+   <td>${u.status === 'active' ? `<span class="tag g">${htmlWord("admin.36")}</span>` : `<span class="tag b">${htmlWord("admin.37")}</span>`}</td>
+   <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.38")}</button>` : ''}
+   ${ME.is_admin && u.status==='active' && !u.is_admin && groups.some(g=>g.id===u.family_group_id)?`<button class="btn s l" data-act="actas" data-id="${u.id}">${htmlWord("admin.39")}</button>`:''}
+   ${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s l" data-act="mkadmin" data-id="${u.id}" data-v="${u.is_admin ? 0 : 1}">${u.is_admin ? htmlWord("admin.40") : htmlWord("admin.41")}</button>` : ''}
+   ${!u.is_admin&&u.id!==ME.id&&(ME.is_admin||(u.family_group_ids||[]).length===1)?`<button class="btn s l" data-act="familyadmin" data-id="${u.id}" data-v="${u.is_family_admin?'0':'1'}">${u.is_family_admin?htmlWord("admin.42"):htmlWord("admin.43")}</button>`:''}
+   <button class="btn s l" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>${htmlWord("admin.31")}</button>${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s r" data-act="deluser" data-id="${u.id}">🗑</button>` : ''}</div></td></tr>`).join('')}</tbody></table>
+  ${ME.is_admin?`<h2>${htmlWord("admin.44")}</h2><form data-form="settings" class="card">
+  ${field(word("admin.46"), `<input id="st_family_yi" value="${esc(S.family_yi)}">`)}${field('Name (English)', `<input id="st_family_en" class="ltr" value="${esc(S.family_en)}">`)}
+  <div class="grid g2"><div>${field(word("admin.47"), `<input id="st_side_a_yi" value="${esc(S.side_a_yi)}">`)}${field(word("admin.48"), `<input id="st_side_a_family_yi" value="${esc(S.side_a_family_yi)}">`)}${field('Side A (English)', `<input id="st_side_a_en" class="ltr" value="${esc(S.side_a_en)}">`)}${field('Family name (English)', `<input id="st_side_a_family_en" class="ltr" value="${esc(S.side_a_family_en)}">`)}</div>
+  <div>${field(word("admin.49"), `<input id="st_side_b_yi" value="${esc(S.side_b_yi)}">`)}${field(word("admin.48"), `<input id="st_side_b_family_yi" value="${esc(S.side_b_family_yi)}">`)}${field('Side B (English)', `<input id="st_side_b_en" class="ltr" value="${esc(S.side_b_en)}">`)}${field('Family name (English)', `<input id="st_side_b_family_en" class="ltr" value="${esc(S.side_b_family_en)}">`)}</div></div>
+  <div class="err" id="ferr"></div><button class="btn">${htmlWord("admin.45")}</button></form>`:''}`;
 };
-V.me = async () => ME.acting?`<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>👤 מיין אקאונט</h1><section class="card"><strong>${esc(ME.name)}</strong><p dir="auto">${esc(ME.email||'')}</p></section>`:`<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>👤 מיין אקאונט</h1><div class="cap">${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ' · אדמין' : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
-  <form data-form="me" class="card" style="margin-bottom:14px">${field('נאמען', `<input id="mn" value="${esc(ME.name)}">`)}${field('אימעיל (נישט מוז)', `<input id="mem" type="email" class="ltr" value="${esc(ME.email || '')}">`)}<div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>
-  <section class="card" style="margin-bottom:14px"><h2>אימעיל פאר פאסווארט הילף</h2>${ME.email_verified ? '<p role="status">✓ דיין אימעיל איז באשטעטיגט. דו קענסט באקומען א פאסווארט לינק אויף אימעיל.</p>' : !EMAIL_READY ? '<p class="muted">אימעיל איז נאך נישט פארבונדן. דער אדמין קען דערווייל העלפן מיט א פאסווארט לינק.</p>' : !ME.email ? '<p class="muted">סעיוו קודם דיין אימעיל אדרעס אויבן, און באשטעטיג עס דא.</p>' : `<p class="muted">באשטעטיג דיין געסעיווטן אימעיל: <span dir="ltr">${esc(ME.email)}</span></p><form data-form="emailverifyrequest">${field('פאסווארט פאר אימעיל באשטעטיגונג', '<input id="emailverifypw" type="password" autocomplete="current-password" required>')}<div class="err" role="alert"></div><div id="emailverifystatus" role="status"></div><button class="btn">שיק א באשטעטיגונג אימעיל</button></form>`}</section>
-  <section class="card" style="margin-bottom:14px"><h2>📖 טעגליכע לימוד דערמאנונגען</h2><p>באקום יעדן טאג אן אימעיל מיט'ן טעקסט פון דיינע חלקים משניות אדער תהילים. מען טיילט די חלקים לויט די טעג ביזן ענד דאטום. אן א דאטום שיקט מען אלע איבעריגע חלקים.</p><p class="muted">מען שיקט אינדערפרי לויט דער משפחה צייטזאנע. צייכן אפ וואס דו האסט געענדיגט אין דער ליסט.</p><button class="btn" data-act="learningreminders" ${!ME.learning_email_reminders && (!EMAIL_READY || !ME.email_verified) ? 'disabled' : ''}>${ME.learning_email_reminders ? 'אויסלעשן טעגליכע אימעילס' : 'איינשאלטן טעגליכע אימעילס'}</button><p role="status">${ME.learning_email_reminders ? '✓ טעגליכע אימעילס זענען איינגעשאלטן' : 'טעגליכע אימעילס זענען אויסגעלאשן'}${!ME.email_verified ? ' · באשטעטיג קודם דיין אימעיל אויבן' : ''}</p></section>
-  <form data-form="myphone" class="card" style="margin-bottom:14px"><h2>טויש טעלעפאן נומער</h2><p class="muted">דאס איז דער נומער צו לאג אין. פאר אן אויסלענדישן נומער, לייג צו דעם לאנד קאוד.</p>${field('טעלעפאן נומער', `<input id="mphone" type="tel" class="ltr" autocomplete="tel" value="+${esc(ME.phone)}" required>`)}${field('יעצטיגע פאסווארט', '<input id="mphonepw" type="password" autocomplete="current-password" required>')}<div class="err" id="phoneerr"></div><button class="btn">סעיוו טעלעפאן נומער</button></form>
-  <form data-form="mypw" class="card">${field('אלטע פאסווארט', '<input id="mo" type="password" autocomplete="current-password">')}${field('נייע פאסווארט', '<input id="mp" type="password" autocomplete="new-password" placeholder="כאטש 6 אותיות">')}<div class="err" id="ferr2"></div><button class="btn">טויש פאסווארט</button></form>
-  <div class="muted" style="margin-top:12px">צו טוישן דיין סייד, רעד מיט דעם אדמין.</div><button class="btn l" style="margin-top:14px" data-act="logout">↩ לאג אאוט</button>`;
+V.me = async () => ME.acting?`<a class="btn l" href="#personreviews">${htmlWord("account.me.01")}</a><h1>${htmlWord("account.me.02")}</h1><section class="card"><strong>${esc(ME.name)}</strong><p dir="auto">${esc(ME.email||'')}</p></section>`:`<a class="btn l" href="#personreviews">${htmlWord("account.me.01")}</a><h1>${htmlWord("account.me.02")}</h1><div class="cap">${both() ? htmlWord("account.me.14") : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ` ${htmlWord("account.me.15")}` : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
+  <form data-form="me" class="card" style="margin-bottom:14px">${field(word("account.me.16"), `<input id="mn" value="${esc(ME.name)}">`)}${field(word("account.me.17"), `<input id="mem" type="email" class="ltr" value="${esc(ME.email || '')}">`)}<div class="err" id="ferr"></div><button class="btn">${htmlWord("account.me.03")}</button></form>
+  <section class="card" style="margin-bottom:14px"><h2>${htmlWord("account.me.04")}</h2>${ME.email_verified ? `<p role="status">${htmlWord("account.me.18")}</p>` : !EMAIL_READY ? `<p class="muted">${htmlWord("account.me.19")}</p>` : !ME.email ? `<p class="muted">${htmlWord("account.me.20")}</p>` : `<p class="muted">${htmlWord("account.me.21")} <span dir="ltr">${esc(ME.email)}</span></p><form data-form="emailverifyrequest">${field(word("account.me.23"), '<input id="emailverifypw" type="password" autocomplete="current-password" required>')}<div class="err" role="alert"></div><div id="emailverifystatus" role="status"></div><button class="btn">${htmlWord("account.me.22")}</button></form>`}</section>
+  <section class="card" style="margin-bottom:14px"><h2>${htmlWord("account.me.05")}</h2><p>${htmlWord("account.me.06")}</p><p class="muted">${htmlWord("account.me.07")}</p><button class="btn" data-act="learningreminders" ${!ME.learning_email_reminders && (!EMAIL_READY || !ME.email_verified) ? 'disabled' : ''}>${ME.learning_email_reminders ? htmlWord("account.me.24") : htmlWord("account.me.25")}</button><p role="status">${ME.learning_email_reminders ? htmlWord("account.me.26") : htmlWord("account.me.27")}${!ME.email_verified ? ` ${htmlWord("account.me.28")}` : ''}</p></section>
+  <form data-form="myphone" class="card" style="margin-bottom:14px"><h2>${htmlWord("account.me.08")}</h2><p class="muted">${htmlWord("account.me.09")}</p>${field(word("account.login.06"), `<input id="mphone" type="tel" class="ltr" autocomplete="tel" value="+${esc(ME.phone)}" required>`)}${field(word("account.me.29"), '<input id="mphonepw" type="password" autocomplete="current-password" required>')}<div class="err" id="phoneerr"></div><button class="btn">${htmlWord("account.me.10")}</button></form>
+  <form data-form="mypw" class="card">${field(word("account.me.30"), '<input id="mo" type="password" autocomplete="current-password">')}${field(word("account.setpw.05"), `<input id="mp" type="password" autocomplete="new-password" placeholder="${htmlWord("account.login.08")}">`)}<div class="err" id="ferr2"></div><button class="btn">${htmlWord("account.me.11")}</button></form>
+  <div class="muted" style="margin-top:12px">${htmlWord("account.me.12")}</div><button class="btn l" style="margin-top:14px" data-act="logout">${htmlWord("account.me.13")}</button>`;
 
 // ---------- router ----------
 const curView = () => ((location.hash || '#').slice(1).split('/')[0] || 'home');
 let RENDER = 0;
 async function go() {
+  wordingNeedsRender = false;
+  editingMainForm = false;
   const h = (location.hash || '').slice(1);
   const familyLink=/^(?:sim|learn)\/\d+\/\d+$/.test(h);
   if(!ME && STATE.canStopActing){stopPoll();clearChrome();$('m').innerHTML=`<div class="login">${actingBanner()}</div>`;return;}
@@ -810,15 +846,15 @@ async function go() {
       STATE.joinSides = invitation.sides; STATE.joinFamily=invitation.family_name;
       if (ME?.status==='active' && STATE.joinNext) {location.hash=STATE.joinNext;return;}
       if (ME) {
-        $('m').innerHTML = `<div class="login"><h1>🌳 משפחה אינוויטעישן</h1><p>איינגעלאדנט צו: ${invitation.sides.map(c => esc(sideLong(c))).join(' + ')}</p><p>דו ביסט שוין איינגעשריבן אלס ${esc(ME.name)}. צו טוישן דיין סייד, רעד מיט דעם אדמין.</p><a class="btn" href="#home">צוריק צו מיין אקאונט</a></div>`;
+        $('m').innerHTML = `<div class="login"><h1>${htmlWord("account.go.01")}</h1><p>${htmlWord("account.go.02")} ${invitation.sides.map(c => esc(sideLong(c))).join(' + ')}</p><p>${htmlWord("account.go.03", { name: ME.name })}</p><a class="btn" href="#home">${htmlWord("account.go.04")}</a></div>`;
       } else $('m').innerHTML = V.login();
-    } catch (e) { if (location.hash === '#'+h) $('m').innerHTML = `<div class="login"><h1>אינוויטעישן</h1><p role="alert">${esc(e.message)}</p><a class="btn" href="#home">צוריק</a></div>`; }
+    } catch (e) { if (location.hash === '#'+h) $('m').innerHTML = `<div class="login"><h1>${htmlWord("account.go.05")}</h1><p role="alert">${esc(e.message)}</p><a class="btn" href="#home">${htmlWord("account.go.06")}</a></div>`; }
     return;
   }
   STATE.joinToken = null; STATE.joinSides = null; STATE.joinFamily=null; STATE.joinNext = null;
   if (h.startsWith('verifyemail=')) { stopPoll(); clearChrome(); STATE.verifyEmailToken = h.slice(12); $('m').innerHTML = V.verifyemail(); return; }
-  if (h === 'emailverified') { stopPoll(); clearChrome(); $('m').innerHTML = `<div class="login"><h1>✓ אימעיל באשטעטיגט</h1><p>דו קענסט יעצט באקומען א פאסווארט לינק אויף דיין אימעיל.</p><a class="btn" href="${ME ? '#me' : '#home'}">${ME ? 'מיין אקאונט' : 'לאג אין'}</a></div>`; return; }
-  if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); const token = STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(token)).then((r) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = 'שלום ' + r.name + '!'; $('setpwsubmit').disabled = false; }).catch((e) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = ''; $('ferr').textContent = e.message; }); return; }
+  if (h === 'emailverified') { stopPoll(); clearChrome(); $('m').innerHTML = `<div class="login"><h1>${htmlWord("account.go.07")}</h1><p>${htmlWord("account.go.08")}</p><a class="btn" href="${ME ? '#me' : '#home'}">${ME ? htmlWord("account.go.09") : htmlWord("account.login.02")}</a></div>`; return; }
+  if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); const token = STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(token)).then((r) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = `${word("account.go.10")} ` + r.name + '!'; $('setpwsubmit').disabled = false; }).catch((e) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = ''; $('ferr').textContent = e.message; }); return; }
   if (h === 'forgotpw') { stopPoll(); clearChrome(); $('m').innerHTML = V.forgotpw(); return; }
   if (!ME) { if(familyLink)STATE.loginNext='#'+h; stopPoll(); clearChrome(); $('m').innerHTML = V.login(); return; }
   if (ME.status !== 'active') { stopPoll(); clearChrome(); $('m').innerHTML = V.pending(); return; }
@@ -829,20 +865,20 @@ async function go() {
   renderNav(view);
   const my = ++RENDER;
   try { const html = await V[view](arg); if (my !== RENDER) return; const keep = STATE.keepScroll; $('m').innerHTML = html; if (!keep) window.scrollTo(0, 0); STATE.keepScroll = false; renderNav(view); observeFamilyTree(); }
-  catch (e) { if (my === RENDER) { if (e.status === 401 || e.status === 403) { await loadMe(); if (!ME || ME.status !== 'active') return go(); } $('m').innerHTML = `<div class="empty"><div class="e">⚠️</div>${esc(e.message)}<div style="margin-top:10px"><button class="btn s" data-act="reload">פרוביר נאכאמאל</button></div></div>`; } }
+  catch (e) { if (my === RENDER) { if (e.status === 401 || e.status === 403) { await loadMe(); if (!ME || ME.status !== 'active') return go(); } $('m').innerHTML = `<div class="empty"><div class="e">⚠️</div>${esc(e.message)}<div style="margin-top:10px"><button class="btn s" data-act="reload">${htmlWord("account.go.11")}</button></div></div>`; } }
 }
 const refresh = () => { STATE.keepScroll = true; return go(); };
 function clearChrome() { $('m').classList.remove('tree-workspace'); $('nav').innerHTML = ''; $('tabs').innerHTML = ''; $('top').innerHTML = ''; }
-async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStopActing=!!r.can_stop_acting; EMAIL_READY = !!r.email_enabled; S = r.settings || {}; document.title = S.family_yi || 'משפחה'; }
+async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStopActing=!!r.can_stop_acting; EMAIL_READY = !!r.email_enabled; S = r.settings || {}; document.title = S.family_yi || word("account.load_me.01"); }
 
 // ---------- actions ----------
 const ACT = {
   linkcousin:async el=>{
     const id=Number(el.dataset.id),profile=await api(`/admin/users/${id}/tree-profile`);
-    const options=profile.people.map(p=>`<option value="${p.id}" ${p.id===profile.person_id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.father_name?' · טאטע: '+esc(p.father_name):''}</option>`).join('');
-    modal(`<h2>פארבינד ${esc(profile.name)} צום בוים</h2><form data-form="cousinprofile" data-id="${id}">
-      ${field('פראפיל אין פעמילי טרי',`<select id="cousinperson"><option value="">— קלייב אויס —</option>${options}</select>`)}
-      <div class="err" role="alert"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">צומאכן</button></div></form>`);
+    const options=profile.people.map(p=>`<option value="${p.id}" ${p.id===profile.person_id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.father_name?` ${htmlWord("shared.linkcousin.01")} `+esc(p.father_name):''}</option>`).join('');
+    modal(`<h2>${htmlWord("shared.linkcousin.02", { name: profile.name })}</h2><form data-form="cousinprofile" data-id="${id}">
+      ${field(word("shared.linkcousin.05"),`<select id="cousinperson"><option value="">${htmlWord("shared.linkcousin.06")}</option>${options}</select>`)}
+      <div class="err" role="alert"></div><div class="btns"><button class="btn">${htmlWord("shared.linkcousin.03")}</button><button type="button" class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button></div></form>`);
   },
   actas:async el=>{
     el.disabled=true;
@@ -863,20 +899,20 @@ const ACT = {
     select.value=String(id);$('new_'+field).hidden=true;
   },
   reviewperson:async el=>{
-    if(!confirm(el.dataset.v==='approve'?'אפרובירן אלס א באזונדערן מענטש?':'באשטעטיגן די החלטה?'))return;
+    if(!confirm(el.dataset.v==='approve'?word("shared.reviewperson.01"):word("shared.reviewperson.02")))return;
     await api('/person-reviews/'+el.dataset.id+'/resolve',{method:'POST',body:{action:el.dataset.v,existing_person_id:el.dataset.person?Number(el.dataset.person):undefined}});refresh();
   },
   familyadmin:async el=>{await api('/admin/users/'+el.dataset.id,{method:'PATCH',body:{is_family_admin:el.dataset.v==='1'}});refresh();},
   recoverypreview:async f=>{
     const label_groups=Object.fromEntries([...f.querySelectorAll('[data-recovery-label]')].map(e=>[e.dataset.recoveryLabel,Number(e.value)]));
     const plan=await api('/admin/recover-tree/preview',{method:'POST',body:{label_groups}});STATE.recovery={label_groups,token:plan.token};
-    modal(`<h2>איבערקוקן דעם אריגינעלן בוים</h2><p>${plan.people.length} עקזיסטירנדיקע מענטשן. די זעלבע רעקארדס און פארבינדונגען בלייבן; מען מאכט נישט קיין קאפיעס. טשעט, אדרעסן און שמחות ווערן נישט געטוישט.</p>${plan.people.map(p=>`<p><b>#${p.id} ${esc(p.name)}</b><br>${p.group_ids.map(id=>esc(plan.groups.find(g=>g.id===id).name)).join(' · ')}${p.inherited?' (לויט ביידע עלטערן)':''}</p>`).join('')}${plan.unknown.length?'<p class="err">עטליכע מענטשן האבן נאך נישט קיין זיכערע משפחה צוטיילונג.</p>':'<button class="btn" data-act="recoverconfirm">שטעל צוריק דעם עקזיסטירנדיקן בוים</button>'}<button class="btn l" data-act="close">קענסל</button>`,true);
+    modal(`<h2>${htmlWord("shared.recoverypreview.01")}</h2><p>${htmlWord("shared.recoverypreview.02", { length: plan.people.length })}</p>${plan.people.map(p=>`<p><b>#${p.id} ${esc(p.name)}</b><br>${p.group_ids.map(id=>esc(plan.groups.find(g=>g.id===id).name)).join(' · ')}${p.inherited?` ${htmlWord("shared.recoverypreview.04")}`:''}</p>`).join('')}${plan.unknown.length?`<p class="err">${htmlWord("shared.recoverypreview.05")}</p>`:`<button class="btn" data-act="recoverconfirm">${htmlWord("shared.recoverypreview.06")}</button>`}<button class="btn l" data-act="close">${htmlWord("shared.recoverypreview.03")}</button>`,true);
   },
-  recoverconfirm:async()=>{const r=await api('/admin/recover-tree',{method:'POST',body:STATE.recovery});closeModal();toast(`${r.people} מענטשן צוריקגעשטעלט`);location.hash='#tree';},
+  recoverconfirm:async()=>{const r=await api('/admin/recover-tree',{method:'POST',body:STATE.recovery});closeModal();toast(word("shared.recoverconfirm.01", { people: r.people }));location.hash='#tree';},
   unassigned:async()=>{
     const {records}=await api('/admin/unassigned-records');
-    const names={people:'מענטשן',yahrzeits:'יארצייטן',learn_lists:'לערנען',directory:'אדרעסן',simchas:'שמחות',files:'פיילס',messages:'מעסעדזשעס',families:'משפחה נעמען'};
-    modal(`<h2>צוטיילן אלטע רעקארדס</h2>${records.people.length?`<form data-form="recoverypreview" class="card"><h3>שטעל צוריק דעם אריגינעלן בוים</h3><p>פארבינד יעדן אלטן משפחה נאמען מיט דער ריכטיגער משפחה. דערנאך זעסטו א קלארן איבערבליק איידער מען סעיווט.</p>${records.families.map(f=>field(esc(f.label),`<select required data-recovery-label="${f.id}"><option value="">— קלייב א משפחה —</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)).join('')}<div class="err"></div><button class="btn">ווייז די צוטיילונג</button></form>`:''}<p>די רעקארדס זענען פארבארגן ביז מען טיילט זיי צו. קלייב בלויז רעקארדס פון איין משפחה, מיט זייערע פארבינדונגען. קיין רעקארד ווערט נישט אויסגעמעקט.</p><form data-form="assignrecords">${field('משפחה',`<select id="assigngroup" required><option value="">—</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)}${Object.entries(records).map(([table,rows])=>`<details><summary>${names[table]} (${rows.length}${rows.length===500?'+':''})</summary>${rows.map(r=>`<label style="display:block"><input type="checkbox" name="assignrecord" data-table="${table}" value="${esc(r.id)}"> #${esc(r.id)} ${esc(r.label)}${table==='people'?`<small style="display:block;padding-inline-start:28px;font-weight:normal">${[['טאטע',r.father_name,r.father_id],['מאמע',r.mother_name,r.mother_id],['פארבונדן צו',r.parent_name,r.parent_id],['זיווג ראשון',r.spouse_name,r.spouse_id],['זיווג שני',r.second_spouse_name,r.second_spouse_id]].filter(x=>x[2]).map(x=>`${esc(x[0])}: ${esc(x[1]||'—')} (#${esc(x[2])})`).join(' · ')}${r.families?.length?'<br>משפחה נעמען: '+r.families.map(f=>esc(f.name)+' (#'+esc(f.id)+')').join(', '):''}</small>`:''}</label>`).join('')}</details>`).join('')}<div class="err"></div><button class="btn">באשטעטיג צוטיילונג</button></form>`,true);
+    const names={people:word("shared.unassigned.01"),yahrzeits:word("shared.unassigned.02"),learn_lists:word("shared.unassigned.03"),directory:word("shared.unassigned.04"),simchas:word("shared.unassigned.05"),files:word("shared.unassigned.06"),messages:word("shared.unassigned.07"),families:word("shared.unassigned.08")};
+    modal(`<h2>${htmlWord("shared.unassigned.09")}</h2>${records.people.length?`<form data-form="recoverypreview" class="card"><h3>${htmlWord("shared.unassigned.12")}</h3><p>${htmlWord("shared.unassigned.13")}</p>${records.families.map(f=>field(f.label,`<select required data-recovery-label="${f.id}"><option value="">${htmlWord("shared.unassigned.15")}</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)).join('')}<div class="err"></div><button class="btn">${htmlWord("shared.unassigned.14")}</button></form>`:''}<p>${htmlWord("shared.unassigned.10")}</p><form data-form="assignrecords">${field(word("shared.unassigned.16"),`<select id="assigngroup" required><option value="">—</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)}${Object.entries(records).map(([table,rows])=>`<details><summary>${esc(names[table])} (${rows.length}${rows.length===500?'+':''})</summary>${rows.map(r=>`<label style="display:block"><input type="checkbox" name="assignrecord" data-table="${table}" value="${esc(r.id)}"> #${esc(r.id)} ${esc(r.label)}${table==='people'?`<small style="display:block;padding-inline-start:28px;font-weight:normal">${[[word("shared.unassigned.17"),r.father_name,r.father_id],[word("shared.unassigned.18"),r.mother_name,r.mother_id],[word("shared.unassigned.19"),r.parent_name,r.parent_id],[word("shared.unassigned.20"),r.spouse_name,r.spouse_id],[word("shared.unassigned.21"),r.second_spouse_name,r.second_spouse_id]].filter(x=>x[2]).map(x=>`${esc(x[0])}: ${esc(x[1]||'—')} (#${esc(x[2])})`).join(' · ')}${r.families?.length?`<br>${htmlWord("shared.unassigned.22")} `+r.families.map(f=>esc(f.name)+' (#'+esc(f.id)+')').join(', '):''}</small>`:''}</label>`).join('')}</details>`).join('')}<div class="err"></div><button class="btn">${htmlWord("shared.unassigned.11")}</button></form>`,true);
   },
   emailsim: el=>emailSim(Number(el.dataset.id)),
   emailstatus: el=>emailSim(Number(el.dataset.id),el.dataset.scope),
@@ -886,11 +922,11 @@ const ACT = {
     const listId=STATE.list.l.id;
     const preview=await api(`/lists/${listId}/learning-email`);
     STATE.learningEmail={listId,request_key:crypto.randomUUID(),fingerprint:preview.fingerprint};
-    const reason=!preview.available?'אלע חלקים זענען שוין גענומען.':!preview.email_enabled?'אימעיל איז נאך נישט פארבונדן.':!preview.recipient_count?'נאך קיין באשטעטיגטע אימעיל אדרעסן אין דער משפחה.':'';
-    modal(`<h2>✉️ בעט די משפחה צו נעמען משניות</h2><p>${esc(preview.family)} · ${preview.recipient_count} באשטעטיגטע אימעיל אדרעסן</p>
-      <p><strong>${esc(preview.subject)}</strong></p><textarea readonly aria-label="אימעיל איבערבליק" rows="7">${esc(preview.text)}</textarea>
+    const reason=!preview.available?word("shared.emaillearn.01"):!preview.email_enabled?word("shared.emaillearn.02"):!preview.recipient_count?word("shared.emaillearn.03"):'';
+    modal(`<h2>${htmlWord("shared.emaillearn.04")}</h2><p>${htmlWord("shared.emaillearn.05", { family: preview.family, recipient_count: preview.recipient_count })}</p>
+      <p><strong>${esc(preview.subject)}</strong></p><textarea readonly aria-label="${htmlWord("shared.emaillearn.06")}" rows="7">${esc(preview.text)}</textarea>
       <form data-form="sendlearningemail">${reason?`<p class="muted">${reason}</p>`:''}<p id="learning-email-status" role="status"></p><div class="err" role="alert"></div>
-      <div class="btns"><button type="submit" class="btn" ${reason?'disabled':''}>שיק אימעיל</button><button type="button" class="btn l" data-act="close">צומאכן</button></div></form>`);
+      <div class="btns"><button type="submit" class="btn" ${reason?'disabled':''}>${htmlWord("shared.emaillearn.07")}</button><button type="button" class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button></div></form>`);
   },
   sharelearn: async ()=>{
     const l=STATE.list.l,lists=(await api('/lists')).lists;
@@ -900,26 +936,30 @@ const ACT = {
     const selected=related?[l,related]:[l];
     const sides=l.side==='both'?mySides():[l.side];
     const invite=await api('/family-invitations',{method:'POST',body:{sides}});
-    const links=selected.map(x=>`${x.kind==='mishnayos'?'📚 משניות':'📜 תהילים'}: ${invite.link}&list=${x.id}`);
-    const message=`טייערע משפחה, לאמיר צוזאמען לערנען לעילוי נשמת ${l.niftar}.\nמען קען נעמען א גאנצע מסכתא, א פרק, אפילו איין משנה, אדער א קאפיטל תהילים — אדער ביידע! יעדער קליינער חלק איז חשוב.\n${l.target_date?'ביז '+gdate(l.target_date)+'\n':''}דריק אויפן לינק און קלייב אויס דיין חלק:\n${links.join('\n')}\nיישר כח! די אינוויטעישן לינקס זענען גוט פאר 7 טעג.`;
-    modal(`<h2>📲 לאדן די משפחה צו לערנען</h2><p class="muted">מיטן לינק קען א קאזין זיך איינשרייבן און גלייך עפענען די ליסט.</p><textarea readonly id="rl" rows="9">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי מעסעדזש און לינקס</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+    const links=selected.map(x=>`${x.kind==='mishnayos'?word("shared.sharelearn.01"):word("shared.sharelearn.02")}: ${invite.link}&list=${x.id}`);
+    const message=`${word("shared.sharelearn.03", { name: l.niftar })}
+${word("shared.sharelearn.04")}
+${word("shared.sharelearn.06", { value: l.target_date?`${word("shared.sharelearn.05")} `+gdate(l.target_date)+'\n':'' })}
+${links.join('\n')}
+${word("shared.sharelearn.07")}`;
+    modal(`<h2>${htmlWord("shared.sharelearn.08")}</h2><p class="muted">${htmlWord("shared.sharelearn.09")}</p><textarea readonly id="rl" rows="9">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">${htmlWord("shared.sharelearn.10")}</a><button class="btn l" data-act="copy">${htmlWord("shared.sharelearn.11")}</button><button class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button></div>`);
   },
   replymessage: el=>{STATE.chatReply=STATE.chatMessages.find(m=>String(m.id)===el.dataset.id);showChatReply();$('ci').focus();},
   cancelreply: ()=>{STATE.chatReply=null;showChatReply();},
   mentionperson: el=>{const p=STATE.chatMembers.find(p=>String(p.id)===el.dataset.id);if(!p)return;$('ci').value=$('ci').value.replace(/@([^@\n]*)$/,'@'+p.name+' ');STATE.chatMentionIds=[...new Set([...(STATE.chatMentionIds||[]),p.id])];$('mentionchoices').innerHTML='';$('ci').focus();},
-  yzexisting: ()=>{const id=Number(val('yzperson'));if(!id)throw new Error('קלייב אויס א מענטש');return yahrzeitPerson(id);},
+  yzexisting: ()=>{const id=Number(val('yzperson'));if(!id)throw new Error(word("shared.yzexisting.01"));return yahrzeitPerson(id);},
   yznew: ()=>yahrzeitPerson(0),
   masechta: el=>openMasechta(Number(el.dataset.idx)),
   portion: el=>openPortion(Number(el.dataset.c),Number(el.dataset.m)),
   backmasechta: ()=>openMasechta(STATE.portions.idx),
-  portionaction: async el=>{const scope=STATE.portionScope;await api(`/lists/${STATE.list.l.id}/items/${scope.idx}`,{method:'POST',body:{...scope,action:el.dataset.v}});await go();await openMasechta(scope.idx);toast('✓ געסעיווט');},
+  portionaction: async el=>{const scope=STATE.portionScope;await api(`/lists/${STATE.list.l.id}/items/${scope.idx}`,{method:'POST',body:{...scope,action:el.dataset.v}});await go();await openMasechta(scope.idx);toast(word("shared.portionaction.01"));},
   learninghelp: async el=>{await api(`/lists/${STATE.list.l.id}/help/${el.dataset.id}`,{method:'POST',body:{action:el.dataset.v}});await refresh();},
   familyinvite: familyInviteForm,
   forgotpw: () => { STATE.resetPhone = val('fp'); STATE.resetRequested = false; location.hash = '#forgotpw'; },
   backlogin: () => { STATE.authMode = 'login'; STATE.resetRequested = false; history.replaceState(null, '', location.pathname + location.search); go(); },
   close: closeModal, more: moreSheet, reload: () => location.reload(),
   logout: async () => { closeModal(); await api('/auth/logout', { method: 'POST' }).catch(() => {}); ME = null; STATE.canStopActing=false; location.hash = ''; go(); },
-  recheck: async () => { await loadMe(); go(); if (ME && ME.status !== 'active') toast('נאך נישט אפרובירט'); },
+  recheck: async () => { await loadMe(); go(); if (ME && ME.status !== 'active') toast(word("shared.recheck.01")); },
   authmode: (el) => { STATE.authMode = el.dataset.v; go(); },
   pick: (el) => { if (STATE.joinSides) return; STATE.pickSides = el.dataset.v === 'ab' ? ['a', 'b'] : [el.dataset.v]; const keep = { fn: val('fn'), fp: val('fp'), fw: $('fw').value, fnote: val('fnote') }; $('m').innerHTML = V.login(); for (const k in keep) if ($(k)) $(k).value = keep[k]; },
   side: (el) => { STATE.side = el.dataset.v; refresh(); },
@@ -927,45 +967,45 @@ const ACT = {
   treeside: (el) => { STATE.treeSide = el.dataset.v; STATE.treeZoom=null; refresh(); }, treeview: (el) => { STATE.treeView = el.dataset.v; refresh(); },
   room: (el) => { STATE.room = el.dataset.v; go(); },
   simpast: (el) => { STATE.simPast = el.dataset.v === '1'; go(); },
-  remind: async (el) => { const on = el.dataset.on === '1'; await api(`/yahrzeits/${el.dataset.id}/remind`, { method: 'POST', body: { on } }); toast(on ? '🔔 מען וועט דיך דערמאנען' : 'אפגעשטעלט'); refresh(); },
+  remind: async (el) => { const on = el.dataset.on === '1'; await api(`/yahrzeits/${el.dataset.id}/remind`, { method: 'POST', body: { on } }); toast(on ? word("shared.remind.01") : word("shared.remind.02")); refresh(); },
   edityz: (el) => yzForm(Number(el.dataset.id)),
-  delyz: async (el) => { if (!confirm('אויסמעקן דעם יארצייט?')) return; await api('/yahrzeits/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast('אויסגעמעקט'); refresh(); },
+  delyz: async (el) => { if (!confirm(word("shared.delyz.01"))) return; await api('/yahrzeits/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast(word("shared.delyz.02")); refresh(); },
   editp: (el) => personForm(Number(el.dataset.id)),
   addmarriage: el=>personForm(Number(el.dataset.id),undefined,{openRelative:el.dataset.key}),
   marriagechild: async el=>{
     const {people}=await api('/people'),p=people.find(x=>x.id===Number(el.dataset.id)),spouse=people.find(x=>x.id===Number(el.dataset.spouse));
-    if(!p||!spouse)throw new Error('די עלטערן זענען נישט געטראפן');
+    if(!p||!spouse)throw new Error(word("shared.marriagechild.01"));
     STATE.childMarriage={person:p,spouse};
-    modal(`<h2>+ קינד פון ${esc(p.name)} און ${esc(spouse.name)}</h2><form data-form="marriagechild">${field('ווער איז דער טאטע?',`<select id="childfather" required><option value="">— קלייב דעם טאטע —</option><option value="${p.id}">${esc(p.name)}</option><option value="${spouse.id}">${esc(spouse.name)}</option></select>`)}<p>ביידע עלטערן ווערן פארבונדן צום נייעם קינד. עקזיסטירנדיקע קינדער בלייבן ווי זיי זענען.</p><button class="btn">ווייטער צו קינד</button><button type="button" class="btn l" data-act="close">קענסל</button></form>`);
+    modal(`<h2>${htmlWord("shared.marriagechild.02", { name: p.name, name2: spouse.name })}</h2><form data-form="marriagechild">${field(word("shared.marriagechild.05"),`<select id="childfather" required><option value="">${htmlWord("shared.marriagechild.06")}</option><option value="${p.id}">${esc(p.name)}</option><option value="${spouse.id}">${esc(spouse.name)}</option></select>`)}<p>${htmlWord("shared.marriagechild.03")}</p><button class="btn">${htmlWord("shared.marriagechild.04")}</button><button type="button" class="btn l" data-act="close">${htmlWord("shared.recoverypreview.03")}</button></form>`);
   },
   addchild: el=>personForm(0, Number(el.dataset.id)),
-  delp: async (el) => { if (!confirm('אויסמעקן?')) return; await api('/people/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast('אויסגעמעקט'); refresh(); },
+  delp: async (el) => { if (!confirm(word("shared.delp.01"))) return; await api('/people/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast(word("shared.delyz.02")); refresh(); },
   newlist: (el) => listForm(Number(el.dataset.yz) || 0,el),
   item: (el) => onItem(Number(el.dataset.idx)),
-  itemact: async (el) => { const { l } = STATE.list; const a = el.dataset.v; await api(`/lists/${l.id}/items/${el.dataset.idx}`, { method: 'POST', body: { action: a } }); closeModal(); toast(a === 'give' ? 'צוריקגעגעבן' : a === 'done' ? '✓ יישר כח!' : 'געטוישט'); refresh(); },
-  learningreminders: async () => { const r = await api('/me/learning-reminders', {method:'POST',body:{on:!ME.learning_email_reminders}}); ME={...ME,...r.user}; toast('✓ געסעיווט'); await refresh(); },
-  dellist: async (el) => { if (!confirm('אויסמעקן די גאנצע ליסט?')) return; await api('/lists/' + el.dataset.id, { method: 'DELETE' }); location.hash = '#learn'; },
+  itemact: async (el) => { const { l } = STATE.list; const a = el.dataset.v; await api(`/lists/${l.id}/items/${el.dataset.idx}`, { method: 'POST', body: { action: a } }); closeModal(); toast(a === 'give' ? word("shared.itemact.01") : a === 'done' ? word("shared.itemact.02") : word("shared.itemact.03")); refresh(); },
+  learningreminders: async () => { const r = await api('/me/learning-reminders', {method:'POST',body:{on:!ME.learning_email_reminders}}); ME={...ME,...r.user}; toast(word("shared.portionaction.01")); await refresh(); },
+  dellist: async (el) => { if (!confirm(word("shared.dellist.01"))) return; await api('/lists/' + el.dataset.id, { method: 'DELETE' }); location.hash = '#learn'; },
   editsim: (el) => simForm(Number(el.dataset.id)),
-  delsim: async (el) => { if (!confirm('אויסמעקן די שמחה?')) return; await api('/simchas/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast('אויסגעמעקט'); refresh(); },
-  delinv: async (el) => { await api(`/simchas/${el.dataset.id}/invite`, { method: 'DELETE' }); closeModal(); toast('אינוויטעישן אוועקגענומען'); refresh(); },
+  delsim: async (el) => { if (!confirm(word("shared.delsim.01"))) return; await api('/simchas/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast(word("shared.delyz.02")); refresh(); },
+  delinv: async (el) => { await api(`/simchas/${el.dataset.id}/invite`, { method: 'DELETE' }); closeModal(); toast(word("shared.delinv.01")); refresh(); },
   showinv: (el) => showInv(Number(el.dataset.id)),
   ppl: (el) => { const s = $('ppl' + el.dataset.id); s.textContent = Math.max(1, Math.min(50, Number(s.textContent) + Number(el.dataset.d))); },
   rsvp: async (el) => { const id = el.dataset.id, a = el.dataset.v; const x = STATE.sims.find((s) => s.id === Number(id)); const n = Number($('ppl' + id).textContent);
-    await api(`/simchas/${id}/rsvp`, { method: 'POST', body: { answer: x.my_answer === a && (a === 'no' || x.my_people === n) ? null : a, people: n } }); toast(a === 'yes' ? `✓ מען ווייסט אז דו קומסט (${n})` : 'מען ווייסט, א שיינעם דאנק'); refresh(); },
-  who: (el, ev) => { ev.preventDefault(); const x = STATE.sims.find((s) => s.id === Number(el.dataset.id)); modal(`<h2 style="margin-top:0">ווער קומט · ${esc(x.kind)} ${esc(x.whose)}</h2>${x.rsvps.length ? x.rsvps.map((r) => `<div class="row"><div class="grow">${esc(r.name)}</div>${r.answer === 'yes' ? `<span class="tag g">קומט · ${r.people}</span>` : '<span class="tag b">נישט</span>'}</div>`).join('') : '<div class="muted">נאך קיינער</div>'}<button class="btn l" data-act="close">צומאכן</button>`); },
-  mazeltov: async (el) => { await api(`/simchas/${el.dataset.id}/mazeltov`, { method: 'POST', body: {} }); toast('מזל טוב געשיקט אין טשעט! 🎉'); },
+    await api(`/simchas/${id}/rsvp`, { method: 'POST', body: { answer: x.my_answer === a && (a === 'no' || x.my_people === n) ? null : a, people: n } }); toast(a === 'yes' ? word("shared.rsvp.01", { count: n }) : word("shared.rsvp.02")); refresh(); },
+  who: (el, ev) => { ev.preventDefault(); const x = STATE.sims.find((s) => s.id === Number(el.dataset.id)); modal(`<h2 style="margin-top:0">${htmlWord("shared.who.01", { type: x.kind, name: x.whose })}</h2>${x.rsvps.length ? x.rsvps.map((r) => `<div class="row"><div class="grow">${esc(r.name)}</div>${r.answer === 'yes' ? `<span class="tag g">${htmlWord("shared.who.02", { people: r.people })}</span>` : `<span class="tag b">${htmlWord("shared.who.03")}</span>`}</div>`).join('') : `<div class="muted">${htmlWord("shared.who.04")}</div>`}<button class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button>`); },
+  mazeltov: async (el) => { await api(`/simchas/${el.dataset.id}/mazeltov`, { method: 'POST', body: {} }); toast(word("shared.mazeltov.01")); },
   editdir: (el) => dirForm(Number(el.dataset.id), el.dataset.mine === '1'),
-  deldir: async (el) => { if (!confirm('אויסמעקן?')) return; await api('/directory/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast('אויסגעמעקט'); refresh(); },
-  approve: async (el) => { await api('/admin/users/' + el.dataset.id, { method: 'PATCH', body: { status: 'active' } }); toast('✓ אפרובירט'); refresh(); },
-  reject: async (el) => { if (!confirm('אפזאגן?')) return; await api('/admin/users/' + el.dataset.id, { method: 'PATCH', body: { status: 'rejected' } }); toast('אפגעזאגט'); refresh(); },
-  mkadmin: async (el) => { await api('/admin/users/' + el.dataset.id, { method: 'PATCH', body: { is_admin: el.dataset.v === '1' } }); toast('✓ געטוישט'); refresh(); },
-  deluser: async (el) => { const u = STATE.users.find((x) => x.id === Number(el.dataset.id)); if (!confirm(`אויסמעקן ${u.name} און אלעס וואס ער האט צוגעלייגט?`)) return; await api('/admin/users/' + u.id, { method: 'DELETE' }); toast('אויסגעמעקט'); refresh(); },
+  deldir: async (el) => { if (!confirm(word("shared.delp.01"))) return; await api('/directory/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast(word("shared.delyz.02")); refresh(); },
+  approve: async (el) => { await api('/admin/users/' + el.dataset.id, { method: 'PATCH', body: { status: 'active' } }); toast(word("shared.approve.01")); refresh(); },
+  reject: async (el) => { if (!confirm(word("shared.reject.01"))) return; await api('/admin/users/' + el.dataset.id, { method: 'PATCH', body: { status: 'rejected' } }); toast(word("shared.reject.02")); refresh(); },
+  mkadmin: async (el) => { await api('/admin/users/' + el.dataset.id, { method: 'PATCH', body: { is_admin: el.dataset.v === '1' } }); toast(word("shared.mkadmin.01")); refresh(); },
+  deluser: async (el) => { const u = STATE.users.find((x) => x.id === Number(el.dataset.id)); if (!confirm(word("shared.deluser.01", { name: u.name }))) return; await api('/admin/users/' + u.id, { method: 'DELETE' }); toast(word("shared.delyz.02")); refresh(); },
   resetlink: async (el) => { const u = STATE.users.find((x) => x.id === Number(el.dataset.id)); const r = await api(`/admin/users/${u.id}/reset-link`, { method: 'POST', body: {} });
-    const msg = `שלום ${u.name}, דא קענסטו איינשטעלן דיין פאסווארט פאר ${S.family_yi}: ${r.link}`;
+    const msg = word("shared.resetlink.01", { name: u.name, family: S.family_yi, link: r.link });
     await refresh();
-    modal(`<h2 style="margin-top:0">🔑 פאסווארט לינק פאר ${esc(u.name)}</h2><p class="muted">איינמאליג, גוט פאר ${r.hours} שעה. באשטעטיג ווער דער מענטש איז און שיק עס נאר צו אים/איר.</p><input readonly class="ltr" id="rl" value="${esc(r.link)}">
-    <div class="btns"><a class="btn g" href="https://wa.me/${esc(u.phone)}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי</button><button class="btn l" data-act="close">צומאכן</button></div>`); },
-  copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast('✓ קאפירט'); },
+    modal(`<h2 style="margin-top:0">${htmlWord("shared.resetlink.02", { name: u.name })}</h2><p class="muted">${htmlWord("shared.resetlink.03", { hours: r.hours })}</p><input readonly class="ltr" id="rl" value="${esc(r.link)}">
+    <div class="btns"><a class="btn g" href="https://wa.me/${esc(u.phone)}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">${htmlWord("shared.sharelearn.10")}</a><button class="btn l" data-act="copy">${htmlWord("shared.resetlink.04")}</button><button class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button></div>`); },
+  copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast(word("shared.copy.01")); },
 };
 const CHANGE = {
   emailscope: el=>emailSim(Number(el.dataset.id),el.value),
@@ -976,38 +1016,38 @@ const CHANGE = {
   viewgroup:async el=>{if(!el.value)return;await api('/me/family-group',{method:'POST',body:{family_group_id:Number(el.value)}});location.reload();},
   membershippick:el=>{const boxes=[...document.querySelectorAll('[name=membership]')];const count=boxes.filter(b=>b.checked).length;boxes.forEach(b=>b.disabled=!b.checked&&count>=4);$('membershipcount').textContent=count+' / 4';},
   privatechat: el=>{if(!el.value)return;const id=Number(el.value);STATE.room='dm:'+Math.min(ME.id,id)+':'+Math.max(ME.id,id);return go();},
-  chatfile: el=>{const f=el.files[0];STATE.chatUpload=null;if(f&&f.size>10*1024*1024){el.value='';throw new Error('מאקסימום 10 MB');}$('chatfilename').textContent=f?' · '+f.name:'';},
+  chatfile: el=>{const f=el.files[0];STATE.chatUpload=null;if(f&&f.size>10*1024*1024){el.value='';throw new Error(word("shared.chatfile.01"));}$('chatfilename').textContent=f?' · '+f.name:'';},
   newrelative: el => { $('new_' + el.dataset.key).hidden = el.value !== 'new'; },
-  upinv: async (el) => { const f = el.files[0]; if (!f) return; if (f.size > 10 * 1024 * 1024) return toast('⚠️ די פייל איז צו גרויס (מאקסימום 10 MB)'); toast('⬆ אפלאודינג…');
-    const fd = new FormData(); fd.append('file', f); await api(`/simchas/${el.dataset.id}/invite`, { method: 'POST', body: fd }); toast('✓ אינוויטעישן אפלאודעד'); refresh(); },
+  upinv: async (el) => { const f = el.files[0]; if (!f) return; if (f.size > 10 * 1024 * 1024) return toast(word("shared.upinv.01")); toast(word("shared.upinv.02"));
+    const fd = new FormData(); fd.append('file', f); await api(`/simchas/${el.dataset.id}/invite`, { method: 'POST', body: fd }); toast(word("shared.upinv.03")); refresh(); },
   usides: async (el) => { const u = STATE.users.find((x) => x.id === Number(el.dataset.id)); const s = new Set(u.sides); el.checked ? s.add(el.dataset.v) : s.delete(el.dataset.v);
-    try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast('✓ סייד געטוישט'); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
+    try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast(word("shared.usides.01")); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
 };
 const FORMS = {
-  simemail: async f=>{await api(`/simchas/${f.dataset.id}/email`,{method:'POST',body:{scope:f.dataset.scope,confirmed:$('emailconfirm').checked}});toast('✓ אימעילס צוגעלייגט צום שיקן');await emailSim(Number(f.dataset.id),f.dataset.scope);},
+  simemail: async f=>{await api(`/simchas/${f.dataset.id}/email`,{method:'POST',body:{scope:f.dataset.scope,confirmed:$('emailconfirm').checked}});toast(word("shared.simemail.01"));await emailSim(Number(f.dataset.id),f.dataset.scope);},
   marriagechild: ()=>{
     const {person,spouse}=STATE.childMarriage;
     return personForm(0,undefined,{...childParents(person.id,spouse.id,Number(val('childfather'))),side:person.side,families:person.families||[]});
   },
   renamegroup:async()=>{await api('/admin/family-groups/'+val('renamegroupid'),{method:'PATCH',body:{name:val('renamegroupname')}});await loadMe();refresh();},
   newgroup:async()=>{const {group}=await api('/admin/family-groups',{method:'POST',body:{name:val('groupname')}});await api('/me/family-group',{method:'POST',body:{family_group_id:group.id}});location.reload();},
-  memberships:async f=>{const ids=[...f.querySelectorAll('[name=membership]:checked')].map(e=>Number(e.value));if(!ids.length)throw new Error('קלייב כאטש איין משפחה');await api('/admin/users/'+f.dataset.id+'/family-group',{method:'PUT',body:{family_group_ids:ids}});closeModal();toast('משפחות צוגעטיילט — דער מעמבער דארף נאכאמאל לאגין');await loadMe();refresh();},
+  memberships:async f=>{const ids=[...f.querySelectorAll('[name=membership]:checked')].map(e=>Number(e.value));if(!ids.length)throw new Error(word("shared.memberships.01"));await api('/admin/users/'+f.dataset.id+'/family-group',{method:'PUT',body:{family_group_ids:ids}});closeModal();toast(word("shared.memberships.02"));await loadMe();refresh();},
   recoverypreview:async f=>ACT.recoverypreview(f),
-  assignrecords:async f=>{const records={};for(const e of f.querySelectorAll('[name=assignrecord]:checked'))(records[e.dataset.table]||=[]).push(e.value);await api('/admin/assign-records',{method:'POST',body:{family_group_id:Number(val('assigngroup')),records}});closeModal();toast('צוגעטיילט');refresh();},
-  portionhelp: async ()=>{const scope=STATE.portionScope;await api(`/lists/${STATE.list.l.id}/items/${scope.idx}/help`,{method:'POST',body:{...scope,note:val('helpnote')}});closeModal();await go();toast('✓ דיין בקשה איז אין דער ליסט');},
+  assignrecords:async f=>{const records={};for(const e of f.querySelectorAll('[name=assignrecord]:checked'))(records[e.dataset.table]||=[]).push(e.value);await api('/admin/assign-records',{method:'POST',body:{family_group_id:Number(val('assigngroup')),records}});closeModal();toast(word("shared.assignrecords.01"));refresh();},
+  portionhelp: async ()=>{const scope=STATE.portionScope;await api(`/lists/${STATE.list.l.id}/items/${scope.idx}/help`,{method:'POST',body:{...scope,note:val('helpnote')}});closeModal();await go();toast(word("shared.portionhelp.01"));},
   familyinvite: async () => {
     const side = val('inviteSide');
     const r = await api('/family-invitations', { method: 'POST', body: { sides: side === 'both' ? ['a', 'b'] : [side] } });
     const names = r.sides.map(c => sideLong(c)).join(' + ');
-    const message = `${S.family_yi}: דו ביסט איינגעלאדנט צו ${names}. מאך אן אקאונט דא: ${r.link}`;
-    modal(`<h2>🌳 אינוויטעישן גרייט</h2><p><b>${esc(names)}</b></p><p class="muted">גוט פאר ${r.days} טעג. מיט דעם לינק קען מען גלייך אריין, אן ווארטן אויף אפרוביישן.</p><input id="rl" readonly class="ltr" aria-label="Invitation link" value="${esc(r.link)}"><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+    const message = word("shared.familyinvite.01", { family: S.family_yi, names: names, link: r.link });
+    modal(`<h2>${htmlWord("shared.familyinvite.02")}</h2><p><b>${esc(names)}</b></p><p class="muted">${htmlWord("shared.familyinvite.03", { days: r.days })}</p><input id="rl" readonly class="ltr" aria-label="Invitation link" value="${esc(r.link)}"><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">${htmlWord("shared.sharelearn.10")}</a><button class="btn l" data-act="copy">${htmlWord("shared.familyinvite.04")}</button><button class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button></div>`);
   },
   forgotpw: async () => { await api('/auth/forgot-password', { method: 'POST', body: { phone: val('resetphone') } }); STATE.resetRequested = true; go(); },
-  login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast('ברוך הבא! ✓'); location.hash = STATE.loginNext || STATE.joinNext || '#home'; STATE.loginNext=null; go(); },
+  login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast(word("shared.login.01")); location.hash = STATE.loginNext || STATE.joinNext || '#home'; STATE.loginNext=null; go(); },
   signup: async () => { const r = await api('/auth/signup', { method: 'POST', body: { name: val('fn'), phone: val('fp'), password: $('fw').value, sides: STATE.pickSides || [], invitation_token: STATE.joinToken || undefined, create_family:STATE.joinToken?undefined:val('newfamilyname'), note: val('fnote') } }); ME = r.user; await loadMe(); location.hash = STATE.joinNext || '#home'; go(); },
-  setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); go(); },
+  setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error(word("shared.setpw.01")); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast(word("shared.setpw.02")); go(); },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
-    await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
+    await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast(word("shared.portionaction.01")); refresh(); },
   person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),known_as:val('pknownas'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),second_spouse_id:val('psecond_spouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno'),kever:val('pkever'),kever_address:val('pkeveraddress'),legacy_yahrzeit_id:f.dataset.legacyid||undefined,require_yahrzeit:f.dataset.yahrzeit==='1'||undefined};
     b.new_relatives = {};
     for (const key of ['father_id','mother_id','spouse_id','second_spouse_id']) if (b[key] === 'new') {
@@ -1022,28 +1062,28 @@ const FORMS = {
         await api('/me/family-group',{method:'POST',body:{family_group_id:result.review_family_group_id}});
         await loadMe();
       }
-      toast('געשיקט צום אדמין — נאך נישט צוגעלייגט');location.hash='#personreviews';
+      toast(word("shared.person.01"));location.hash='#personreviews';
     }else if (b.require_yahrzeit) {
       STATE.yzFamily='';
-      toast('✓ יארצייט געסעיווט');
+      toast(word("shared.person.02"));
       if (curView()==='yz') await refresh(); else location.hash='#yz';
-    }else{toast('✓ ' + b.name + ' געסעיווט');refresh();} },
+    }else{toast('✓ ' + b.name + ` ${word("shared.person.03")}`);refresh();} },
   list: async (form) => {
     const custom=$('learning-custom').checked;
     const yahrzeit_ids=custom?[]:selectedMemorialIds(form);
     if (!custom&&!yahrzeit_ids.length) {
       $('learning-search').focus();
-      throw new Error('קלייב אויס כאטש איין יארצייט.');
+      throw new Error(word("shared.list.02"));
     }
     const r=await api('/lists',{method:'POST',body:{kind:val('lk'),yahrzeit_ids,niftar:custom?val('ln'):'',target_date:val('ld'),side:val('ls')}});
     if (!form.isConnected) return;
     closeModal();
-    toast('✓ ליסט געמאכט');
+    toast(word("shared.list.01"));
     location.hash=`#learn/${r.list.id}/${r.list.family_group_id}`;
   },
   cousinprofile:async f=>{
     await api(`/admin/users/${f.dataset.id}/tree-profile`,{method:'PUT',body:{person_id:Number(val('cousinperson'))||null}});
-    closeModal();toast('✓ געסעיווט');return refresh();
+    closeModal();toast(word("shared.portionaction.01"));return refresh();
   },
   sendlearningemail:async f=>{
     const button=f.querySelector('button[type="submit"]');
@@ -1051,20 +1091,20 @@ const FORMS = {
     button.disabled=true;
     try {
       const result=await api(`/lists/${listId}/learning-email`,{method:'POST',body:{request_key,fingerprint}});
-      if(result.sent===result.total){closeModal();toast(`✓ אימעיל געשיקט צו ${result.sent}`);}
+      if(result.sent===result.total){closeModal();toast(word("shared.sendlearningemail.01", { sent: result.sent }));}
       else if($('learning-email-status')) {
-        $('learning-email-status').textContent=`${result.sent} פון ${result.total} געשיקט. פרוביר נאכאמאל פאר די איבעריגע.`;
-        button.textContent='פרוביר נאכאמאל';
+        $('learning-email-status').textContent=word("shared.sendlearningemail.02", { sent: result.sent, total: result.total });
+        button.textContent=word("shared.sendlearningemail.03");
       }
     } finally { button.disabled=false; }
   },
   sim: async (f) => { const id = Number(f.dataset.id); const kind = val('sk') === 'אנדערע' ? (val('sko') || 'שמחה') : val('sk');
     const b = { kind, whose: val('sw'), gdate: val('sd'), time_text: val('stt'), hdate_text: val('sh'), hall: val('sp'), address: val('sa'), note: val('sn'), audience: val('ss') };
-    const file = $('sf') && $('sf').files[0]; if (file && file.size > 10 * 1024 * 1024) throw new Error('די פייל איז צו גרויס (מאקסימום 10 MB)');
+    const file = $('sf') && $('sf').files[0]; if (file && file.size > 10 * 1024 * 1024) throw new Error(word("shared.sim.01"));
     $('simsave').disabled = true;
     try { const r = await api(id ? '/simchas/' + id : '/simchas', { method: id ? 'PUT' : 'POST', body: b });
-      if (file) { const fd = new FormData(); fd.append('file', file); try { await api(`/simchas/${r.simcha.id}/invite`, { method: 'POST', body: fd }); } catch (e) { toast('⚠️ די שמחה איז געסעיווט, אבער די אינוויטעישן נישט: ' + e.message); closeModal(); return refresh(); } }
-      closeModal(); toast('✓ געסעיווט'); STATE.simPast = false; if (curView() === 'sim') await refresh(); else location.hash = '#sim'; if (!id) shareSim(r.simcha); }
+      if (file) { const fd = new FormData(); fd.append('file', file); try { await api(`/simchas/${r.simcha.id}/invite`, { method: 'POST', body: fd }); } catch (e) { toast(`${word("shared.sim.02")} ` + e.message); closeModal(); return refresh(); } }
+      closeModal(); toast(word("shared.portionaction.01")); STATE.simPast = false; if (curView() === 'sim') await refresh(); else location.hash = '#sim'; if (!id) shareSim(r.simcha); }
     finally { if ($('simsave')) $('simsave').disabled = false; } },
   chat: async ()=>{
     const room=STATE.room,e=$('ci'),text=e.value.trim(),file=$('cf').files[0];if(!text&&!file)return;
@@ -1076,13 +1116,13 @@ const FORMS = {
     const {messages}=await api(`/chat/${room}?after=${LASTMSG}`);STATE.chatMessages.push(...messages);appendMsgs(messages);const c=$('cb');c.scrollTop=c.scrollHeight;e.focus();
   },
   dir: async (f) => { const id = Number(f.dataset.id); const b = { husband: val('dh'), wife: val('dw'), parents: val('dp'), side: val('ds'), address_line1: val('da'), address_line2: val('da2'), city: val('dcity'), state: val('dstate'), postal_code: val('dzip'), country: val('dcountry'), phone_h: val('dph'), phone_w: val('dpw'), mine: f.dataset.mine === '1',husband_person_id:val('dhperson'),wife_person_id:val('dwperson') };
-    await api(id ? '/directory/' + id : '/directory', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
-  settings: async () => { const b = {}; document.querySelectorAll('[id^=st_]').forEach((e) => { b[e.id.slice(3)] = e.value.trim(); }); const r = await api('/admin/settings', { method: 'PUT', body: b }); S = r.settings; toast('✓ געסעיווט'); refresh(); },
-  me: async () => { const r = await api('/me', { method: 'PATCH', body: { name: val('mn'), email: val('mem') } }); ME = r.user; toast('✓ געסעיווט'); refresh(); },
-  myphone: async () => { const r = await api('/me/phone', { method: 'POST', body: { phone: val('mphone'), password: $('mphonepw').value } }); ME = r.user; toast('✓ טעלעפאן נומער געסעיווט'); refresh(); },
-  emailverifyrequest: async () => { await api('/me/email-verification', { method: 'POST', body: { password: $('emailverifypw').value } }); $('emailverifypw').value = ''; $('emailverifystatus').textContent = '✓ געשיקט. קוק אין דיין אימעיל און דריק אויפן באשטעטיגונג לינק.'; },
+    await api(id ? '/directory/' + id : '/directory', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast(word("shared.portionaction.01")); refresh(); },
+  settings: async () => { const b = {}; document.querySelectorAll('[id^=st_]').forEach((e) => { b[e.id.slice(3)] = e.value.trim(); }); const r = await api('/admin/settings', { method: 'PUT', body: b }); S = r.settings; toast(word("shared.portionaction.01")); refresh(); },
+  me: async () => { const r = await api('/me', { method: 'PATCH', body: { name: val('mn'), email: val('mem') } }); ME = r.user; toast(word("shared.portionaction.01")); refresh(); },
+  myphone: async () => { const r = await api('/me/phone', { method: 'POST', body: { phone: val('mphone'), password: $('mphonepw').value } }); ME = r.user; toast(word("shared.myphone.01")); refresh(); },
+  emailverifyrequest: async () => { await api('/me/email-verification', { method: 'POST', body: { password: $('emailverifypw').value } }); $('emailverifypw').value = ''; $('emailverifystatus').textContent = word("shared.emailverifyrequest.01"); },
   verifyemail: async () => { await api('/auth/verify-email', { method: 'POST', body: { token: STATE.verifyEmailToken } }); STATE.verifyEmailToken = null; history.replaceState(null, '', location.pathname + location.search + '#emailverified'); await loadMe(); go(); },
-  mypw: async () => { await api('/me/password', { method: 'POST', body: { old: $('mo').value, password: $('mp').value } }); $('mo').value = $('mp').value = ''; toast('✓ פאסווארט געטוישט'); },
+  mypw: async () => { await api('/me/password', { method: 'POST', body: { old: $('mo').value, password: $('mp').value } }); $('mo').value = $('mp').value = ''; toast(word("shared.mypw.01")); },
 };
 document.addEventListener('click', async (ev) => {
   const el = ev.target.closest('[data-act]'); if (!el) { if (ev.target.id === 'md') closeModal(); return; }
@@ -1091,10 +1131,11 @@ document.addEventListener('click', async (ev) => {
 });
 document.addEventListener('change', async (ev) => { const el = ev.target.closest('[data-change]'); if (!el || el.dataset.change==='familyfilter') return; try { await CHANGE[el.dataset.change](el); } catch (e) { fail(e); } });
 document.addEventListener('input', (ev) => {
+  if (ev.target.closest('main form')) editingMainForm = true;
   if(ev.target.id==='pn'){if($('pdistinct'))$('pdistinct').checked=false;return renderPersonMatches();}const relative=/^new_(father_id|mother_id|spouse_id|second_spouse_id)_name$/.exec(ev.target.id);if(relative)return renderPersonMatches(relative[1]);
   const el = ev.target;if(el.id==='ci'){STATE.chatActivity=Date.now();mentionChoices();return;} if (el.dataset.input !== 'q') return; STATE.q = el.value;
   const Q = STATE.q.trim(); const L = (STATE.dir || []).filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
-  $('dirlist').innerHTML = dirCards(L); $('qn').textContent = L.length + ' משפחות';
+  $('dirlist').innerHTML = dirCards(L); $('qn').textContent = L.length + ` ${word("shared.01")}`;
 });
 document.addEventListener('submit', async (ev) => {
   const f = ev.target.closest('[data-form]'); if (!f) return; ev.preventDefault(); if(f.dataset.busy)return;f.dataset.busy='1';
@@ -1117,7 +1158,8 @@ document.addEventListener('keydown', (ev) => {
   if (!ev.shiftKey && document.activeElement===last) { ev.preventDefault(); first.focus(); }
 });
 window.addEventListener('hashchange', () => { closeModal(); go(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && ME) checkUnread(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkWording(); if (ME) checkUnread(); } });
 setInterval(checkUnread, 20000);
-(async () => { try { await loadMe(); } catch (e) { $('m').innerHTML = `<div class="empty">⚠️ ${esc(e.message)}</div>`; return; } go(); checkUnread(); })();
+setInterval(checkWording, 10000);
+(async () => { try { await Promise.all([loadMe(), loadWording()]); } catch (e) { $('m').innerHTML = `<div class="empty">⚠️ ${esc(e.message)}</div>`; return; } go(); checkUnread(); })();
 
