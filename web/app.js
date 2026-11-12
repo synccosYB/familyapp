@@ -1,5 +1,6 @@
 'use strict';
 import { familyUnits, treeViewportLayout } from './tree-layout.js';
+import { automaticHebrewDate } from './hebrew-date.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -341,13 +342,15 @@ function simCard(x) {
 }
 function simForm(id) {
   const x = (STATE.sims || []).find((s) => s.id === id) || { audience: 'all', whose: ME.name, kind: SIMKINDS[0] };
+  const afterSunset = !!x.gdate && x.hdate_text === automaticHebrewDate(x.gdate, true);
   const kinds = SIMKINDS.includes(x.kind) ? SIMKINDS : [x.kind, ...SIMKINDS];
   modal(`<h2 style="margin-top:0">${id ? '✏️ עדיט שמחה' : '+ נייע שמחה'}</h2><form data-form="sim" data-id="${id}">
   ${field('וואס', `<select id="sk">${kinds.map((k) => `<option ${x.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select>`)}
   <div id="skow" style="display:none">${field('וואס פאר א שמחה', '<input id="sko">')}</div>
   ${field('פון וועמען', `<input id="sw" value="${esc(x.whose)}">`)}
   <div class="grid g2"><div>${field('דאטום', `<input id="sd" type="date" value="${esc(x.gdate || '')}">`)}</div><div>${field('צייט', `<input id="stt" value="${esc(x.time_text || '')}" placeholder="למשל: 7:00 נאכמיטאג">`)}</div></div>
-  ${field('אידישער דאטום (אויב ליידיג, רעכנט מען עס אויס)', `<input id="sh" value="${esc(x.hdate_text || '')}" placeholder="למשל: מוצאי שבת, י״ט כסלו">`)}
+  ${field('אידישער דאטום (אויטאמאטיש)', `<input id="sh" value="${esc(x.hdate_text || automaticHebrewDate(x.gdate || ''))}" placeholder="קלייב אויס א דאטום אויבן">`)}
+  <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="safter" ${afterSunset?'checked':''}>די שמחה איז נאכן שקיעה</label>
   ${field('ווו (נאמען פון זאל / הויז)', `<input id="sp" value="${esc(x.hall || '')}">`)}
   ${field('אדרעס (פאר GPS)', `<input id="sa" dir="auto" value="${esc(x.address || '')}" placeholder="51 Forest Rd, Monroe, NY">`)}
   ${field('נאטיץ', `<input id="sn" value="${esc(x.note || '')}">`)}
@@ -620,6 +623,7 @@ document.addEventListener('submit', async (ev) => {
   finally { if (btn && document.body.contains(btn)) btn.disabled = false; }
 });
 document.addEventListener('change', (ev) => { if(ev.target.dataset.change==='familyfilter') { STATE[ev.target.dataset.key]=ev.target.value; refresh(); } if (ev.target.id === 'sk') $('skow').style.display = ev.target.value === 'אנדערע' ? '' : 'none';
+  if (ev.target.id === 'sd' || ev.target.id === 'safter') $('sh').value = automaticHebrewDate(val('sd'), $('safter').checked);
   if (ev.target.id === 'sf') { const f = ev.target.files[0]; $('ip').innerHTML = !f ? '' : f.type === 'application/pdf' ? `<div class="muted" style="margin:-4px 0 12px">📄 ${esc(f.name)}</div>` : `<img src="${URL.createObjectURL(f)}" style="max-width:100%;max-height:200px;border-radius:8px;margin:-4px 0 12px">`; } });
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeModal(); });
 window.addEventListener('hashchange', () => { closeModal(); go(); });
