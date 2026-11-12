@@ -83,6 +83,13 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/lists/'+hidden.body.list.id,undefined,a.cookie)).body.items.length,63);
   const sim=await request('/simchas',{kind:'Wedding',whose:'Test family',gdate:'2099-01-01',audience:'all'},a.cookie);assert.equal(sim.status,200);
   const simId=sim.body.simcha.id;
+  assert.equal((await request('/simchas?id='+simId,undefined,a.cookie)).body.simchas[0].id,simId);
+  assert.equal((await request('/simchas?id=bad',undefined,a.cookie)).status,400);
+  const oldSim=await request('/simchas',{kind:'Wedding',whose:'Past invitation',gdate:'2000-01-01',audience:'a'},a.cookie);
+  assert.equal(oldSim.status,200);
+  assert.equal((await request('/simchas?id='+oldSim.body.simcha.id,undefined,a.cookie)).body.simchas[0].id,oldSim.body.simcha.id);
+  assert.deepEqual((await request('/simchas?id='+oldSim.body.simcha.id,undefined,b.cookie)).body.simchas,[]);
+
   for(const answer of ['yes','no','yes'])assert.equal((await request('/simchas/'+simId+'/rsvp',{answer,people:2},b.cookie)).status,200);
   const sims=(await request('/simchas',undefined,a.cookie)).body.simchas;assert.equal(sims[0].yes_count,1);assert.equal(sims[0].yes_people,2);
   assert.equal((await request('/chat/a',{body:'private A'},a.cookie)).status,200);
