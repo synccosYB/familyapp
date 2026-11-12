@@ -24,6 +24,22 @@ label{font-weight:700;font-size:14px;display:block}.ltr{direction:ltr;text-align
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}.modal.on{display:flex}
 .mbox{background:#fff;border-radius:16px;padding:22px;width:520px;max-width:100%;max-height:90vh;overflow:auto}
 .mbox.wide{width:900px}
+.member-tree-status{display:grid;justify-items:start;gap:4px;margin-block-start:6px}
+.mbox.member-parents-dialog{display:flex;flex-direction:column;width:630px;max-height:min(92dvh,760px);padding:0;overflow:hidden}
+.member-parents-dialog h2{margin:0;padding:14px 18px;border-bottom:1px solid #e6e8ec;overflow-wrap:anywhere}
+.member-parents-dialog h2:focus{outline:none}
+.member-parents-dialog form{display:flex;flex-direction:column;min-height:0}
+.member-parents-body{overflow:auto;overscroll-behavior:contain;padding:14px 18px}
+.member-parents-body>p{margin:0 0 12px}
+.member-parent-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.member-parent-picker,.member-parent-linked{min-width:0;margin-block-end:12px}
+.member-parent-picker select,.member-parent-picker input{min-height:44px;margin:4px 0 0}
+.member-parent-picker p{margin:6px 0 0}
+.member-parent-linked{display:grid;gap:3px;padding:10px 12px;border:1px solid #e6e8ec;border-radius:10px;overflow-wrap:anywhere}
+.member-parents-footer{flex:none;padding:10px 18px calc(10px + env(safe-area-inset-bottom));border-top:1px solid #e6e8ec}
+.member-parents-footer .err:empty{display:none}
+.member-parents-footer .btn{min-height:44px}
+@media(max-width:460px){.member-parent-grid{grid-template-columns:1fr;gap:0}.member-parents-dialog h2,.member-parents-body,.member-parents-footer{padding-inline:14px}}
 .toast{position:fixed;bottom:20px;left:20px;background:#111827;color:#fff;padding:12px 18px;border-radius:12px;display:none;z-index:30;max-width:calc(100% - 40px)}
 .err{color:#b91c1c;font-weight:700;min-height:1em;margin:-4px 0 10px}
 /* A married couple is one unit; parent edges retain the individual endpoints. */

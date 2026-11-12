@@ -487,9 +487,22 @@ async function ownerId() {
 app.get('/api/admin/users', async (req) => {
   const manager=await admin(req);
   const owner = await q1('SELECT phone FROM users WHERE id=$1', [await ownerId()]);
-  return { owner_phone: manager.is_admin ? owner?.phone || '' : '', users: await q(`SELECT id,name,phone,email,sides,family_group_id,family_group_ids,status,is_admin,is_family_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password,
-    (SELECT requested_at FROM password_reset_requests r WHERE r.user_id=users.id AND r.resolved_at IS NULL) reset_requested_at FROM users WHERE ($1::boolean OR (family_group_id=$2 AND NOT is_admin))
-    ORDER BY (status='pending') DESC, status, name`,[manager.is_admin,manager.family_group_id]) };
+  return { owner_phone: manager.is_admin ? owner?.phone || '' : '', users: await q(`SELECT u.id,u.name,u.phone,u.email,u.sides,u.family_group_id,u.family_group_ids,u.status,u.is_admin,u.is_family_admin,u.note,u.created_at,u.last_seen_at,(u.password_hash IS NOT NULL) has_password,
+    CASE
+      WHEN NOT $1::boolean AND cardinality(u.family_group_ids)<>1 THEN NULL
+      WHEN u.person_id IS NULL THEN 'no_profile'
+      WHEN p.id IS NULL THEN 'main_admin'
+      WHEN p.father_id IS NULL AND p.mother_id IS NULL THEN 'no_parents'
+      WHEN p.father_id IS NULL THEN 'no_father'
+      WHEN p.mother_id IS NULL THEN 'no_mother'
+      ELSE 'connected'
+    END tree_parent_status,
+    (SELECT requested_at FROM password_reset_requests r WHERE r.user_id=u.id AND r.resolved_at IS NULL) reset_requested_at
+    FROM users u LEFT JOIN people p ON p.id=u.person_id AND ($1::boolean OR (
+      p.family_group_id=$2 AND NOT EXISTS(
+        SELECT 1 FROM person_family_access a WHERE a.person_id=p.id AND a.family_group_id<>$2)))
+    WHERE ($1::boolean OR (u.family_group_id=$2 AND NOT u.is_admin))
+    ORDER BY (u.status='pending') DESC, u.status, u.name`,[manager.is_admin,manager.family_group_id]) };
 });
 const memberProfileSql = (alias: string) => `(${personSql(alias,'$1::int[]')} AND
   (${alias}.side IN ('both','all') OR ${alias}.side=ANY($3::text[]) OR ${personSql(alias,'$2::int[]')}))`;
