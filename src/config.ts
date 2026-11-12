@@ -17,6 +17,8 @@ export const config = {
   logLevel: env.LOG_LEVEL || 'info',
   timezone: env.FAMILY_TZ || 'America/New_York',
   pgDumpBin: env.PG_DUMP_BIN || 'pg_dump',
+  resendApiKey: env.RESEND_API_KEY || '',
+  resendFromEmail: env.RESEND_FROM_EMAIL || '',
   // first admin, created by bootstrap if missing
   admin: {
     name: env.ADMIN_NAME || '',

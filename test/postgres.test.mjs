@@ -16,12 +16,13 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
  const conn=new URL(process.env.TEST_DATABASE_URL);conn.searchParams.set('options',`-c search_path=${schema}`);
  const data=await mkdtemp(path.join(tmpdir(),'familye-build-'));
  const setup=randomBytes(32).toString('hex');
- const env={...process.env,DATABASE_URL:conn.toString(),FAMILYE_DATA:data,ADMIN_NAME:'Build test admin',ADMIN_PHONE:'8455550100',SETUP_TOKEN_SHA256:createHash('sha256').update(setup).digest('hex'),QA_PHONE_PREFIX:'',COOKIE_SECURE:'false',PORT:'18080',HOST:'127.0.0.1',LOG_LEVEL:'error'};
+ const capture=path.join(data,'email.jsonl');
+ const env={...process.env,DATABASE_URL:conn.toString(),FAMILYE_DATA:data,ADMIN_NAME:'Build test admin',ADMIN_PHONE:'8455550100',SETUP_TOKEN_SHA256:createHash('sha256').update(setup).digest('hex'),QA_PHONE_PREFIX:'',COOKIE_SECURE:'false',PORT:'18080',HOST:'127.0.0.1',LOG_LEVEL:'error',RESEND_API_KEY:'test-only',RESEND_FROM_EMAIL:'Family <noreply@example.test>',FAMILYE_EMAIL_CAPTURE:capture,NODE_OPTIONS:'--import='+new URL('./resend-mock.mjs',import.meta.url).pathname};
  let child;let logs='';
  const run=(entry)=>{const p=spawn(process.execPath,[entry],{env,stdio:['ignore','pipe','pipe']});p.stdout.on('data',x=>logs+=x);p.stderr.on('data',x=>logs+=x);return p;};
  const base='http://127.0.0.1:18080';
- const request=async(endpoint,body,cookie='',method=body===undefined?'GET':'POST')=>{
-  const r=await fetch(base+'/api'+endpoint,{method,headers:{'x-familye':'1',...(body===undefined?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});
+ const request=async(endpoint,body,cookie='',method=body===undefined?'GET':'POST',ip='127.0.0.1')=>{
+  const r=await fetch(base+'/api'+endpoint,{method,headers:{'x-familye':'1','x-forwarded-for':ip,...(body===undefined?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{})},body:body===undefined?undefined:JSON.stringify(body)});
   return {status:r.status,body:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]||''};
  };
  try{
@@ -77,6 +78,20 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   const household=(await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId);
   assert.match(household.parents,/Renamed father/);
   assert.match(household.parents,/Structured mother/);
+  const addressParts={address_line1:'12 Main St',address_line2:'Apt 2B',city:'Monsey',state:'NY',postal_code:'01001',country:'United States'};
+  assert.equal((await request('/directory/'+familyId,addressParts,admin.cookie,'PUT')).status,200);
+  let savedAddress=(await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId);
+  for(const [key,value] of Object.entries(addressParts))assert.equal(savedAddress[key],value);
+  assert.equal(savedAddress.address,'12 Main St, Apt 2B, Monsey NY 01001, United States');
+  await request('/directory/'+familyId,{phone_h:'8455550123'},admin.cookie,'PUT');
+  savedAddress=(await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId);
+  assert.equal(savedAddress.postal_code,'01001','unrelated edits preserve structured address and leading zeroes');
+  await request('/directory/'+familyId,{address:'Old free-text address'},admin.cookie,'PUT');
+  savedAddress=(await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId);
+  assert.equal(savedAddress.address,'Old free-text address');assert.equal(savedAddress.address_line1,null);
+  await request('/directory/'+familyId,{...addressParts,address_line2:''},admin.cookie,'PUT');
+  const csv=await fetch(base+'/api/directory.csv',{headers:{Cookie:admin.cookie}});
+  assert.equal(csv.status,200);assert.match(await csv.text(),/12 Main St, Monsey NY 01001, United States/);
   const calendar=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits;
   const fatherYz=calendar.find(y=>y.person_id===father.id);
   assert.ok(fatherYz);assert.equal(fatherYz.name,'Rabbi Renamed father');assert.equal(fatherYz.hday,12);
@@ -173,6 +188,36 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/auth/set-password',{token:expiredToken,password:'must-not-change'})).status,404);
   assert.equal((await request('/auth/forgot-password',{phone:'8455550101'})).status,200);
   assert.equal((await request('/auth/forgot-password',{phone:'8455550101'})).status,429,'public requests are rate limited');
+
+  const mailRequest=(endpoint,body,cookie,method)=>request(endpoint,body,cookie,method,'192.0.2.30');
+  const emails=async()=>(await readFile(capture,'utf8')).trim().split('\n').map(JSON.parse);
+  const verificationToken=m=>m.text.match(/#verifyemail=([A-Za-z0-9_-]+)/)[1];
+  assert.equal((await mailRequest('/me',{name:'Build test admin',email:'not-email'},admin.cookie,'PATCH')).status,400);
+  assert.equal((await mailRequest('/me',{name:'Build test admin',email:'Owner@Example.TEST'},admin.cookie,'PATCH')).status,200);
+  assert.equal((await mailRequest('/me/email-verification',{password:'wrong'},admin.cookie)).status,400);
+  assert.equal((await mailRequest('/me/email-verification',{password:'build-admin-password'},admin.cookie)).status,200);
+  const mail1=(await emails()).at(-1);assert.deepEqual(mail1.to,['owner@example.test']);
+  const verifyToken=verificationToken(mail1);
+  assert.equal((await mailRequest('/auth/verify-email',{token:verifyToken})).status,200);
+  assert.equal((await mailRequest('/auth/verify-email',{token:verifyToken})).status,400,'verification is single use');
+  assert.equal((await mailRequest('/me',undefined,admin.cookie)).body.user.email_verified,true);
+  const before=(await emails()).length;
+  assert.equal((await mailRequest('/auth/forgot-password',{phone:'8455550100'})).status,200);
+  const resetEmail=(await emails()).at(-1);assert.equal((await emails()).length,before+1);
+  const resetToken=resetEmail.text.match(/#setpw=([A-Za-z0-9_-]+)/)[1];
+  assert.equal((await mailRequest('/auth/token/'+resetToken)).status,200);
+  await mailRequest('/auth/forgot-password',{phone:'8455550100'});
+  assert.equal((await emails()).length,before+1,'duplicate requests must not resend');
+  assert.equal((await mailRequest('/me',{name:'Side B test',email:'owner@example.test'},b.cookie,'PATCH')).status,200);
+  assert.equal((await mailRequest('/me/email-verification',{password:'build-member-password'},b.cookie)).status,409,'a verified email cannot belong to two accounts');
+  await mailRequest('/me',{name:'Build test admin',email:'changed@example.test'},admin.cookie,'PATCH');
+  assert.equal((await mailRequest('/me',undefined,admin.cookie)).body.user.email_verified,false);
+  assert.equal((await mailRequest('/auth/token/'+resetToken)).status,404,'changing email invalidates outstanding recovery links');
+  await mailRequest('/me/email-verification',{password:'build-admin-password'},admin.cookie);
+  const stale=verificationToken((await emails()).at(-1));
+  await mailRequest('/me',{name:'Build test admin',email:'failure@example.test'},admin.cookie,'PATCH');
+  assert.equal((await mailRequest('/auth/verify-email',{token:stale})).status,400,'a link for a changed address cannot verify the new email');
+  assert.equal((await mailRequest('/me/email-verification',{password:'build-admin-password'},admin.cookie)).status,503,'provider failure is reported without confirming the email');
 
   // Phone changes require this member's password and preserve a stable owner identity.
   assert.equal((await request('/me/phone',{phone:'8455550109',password:'build-admin-password'},a.cookie)).status,401);
