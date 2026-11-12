@@ -3,9 +3,19 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
+import { runLearningReminders } from './learning-reminders.js';
 import { config } from './config.js';
 
 export function startJobs(log: { info: (o: object, m: string) => void; error: (o: object, m: string) => void }) {
+  let reminding = false;
+  const remind = async () => {
+    if (reminding) return;
+    reminding = true;
+    try { await runLearningReminders(log); } catch(e) { log.error({error:String(e)}, 'learning reminder job failed'); }
+    finally { reminding = false; }
+  };
+  setTimeout(remind, 5000).unref();
+  setInterval(remind, 5 * 60000).unref();
   const dir = path.resolve(config.dataDir, 'backups');
   mkdirSync(dir, { recursive: true });
   const run = () => {

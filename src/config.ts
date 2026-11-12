@@ -16,6 +16,7 @@ export const config = {
   uploadMaxMb: int(env.UPLOAD_MAX_MB, 10),
   logLevel: env.LOG_LEVEL || 'info',
   timezone: env.FAMILY_TZ || 'America/New_York',
+  learningReminderHour: Math.max(0, Math.min(23, Number.isFinite(Number(env.LEARNING_REMINDER_HOUR)) && env.LEARNING_REMINDER_HOUR !== '' ? Number(env.LEARNING_REMINDER_HOUR) : 9)),
   pgDumpBin: env.PG_DUMP_BIN || 'pg_dump',
   resendApiKey: env.RESEND_API_KEY || '',
   resendFromEmail: env.RESEND_FROM_EMAIL || '',
