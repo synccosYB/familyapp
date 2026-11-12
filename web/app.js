@@ -81,14 +81,14 @@ function moreSheet() {
 const V = {};
 V.login = () => {
   const mode = STATE.authMode || 'login';
-  const sides = STATE.pickSides || [];
+  const sides = STATE.joinSides || STATE.pickSides || [];
   return `<div class="login"><div style="font-size:54px">🌳</div><h1>${esc(S.family_yi)}</h1><div class="cap">אלע קאזינס אין איין ארט: יארצייטן, פעמילי טרי, לערנען, שמחות און טשעט.</div>
   <div class="seg"><button class="${mode === 'login' ? 'on' : ''}" data-act="authmode" data-v="login">לאג אין</button><button class="${mode === 'signup' ? 'on' : ''}" data-act="authmode" data-v="signup">נייער קאזין? מאך אן אקאונט</button></div>
   <form data-form="${mode}" class="card" style="text-align:right">
   ${mode === 'signup' ? field('דיין נאמען (ווי די משפחה קען דיך)', '<input id="fn" autocomplete="name" placeholder="למשל: יואל באכנער">') : ''}
   ${field('טעלעפאן נומער', '<input id="fp" type="tel" inputmode="tel" autocomplete="tel" class="ltr" placeholder="845-555-1234">')}
   ${field('פאסווארט', `<input id="fw" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" ${mode === 'signup' ? 'placeholder="כאטש 6 אותיות"' : ''}>`)}
-  ${mode === 'signup' ? `<div class="cap" style="margin:8px 0">פון וועלכע סייד ביסטו א קאזין?</div>
+  ${mode === 'signup' && STATE.joinSides ? `<div class="card" role="status"><b>איינגעלאדנט צו: ${STATE.joinSides.map(c => esc(sideLong(c))).join(' + ')}</b><p class="muted">די משפחה סייד איז שוין אויסגעקליבן דורכן לינק.</p></div>${field('וועמענס קינד/אייניקל ביסטו?', '<input id="fnote" placeholder="דיין פארבינדונג צו דער משפחה">')}` : mode === 'signup' ? `<div class="cap" style="margin:8px 0">פון וועלכע סייד ביסטו א קאזין?</div>
    <button type="button" class="sidebtn ${sides.join() === 'a' ? 'on' : ''}" data-act="pick" data-v="a">👨 ${esc(S.side_a_yi)}<div class="muted">${famOf('a') ? 'משפחת ' + esc(famOf('a')) : ''}</div></button>
    <button type="button" class="sidebtn ${sides.join() === 'b' ? 'on' : ''}" data-act="pick" data-v="b">👩 ${esc(S.side_b_yi)}<div class="muted">${famOf('b') ? 'משפחת ' + esc(famOf('b')) : ''}</div></button>
    <button type="button" class="sidebtn ${sides.length === 2 ? 'on' : ''}" style="font-size:16px" data-act="pick" data-v="ab">ביידע סיידס</button>
@@ -127,9 +127,13 @@ V.home = async () => {
     : empty('🎉', 'נאך קיין שמחות.', '<a class="btn s" href="#sim">+ נייע שמחה</a>')}
   <h2>💬 לעצטע מעסעדזשעס</h2>${h.messages.length ? h.messages.map((m) => `<a class="row" href="#chat" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(m.name)}</b> <span class="muted">· ${esc(m.room === 'all' ? 'אלע קאזינס' : famOf(m.room) || sideName(m.room))} · ${hm(m.created_at)}</span><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.body)}</div></div></a>`).join('')
     : empty('💬', 'נאך קיין מעסעדזשעס.', '<a class="btn s" href="#chat">שרייב די ערשטע</a>')}
-  <div style="margin-top:18px"><a class="btn l" href="${inviteLink()}" target="_blank" rel="noopener">📲 אינווייט א קאזין (וואטסעפ)</a></div>`;
+  <div style="margin-top:18px"><button class="btn l" data-act="familyinvite">📲 אינווייט א קאזין</button></div>`;
 };
-function inviteLink() { return 'https://wa.me/?text=' + encodeURIComponent(`${S.family_yi}: יארצייטן, פעמילי טרי, משניות און תהילים, שמחות און טשעט פאר אלע קאזינס. מאך אן אקאונט דא: ${location.origin}/`); }
+function familyInviteForm() {
+  modal(`<h2>📲 אינווייט א קאזין</h2><p class="muted">קלייב אויס איין סייד אדער ביידע. דער קאזין וועט ווארטן אויף אדמין אפרוביישן.</p>
+    <form data-form="familyinvite">${field('צו וועלכע משפחה סייד?', `<select id="inviteSide">${sideOptions(STATE.side === 'all' ? (both() ? 'both' : mySides()[0]) : STATE.side)}</select>`)}
+    <div class="err" role="alert"></div><div class="btns"><button class="btn">מאך א לינק</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>`);
+}
 
 // yahrzeits
 V.yz = async () => {
@@ -408,7 +412,7 @@ V.people = async () => {
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" type="search" placeholder="🔍 סוירטש נאמען, שטאט, טעלעפאן…" value="${esc(STATE.q)}" style="margin:0;max-width:340px" data-input="q"><span class="muted" id="qn">${L.length} משפחות</span>
   <a class="btn s l" href="/api/directory.csv" download>⬇ דאונלאוד ליסט (Excel)</a><button class="btn s" data-act="editdir" data-id="0">+ לייג צו</button></div>
   <div class="grid g2" id="dirlist">${dirCards(L)}</div>
-  <a class="btn" style="margin-top:14px" href="${inviteLink()}" target="_blank" rel="noopener">📲 אינווייט א קאזין</a>`;
+  <button class="btn" style="margin-top:14px" data-act="familyinvite">📲 אינווייט א קאזין</button>`;
 };
 function dirCards(L) {
   return L.map((d) => `<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow"><b style="font-size:18px">${esc(d.husband)}${d.husband && d.wife ? ' · ' : ''}${esc(d.wife)}</b><div class="muted">${esc(d.parents)}</div></div>${sideTag(d.side)}</div>
@@ -471,6 +475,21 @@ const curView = () => ((location.hash || '#').slice(1).split('/')[0] || 'home');
 let RENDER = 0;
 async function go() {
   const h = (location.hash || '').slice(1);
+  if (h.startsWith('join=')) {
+    stopPoll(); clearChrome();
+    const token = h.slice(5);
+    if (STATE.joinToken !== token) { STATE.joinToken = token; STATE.joinSides = null; STATE.authMode = 'signup'; }
+    try {
+      const invitation = await api('/family-invitations/' + encodeURIComponent(token));
+      if (location.hash !== '#join=' + token) return;
+      STATE.joinSides = invitation.sides;
+      if (ME) {
+        $('m').innerHTML = `<div class="login"><h1>🌳 משפחה אינוויטעישן</h1><p>איינגעלאדנט צו: ${invitation.sides.map(c => esc(sideLong(c))).join(' + ')}</p><p>דו ביסט שוין איינגעשריבן אלס ${esc(ME.name)}. צו טוישן דיין סייד, רעד מיט דעם אדמין.</p><a class="btn" href="#home">צוריק צו מיין אקאונט</a></div>`;
+      } else $('m').innerHTML = V.login();
+    } catch (e) { if (location.hash === '#join=' + token) $('m').innerHTML = `<div class="login"><h1>אינוויטעישן</h1><p role="alert">${esc(e.message)}</p><a class="btn" href="#home">צוריק</a></div>`; }
+    return;
+  }
+  STATE.joinToken = null; STATE.joinSides = null;
   if (h.startsWith('verifyemail=')) { stopPoll(); clearChrome(); STATE.verifyEmailToken = h.slice(12); $('m').innerHTML = V.verifyemail(); return; }
   if (h === 'emailverified') { stopPoll(); clearChrome(); $('m').innerHTML = `<div class="login"><h1>✓ אימעיל באשטעטיגט</h1><p>דו קענסט יעצט באקומען א פאסווארט לינק אויף דיין אימעיל.</p><a class="btn" href="${ME ? '#me' : '#home'}">${ME ? 'מיין אקאונט' : 'לאג אין'}</a></div>`; return; }
   if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); const token = STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(token)).then((r) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = 'שלום ' + r.name + '!'; $('setpwsubmit').disabled = false; }).catch((e) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = ''; $('ferr').textContent = e.message; }); return; }
@@ -491,13 +510,14 @@ async function loadMe() { const r = await api('/me'); ME = r.user; EMAIL_READY =
 
 // ---------- actions ----------
 const ACT = {
+  familyinvite: familyInviteForm,
   forgotpw: () => { STATE.resetPhone = val('fp'); STATE.resetRequested = false; location.hash = '#forgotpw'; },
   backlogin: () => { STATE.authMode = 'login'; STATE.resetRequested = false; history.replaceState(null, '', location.pathname + location.search); go(); },
   close: closeModal, more: moreSheet, reload: () => go(),
   logout: async () => { closeModal(); await api('/auth/logout', { method: 'POST' }).catch(() => {}); ME = null; location.hash = ''; go(); },
   recheck: async () => { await loadMe(); go(); if (ME && ME.status !== 'active') toast('נאך נישט אפרובירט'); },
   authmode: (el) => { STATE.authMode = el.dataset.v; go(); },
-  pick: (el) => { STATE.pickSides = el.dataset.v === 'ab' ? ['a', 'b'] : [el.dataset.v]; const keep = { fn: val('fn'), fp: val('fp'), fw: $('fw').value, fnote: val('fnote') }; $('m').innerHTML = V.login(); for (const k in keep) if ($(k)) $(k).value = keep[k]; },
+  pick: (el) => { if (STATE.joinSides) return; STATE.pickSides = el.dataset.v === 'ab' ? ['a', 'b'] : [el.dataset.v]; const keep = { fn: val('fn'), fp: val('fp'), fw: $('fw').value, fnote: val('fnote') }; $('m').innerHTML = V.login(); for (const k in keep) if ($(k)) $(k).value = keep[k]; },
   side: (el) => { STATE.side = el.dataset.v; refresh(); },
   treezoom: (el) => { STATE.treeZoom=el.dataset.v==='fit'?null:el.dataset.v==='actual'?1:Math.max(0.2,Math.min(2,(STATE.treeScale||1)+Number(el.dataset.v))); updateFamilyViewport(); },
   treeside: (el) => { STATE.treeSide = el.dataset.v; STATE.treeZoom=null; refresh(); }, treeview: (el) => { STATE.treeView = el.dataset.v; refresh(); },
@@ -542,9 +562,16 @@ const CHANGE = {
     try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast('✓ סייד געטוישט'); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
 };
 const FORMS = {
+  familyinvite: async () => {
+    const side = val('inviteSide');
+    const r = await api('/family-invitations', { method: 'POST', body: { sides: side === 'both' ? ['a', 'b'] : [side] } });
+    const names = r.sides.map(c => sideLong(c)).join(' + ');
+    const message = `${S.family_yi}: דו ביסט איינגעלאדנט צו ${names}. מאך אן אקאונט דא: ${r.link}`;
+    modal(`<h2>🌳 אינוויטעישן גרייט</h2><p><b>${esc(names)}</b></p><p class="muted">גוט פאר ${r.days} טעג. נייע קאזינס דארפן אדמין אפרוביישן.</p><input id="rl" readonly class="ltr" aria-label="Invitation link" value="${esc(r.link)}"><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+  },
   forgotpw: async () => { await api('/auth/forgot-password', { method: 'POST', body: { phone: val('resetphone') } }); STATE.resetRequested = true; go(); },
   login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast('ברוך הבא! ✓'); location.hash = '#home'; go(); },
-  signup: async () => { const r = await api('/auth/signup', { method: 'POST', body: { name: val('fn'), phone: val('fp'), password: $('fw').value, sides: STATE.pickSides || [], note: val('fnote') } }); ME = r.user; await loadMe(); go(); },
+  signup: async () => { const r = await api('/auth/signup', { method: 'POST', body: { name: val('fn'), phone: val('fp'), password: $('fw').value, sides: STATE.pickSides || [], invitation_token: STATE.joinToken || undefined, note: val('fnote') } }); ME = r.user; await loadMe(); location.hash = '#home'; go(); },
   setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); go(); },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },

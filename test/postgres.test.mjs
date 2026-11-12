@@ -37,6 +37,32 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   const b=await request('/auth/signup',{name:'Side B test',phone:'8455550102',password:'build-member-password',sides:['b']});assert.equal(b.status,200);
   assert.equal((await request('/people',undefined,a.cookie)).status,403);
   for(const u of [a,b])assert.equal((await request('/admin/users/'+u.body.user.id,{status:'active'},admin.cookie,'PATCH')).status,200);
+  // Invitation audiences are fixed by the server, for one side or both.
+  const inviteRequest=(endpoint,body,cookie='',method=body===undefined?'GET':'POST')=>request(endpoint,body,cookie,method,'127.0.0.44');
+  assert.equal((await inviteRequest('/family-invitations',{sides:['a']})).status,401);
+  assert.equal((await inviteRequest('/family-invitations',{sides:['a','b']},a.cookie)).status,403);
+  assert.equal((await inviteRequest('/family-invitations',{sides:['invalid']},admin.cookie)).status,400);
+  for(const sides of [['a'],['b'],['a','b']]) {
+    const made=await inviteRequest('/family-invitations',{sides},sides.length===1?(sides[0]==='a'?a:b).cookie:admin.cookie);
+    assert.equal(made.status,200,JSON.stringify(made.body));
+    const token=made.body.link.split('#join=')[1];assert.equal(token.length,32);
+    assert.deepEqual((await inviteRequest('/family-invitations/'+token)).body.sides,sides);
+    const newcomer=await inviteRequest('/auth/signup',{name:'Invited cousin '+sides.join(''),phone:'84555502'+(sides.length===2?'03':sides[0]==='a'?'01':'02'),password:'invited-password',sides:['a','b'],invitation_token:token});
+    assert.equal(newcomer.status,200,JSON.stringify(newcomer.body));
+    assert.deepEqual(newcomer.body.user.sides,sides,'ignore client attempts to add another side');
+    assert.equal(newcomer.body.user.status,'pending');
+    assert.equal((await inviteRequest('/people',undefined,newcomer.cookie)).status,403);
+    assert.equal((await inviteRequest('/family-invitations',{sides},newcomer.cookie)).status,403);
+    const db=new pg.Pool({connectionString:conn.toString()});
+    try {
+      const row=(await db.query('SELECT invited_by FROM users WHERE id=$1',[newcomer.body.user.id])).rows[0];
+      assert.equal(row.invited_by,sides.length===1?(sides[0]==='a'?a:b).body.user.id:admin.body.user.id);
+      await db.query('UPDATE family_invitations SET expires_at=now()-interval \'1 second\' WHERE token_hash=$1',[createHash('sha256').update(token).digest('hex')]);
+    } finally {await db.end();}
+    assert.equal((await inviteRequest('/family-invitations/'+token)).status,404);
+    assert.equal((await inviteRequest('/auth/signup',{name:'Expired',phone:'8455550299',password:'invited-password',invitation_token:token})).status,404);
+  }
+  assert.equal((await inviteRequest('/family-invitations/not-a-token')).status,400);
   const parent=await request('/people',{name:'A parent',side:'a'},a.cookie);assert.equal(parent.status,200);
   const kid=await request('/people',{name:'A child',side:'a',parent_id:parent.body.person.id},a.cookie);assert.equal(kid.status,200);
   assert.equal((await request('/people/'+parent.body.person.id,{name:'A parent',side:'a',parent_id:kid.body.person.id},a.cookie,'PUT')).status,400);
