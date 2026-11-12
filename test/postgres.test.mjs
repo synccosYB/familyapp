@@ -100,6 +100,32 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   const contenders=await Promise.all([['Race 1','a'],['Race 2','a']].map(([name,side])=>createPerson({name,side})));
   const cycleRace=await Promise.all(contenders.map((p,i)=>request('/people/'+p.id,{name:p.name,side:'a',father_id:contenders[1-i].id},admin.cookie,'PUT')));
   assert.deepEqual(cycleRace.map(r=>r.status).sort(),[200,400]);
+  // Family memberships describe ancestry/marriage and never grant account access.
+  const memberA=await request('/people/'+father.id,{new_family:'Family A'},admin.cookie,'PUT');
+  assert.equal(memberA.status,200,JSON.stringify(memberA.body));
+  const readPerson=async id=>(await request('/people',undefined,admin.cookie)).body.people.find(p=>p.id===id);
+  const familyA=(await readPerson(father.id)).families[0];
+  assert.equal((await request('/people/'+father.id,{new_family:'Family B'},admin.cookie,'PUT')).status,200);
+  const memberships=(await readPerson(father.id)).families;
+  assert.equal(memberships.length,2);
+  assert.equal((await request('/people/'+son.id,{family_ids:memberships.map(f=>f.id)},admin.cookie,'PUT')).status,200);
+  assert.equal((await request('/people/'+son.id,{note:'Preserve affiliations'},admin.cookie,'PUT')).status,200);
+  assert.equal((await readPerson(son.id)).families.length,2);
+  assert.equal((await request('/people/'+son.id,{name:'Must roll back',family_ids:[2147483647],new_family:'Rollback family'},admin.cookie,'PUT')).status,400);
+  assert.equal((await readPerson(son.id)).name,'Structured son');
+  assert.equal((await request('/people/'+son.id,{family_ids:[],new_family:'family a'},admin.cookie,'PUT')).status,200);
+  assert.deepEqual((await readPerson(son.id)).families.map(f=>f.id),[familyA.id]);
+  assert.equal((await request('/people/'+son.id,{family_ids:[]},admin.cookie,'PUT')).status,200);
+  assert.equal((await readPerson(son.id)).families.length,0);
+  assert.equal((await request('/people',undefined,b.cookie)).body.people.some(p=>p.id===father.id),false);
+  assert.equal((await readPerson(father.id)).lineage_term,'בן');
+  assert.equal((await readPerson(mother.id)).lineage_term,'בת');
+  const grandparent=await createPerson({name:'Lineage grandfather',title:'Rabbi'});
+  assert.equal((await request('/people/'+father.id,{father_id:grandparent.id},admin.cookie,'PUT')).status,200);
+  const linkedCalendar=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits.find(y=>y.person_id===father.id);
+  assert.equal(linkedCalendar.father_name,'בן Rabbi Lineage grandfather');
+  assert.equal(linkedCalendar.families.length,2);
+  assert.equal((await request('/people/'+father.id,{lineage_term:'wrong'},admin.cookie,'PUT')).status,400);
   // Saving a household is transactional, and does not overwrite canonical names.
   assert.equal((await request('/directory/'+familyId,{husband:'Stale copy',wife:'Stale copy',side:'a'},admin.cookie,'PUT')).status,200);
   assert.equal((await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId).husband,'Structured son');
