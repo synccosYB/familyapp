@@ -7,6 +7,7 @@ nav.side a{display:block;color:#e0e7ff;text-decoration:none;padding:11px 12px;bo
 nav.side a.on,nav.side a:hover{background:#4338ca;color:#fff}
 nav.side .badge{background:#f59e0b;color:#111;border-radius:99px;padding:0 7px;font-size:12px;margin-right:6px}
 main{margin-right:230px;padding:24px 28px;max-width:1100px}
+main.tree-workspace{max-width:none;padding:16px 20px}
 h1{font-size:28px;margin:0 0 4px}h2{font-size:20px;margin:22px 0 10px}.cap{color:#6b7280;margin-bottom:16px}
 .card{background:#fff;border:1px solid #e6e8ec;border-radius:14px;padding:16px}.grid{display:grid;gap:12px}.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(4,1fr)}
 .big{font-size:26px;font-weight:800}.muted{color:#6b7280;font-size:14px}
@@ -66,6 +67,7 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
  body{font-size:16px}
  nav.side{display:none}
  main{margin:0;padding:14px 14px 90px}
+ main.tree-workspace{padding:14px 12px 82px}
  h1{font-size:23px}
  .g2,.g3{grid-template-columns:1fr}.g4{grid-template-columns:1fr 1fr}
  .perek{grid-template-columns:repeat(6,1fr)}.bub{max-width:88%}
