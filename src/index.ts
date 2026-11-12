@@ -833,7 +833,9 @@ const personSelect = () => `SELECT p.*,
   LEFT JOIN people pa ON pa.id=p.parent_id AND ${personSql('pa')}`;
 app.get('/api/people', async (req) => {
   const u = await member(req);
-  return { people: await q(`${personSelect()} WHERE ${personSideSql('p',1)} ORDER BY p.id`, [mySides(u)]) };
+  const groups = familyContext.getStore()!.peopleGroups ?? [u.family_group_id!];
+  const managed = u.is_admin ? groups : u.primary_family_admin ? groups.filter(id => id === u.primary_family_group_id) : [];
+  return { people: await q(`${personSelect()} WHERE ${memberProfileSql('p')} ORDER BY p.id`, [groups, managed, u.sides]) };
 });
 const personId = (v: any): number | null => {
   if (v === null || v === undefined || v === '') return null;
