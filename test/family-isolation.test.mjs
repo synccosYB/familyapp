@@ -16,8 +16,8 @@ test('families isolate owners, members, invitations, records, chat and direct UR
  let logs='',server;
  const start=entry=>{const p=spawn(process.execPath,[entry],{env,stdio:['ignore','pipe','pipe']});p.stdout.on('data',x=>logs+=x);p.stderr.on('data',x=>logs+=x);return p;};
  let seq=1;
- const req=async(path,body,cookie='',method=body===undefined?'GET':'POST',group)=>{
-  const r=await fetch('http://127.0.0.1:18082/api'+path,{method,headers:{'x-familye':'1','x-forwarded-for':'127.0.1.'+(seq++%240+1),...(cookie?{cookie}:{}),...(group?{'x-family-group':String(group)}:{}),...(body===undefined?{}:{'content-type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body)});
+ const req=async(path,body,cookie='',method=body===undefined?'GET':'POST',group,acting)=>{
+  const r=await fetch('http://127.0.0.1:18082/api'+path,{method,headers:{'x-familye':'1','x-forwarded-for':'127.0.1.'+(seq++%240+1),...(cookie?{cookie}:{}),...(group?{'x-family-group':String(group)}:{}),...(acting?{'x-family-act':acting}:{}),...(body===undefined?{}:{'content-type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body)});
   const text=await r.text();let value;try{value=JSON.parse(text);}catch{value=text;}
   return {status:r.status,body:value,cookie:r.headers.get('set-cookie')?.split(';')[0]||''};
  };
@@ -359,6 +359,50 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.equal(ok(await req('/me',undefined,reduced.cookie+'; '+switchResult.cookie)).user.selected_family_group_id,ga);
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.users WHERE family_group_id IS NULL`)).rows[0].n,0);
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.family_groups WHERE name='Spoof'`)).rows[0].n,0);
+  // The multi-family roster deduplicates members and only exposes visible tree relationships.
+  const memberId=m.body.user.id,bId=b.body.user.id;
+  const sibling1=ok(await req('/people',{name:'Roster brother one',side:'both',lineage_term:'בן',father_id:pb.id},root.cookie,'POST',gb)).person;
+  const sibling2=ok(await req('/people',{name:'Roster brother two',side:'both',lineage_term:'בן',father_id:pb.id},root.cookie,'POST',gb)).person;
+  ok(await req(`/admin/users/${memberId}/tree-profile`,{person_id:sibling1.id},root.cookie,'PUT'));
+  assert.equal((await req(`/admin/users/${bId}/tree-profile`,{person_id:pa.id},root.cookie,'PUT')).status,400);
+  ok(await req(`/admin/users/${bId}/tree-profile`,{person_id:sibling2.id},root.cookie,'PUT'));
+  const roster=ok(await req(`/cousins?groups=${ga},${gb}`,undefined,root.cookie,'GET',ga)).members;
+  assert.equal(roster.filter(p=>p.id===memberId).length,1);
+  assert.deepEqual(roster.find(p=>p.id===memberId).group_ids,[ga,gb]);
+  assert.equal(roster.find(p=>p.id===memberId).father_id,pb.id);
+  assert.equal(roster.find(p=>p.id===bId).father_id,pb.id);
+  assert.equal((await req(`/cousins?groups=${ga},${gb}`,undefined,bAgain.cookie)).status,403);
+  assert.ok(!ok(await req(`/cousins?groups=${ga}`,undefined,root.cookie,'GET',ga)).members.some(p=>p.father_id===pb.id));
+
+  // Act-as uses a temporary identity and preserves the administrator's selected family.
+  assert.equal((await req(`/admin/users/${memberId}/act-as`,{},bAgain.cookie)).status,403);
+  assert.equal((await req(`/admin/users/${root.body.user.id}/act-as`,{},root.cookie)).status,404);
+  const adminCookie=root.cookie+`; fam_group=${ga}`;
+  const act=await req(`/admin/users/${bId}/act-as`,{},adminCookie);ok(act);
+  assert.match(act.cookie,/^fam_act=/);
+  const actCookie=adminCookie+'; '+act.cookie;
+  const effective=ok(await req('/me',undefined,actCookie)).user;
+  assert.equal(effective.id,bId);assert.equal(effective.selected_family_group_id,gb);assert.equal(effective.is_admin,false);
+  assert.equal(effective.acting.admin_id,root.body.user.id);
+  const context=effective.acting.context;
+  assert.equal((await req('/people',undefined,actCookie)).status,409,'stale admin tabs cannot issue requests as the member');
+  assert.equal((await req('/people',undefined,actCookie,'GET',ga,context)).status,403);
+  assert.equal((await req('/admin/users',undefined,actCookie,'GET',gb,context)).status,403);
+  assert.equal((await req('/me',{name:'Changed email',email:'unsafe@example.test'},actCookie,'PATCH',undefined,context)).status,403);
+  const asMember=ok(await req('/people',{name:'Acted on behalf of member',side:'both'},actCookie,'POST',gb,context)).person;
+  assert.equal(asMember.created_by,bId);assert.equal(asMember.family_group_id,gb);
+  ok(await req('/auth/stop-acting',{},actCookie));
+  assert.equal(ok(await req('/me',undefined,adminCookie)).user.selected_family_group_id,ga);
+  assert.equal((await req('/people',undefined,actCookie,'GET',gb,context)).status,401);
+  assert.equal((await req('/people',undefined,adminCookie,'GET',ga,context)).status,409,'stale member tabs cannot act as admin');
+  const events=(await db.query(`SELECT event,route FROM ${schema}.admin_act_as_audit WHERE member_id=$1 ORDER BY id`,[bId])).rows;
+  assert.deepEqual(events,[{event:'start',route:null},{event:'request',route:'/api/people'},{event:'stop',route:null}]);
+  const expiring=await req(`/admin/users/${bId}/act-as`,{},adminCookie);ok(expiring);
+  await db.query(`UPDATE ${schema}.sessions SET expires_at=now()-interval '1 minute' WHERE admin_session_hash IS NOT NULL`);
+  const expiredCookie=adminCookie+'; '+expiring.cookie;
+  const expired=ok(await req('/me',undefined,expiredCookie));
+  assert.equal(expired.user,null);assert.equal(expired.can_stop_acting,true);
+  ok(await req('/auth/stop-acting',{},expiredCookie));
  }finally{
   if(server){server.kill('SIGTERM');await once(server,'exit').catch(()=>{});}
   await db.query(`DROP SCHEMA ${schema} CASCADE`);await db.end();await rm(data,{recursive:true,force:true});

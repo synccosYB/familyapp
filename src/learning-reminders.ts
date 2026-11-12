@@ -56,7 +56,7 @@ export async function runLearningReminders(log: {error:(o:object,m:string)=>void
   try {
     locked = (await c.query('SELECT pg_try_advisory_lock(19761112,21) locked')).rows[0].locked;
     if (!locked) return;
-    const rows = (await c.query(`SELECT l.id,l.kind,l.niftar,l.target_date,u.id user_id,u.email FROM learn_lists l
+    const rows = (await c.query(`SELECT l.id,l.kind,l.niftar,l.target_date,l.family_group_id,u.id user_id,u.email FROM learn_lists l
       JOIN users u ON l.family_group_id=ANY(u.family_group_ids)
       JOIN family_groups g ON g.id=l.family_group_id AND NOT g.is_quarantine AND g.archived_at IS NULL
       WHERE u.status='active' AND u.email_verified_at IS NOT NULL AND u.learning_email_reminders
@@ -70,7 +70,7 @@ export async function runLearningReminders(log: {error:(o:object,m:string)=>void
         const email = normalizeEmail(row.email); if (!email) continue;
         const units = await remainingLearning((sql,params)=>c.query(sql,params),row.id,row.user_id,row.kind);
         const plan = dailyLearning(row.kind,units,row.target_date,clock.date); if (!plan) continue;
-        const mail:LearningMail = {...plan,title:`${row.kind==='tehillim'?'תהילים':'משניות'} — לעילוי נשמת ${row.niftar}`,target:row.target_date,link:config.publicUrl+'/#learn/'+row.id,sender:config.resendFromEmail,settingsLink:config.publicUrl+'/#me'};
+        const mail:LearningMail = {...plan,title:`${row.kind==='tehillim'?'תהילים':'משניות'} — לעילוי נשמת ${row.niftar}`,target:row.target_date,link:`${config.publicUrl}/#learn/${row.id}/${row.family_group_id}`,sender:config.resendFromEmail,settingsLink:config.publicUrl+'/#me'};
         // Commit the immutable request before sending. Retry with the same provider key after a crash.
         await c.query(`INSERT INTO learning_email_deliveries(user_id,list_id,local_date,recipient,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,[row.user_id,row.id,clock.date,email,JSON.stringify(mail)]);
         const delivery = (await c.query(`SELECT * FROM learning_email_deliveries WHERE user_id=$1 AND list_id=$2 AND local_date=$3 AND sent_at IS NULL

@@ -1,0 +1,19 @@
+name: Wake the daily learning reminder worker
+
+on:
+  schedule:
+    - cron: '12,42 9 * * *'
+      timezone: America/New_York
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      FAMILYE_PUBLIC_URL: ${{ vars.FAMILYE_PUBLIC_URL || 'https://kobor.it.com' }}
+    steps:
+      - name: Wake the Replit app if it has scaled down
+        run: curl --fail --silent --show-error --retry 3 --retry-all-errors --max-time 25 "${FAMILYE_PUBLIC_URL%/}/api/health"

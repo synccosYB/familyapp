@@ -112,4 +112,5 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
 .person-family-picker details{margin-top:12px}
 .person-family-picker summary{cursor:pointer;color:#3730a3}
 .yahrzeit-families{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+.acting-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 16px;background:#fef3c7;color:#78350f}
 

@@ -103,6 +103,8 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await portion(a,0,{action:'take',chapter:1,mishnah:1})).status,200);
   assert.equal((await portion(b,0,{action:'take'})).status,409);
   assert.equal((await portion(b,0,{action:'take',chapter:1,mishnah:2})).status,200);
+  const splitClaims=(await request('/lists/'+gl,undefined,a.cookie)).body.items[0].parts;
+  assert.deepEqual(splitClaims.assignees,[{name:'Side A test',count:1},{name:'Side B test',count:1}]);
   assert.equal((await portion(b,0,{action:'done',chapter:1,mishnah:1})).status,403);
   assert.equal((await portion(a,0,{action:'done',chapter:1,mishnah:1})).status,200);
   assert.equal((await portion(a,0,{action:'done',chapter:1})).status,403);
@@ -390,6 +392,28 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
     request('/me/phone',{phone:'+1 845 555 0199',password:'build-member-password'},b.cookie)
   ]);
   assert.deepEqual(phoneRace.map(r=>r.status).sort(),[200,409],'two accounts cannot claim the same phone');
+
+  await adminPool.query(`UPDATE ${schema}.users SET email='learning-retry@example.test',email_verified_at=now() WHERE id=$1`,[a.body.user.id]);
+  await adminPool.query(`UPDATE ${schema}.users SET email='learning-other-side@example.test',email_verified_at=now(),is_admin=false WHERE id=$1`,[b.body.user.id]);
+  const emailPath=`/lists/${hidden.body.list.id}/learning-email`;
+  assert.equal((await request(emailPath,undefined,winner.cookie)).status,403);
+  assert.equal((await request(`/lists/${listId}/learning-email`,undefined,admin.cookie)).status,400,'only Mishnayos lists send this request');
+  const preview=await request(emailPath,undefined,admin.cookie);
+  assert.equal(preview.status,200,JSON.stringify(preview.body));
+  assert.equal(preview.body.recipient_count,1,'include verified members who can see this list');
+  assert.equal(preview.body.available,true);
+  assert.match(preview.body.text,new RegExp(`#learn/${hidden.body.list.id}/${testFamily}`));
+  const key=`${randomBytes(4).toString('hex')}-0000-4000-8000-000000000000`;
+  assert.equal((await request(emailPath,{request_key:key,fingerprint:'stale'},admin.cookie)).status,409);
+  const campaign={request_key:key,fingerprint:preview.body.fingerprint};
+  const beforeInvite=(await emails()).length;
+  assert.deepEqual((await request(emailPath,campaign,admin.cookie)).body,{sent:0,total:1},'a failed provider attempt can be retried');
+  assert.deepEqual((await request(emailPath,campaign,admin.cookie)).body,{sent:1,total:1});
+  assert.deepEqual((await request(emailPath,campaign,admin.cookie)).body,{sent:1,total:1},'retrying a completed request does not resend');
+  assert.equal((await emails()).length,beforeInvite+1);
+  assert.deepEqual((await emails()).at(-1).to,['learning-retry@example.test']);
+  await adminPool.query(`UPDATE ${schema}.learn_items SET taken_by=$1 WHERE list_id=$2`,[a.body.user.id,hidden.body.list.id]);
+  assert.equal((await request(emailPath,undefined,admin.cookie)).body.available,false);
 
  }finally{
   if(child&&child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}

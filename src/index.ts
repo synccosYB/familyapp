@@ -17,7 +17,7 @@ import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, toda
 import { dailyLearning, reminderClock, remainingLearning } from './learning-reminders.js';
 import { startJobs } from './jobs.js';
 import { MASECHTOS } from './masechtos.js';
-import { emailReady, normalizeEmail, sendAccountEmail } from './email.js';
+import { emailReady, learningRequestEmail, normalizeEmail, sendAccountEmail, sendLearningRequestBatch } from './email.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(__dirname, '../web');
@@ -28,6 +28,10 @@ const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const tok = (n = 32) => randomBytes(n).toString('base64url');
 const hashPw = (pw: string) => hash(pw, { memoryCost: 19456, timeCost: 2, parallelism: 1 });
 const COOKIE = 'fam_s';
+const ACTING_COOKIE = 'fam_act';
+const ACTING_FAMILY_COOKIE = 'fam_act_group';
+const cookieOptions = { path: '/', httpOnly: true, sameSite: 'lax' as const, secure: config.cookieSecure };
+const accountRoutes = new Set(['/api/me','/api/me/password','/api/me/phone','/api/me/email-verification','/api/me/learning-reminders']);
 
 class HttpError extends Error { constructor(public status: number, public yi: string, public details?: unknown) { super(yi); } }
 const bad = (yi: string) => new HttpError(400, yi);
@@ -42,7 +46,7 @@ const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0
 const pwProblem = (pw: unknown) => (typeof pw !== 'string' || pw.length < 6 ? 'דאס פאסווארט דארף האבן כאטש 6 אותיות' : pw.length > 200 ? 'צו לאנג' : null);
 const SIDE3 = ['a', 'b', 'both'];
 
-interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; learning_email_reminders: boolean; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; status: string; is_admin: boolean; is_family_admin: boolean }
+interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; learning_email_reminders: boolean; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; primary_family_admin?: boolean; status: string; is_admin: boolean; is_family_admin: boolean; acting?: {admin_id:number; context:string} }
 declare module 'fastify' { interface FastifyRequest { user?: User } }
 
 const app = Fastify({ logger: { level: config.logLevel }, trustProxy: config.trustProxy, bodyLimit: 200_000 });
@@ -82,14 +86,24 @@ app.addHook('onRequest', async (req,reply) => {
     throw new HttpError(403, 'פארבאטן');
 });
 
-async function loadUser(req: FastifyRequest): Promise<User | null> {
-  const t = req.cookies[COOKIE];
-  if (!t) return null;
-  const u = await q1<User>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.learning_email_reminders,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin FROM sessions s JOIN users u ON u.id=s.user_id
-    WHERE s.token_hash=$1 AND s.expires_at>now()`, [sha(t)]);
+async function loadUser(req: FastifyRequest, baseOnly=false): Promise<User | null> {
+  const baseToken=req.cookies[COOKIE];
+  if(!baseToken)return null;
+  const actingToken=baseOnly?undefined:req.cookies[ACTING_COOKIE];
+  const u = await q1<User & {acting_admin_id:number|null}>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.learning_email_reminders,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin,actor.id acting_admin_id
+    FROM sessions s JOIN users u ON u.id=s.user_id
+    LEFT JOIN sessions original ON original.token_hash=s.admin_session_hash AND original.token_hash=$2
+      AND original.admin_session_hash IS NULL AND original.expires_at>now()
+    LEFT JOIN users actor ON actor.id=original.user_id AND actor.is_admin AND actor.status='active'
+    WHERE s.token_hash=$1 AND s.expires_at>now() AND (
+      ($2::text IS NULL AND s.admin_session_hash IS NULL) OR
+      ($2::text IS NOT NULL AND actor.id IS NOT NULL AND u.status='active' AND NOT u.is_admin))`,
+    [sha(actingToken||baseToken),actingToken?sha(baseToken):null]);
   if(!u)return null;
+  if(actingToken && u.acting_admin_id)u.acting={admin_id:u.acting_admin_id,context:sha('act-as:'+actingToken).slice(0,32)};
   u.primary_family_group_id=u.family_group_id;
-  const requested=req.headers['x-family-group'] || req.cookies.fam_group;
+  u.primary_family_admin=u.is_family_admin;
+  const requested=(!baseOnly && req.headers['x-family-group']) || req.cookies[u.acting?ACTING_FAMILY_COOKIE:'fam_group'];
   if(requested) {
     const selected=Number(requested);
     if(!Number.isSafeInteger(selected)||selected<1 || (!u.is_admin&&!u.family_group_ids.includes(selected))) {
@@ -101,14 +115,20 @@ async function loadUser(req: FastifyRequest): Promise<User | null> {
   return u;
 }
 async function member(req: FastifyRequest): Promise<User> {
+  if(req.user)return req.user;
   const u = await loadUser(req);
   if (!u) throw new HttpError(401, 'לאג אין');
   if (u.status !== 'active') throw new HttpError(403, 'דיין אקאונט ווארט נאך אויף אפרוביישן');
+  if(req.url.startsWith('/api/') && req.headers['x-family-act']!==u.acting?.context)
+    throw new HttpError(409,'דער מעמבער האט זיך געטוישט. לאד איבער די בלאט.');
+  if(u.acting && !['GET','HEAD','OPTIONS'].includes(req.method) && req.routeOptions.url!=='/api/chat/:room/presence') {
+    await q('INSERT INTO admin_act_as_audit(admin_id,member_id,event,method,route) VALUES($1,$2,\'request\',$3,$4)',[u.acting.admin_id,u.id,req.method,req.routeOptions.url]);
+  }
   req.user = u;
-  q('UPDATE users SET last_seen_at=now() WHERE id=$1 AND (last_seen_at IS NULL OR last_seen_at<now()-interval \'5 min\')', [u.id]).catch(() => {});
+  if(!u.acting)q('UPDATE users SET last_seen_at=now() WHERE id=$1 AND (last_seen_at IS NULL OR last_seen_at<now()-interval \'5 min\')', [u.id]).catch(() => {});
   return u;
 }
-async function admin(req: FastifyRequest) { const u = await member(req); if (!managesFamily(u)) throw new HttpError(403, 'נאר פאר אדמין'); return u; }
+async function admin(req: FastifyRequest) { const u = await member(req); if (!managesFamily(u) || u.acting) throw new HttpError(403, 'נאר פאר אדמין'); return u; }
 const managesFamily = (u: User) => u.is_admin || u.is_family_admin;
 const seesAll = (u: User) => managesFamily(u) || (u.sides.includes('a') && u.sides.includes('b'));
 const mySides = (u: User) => (managesFamily(u) ? ['a', 'b'] : u.sides);
@@ -130,6 +150,8 @@ function okSide(u: User, side: unknown, allowed = SIDE3): string {
 // Everything else under /api is family content, including future routes by default.
 app.addHook('preHandler', async req => {
   const route = req.routeOptions.url || '';
+  if(accountRoutes.has(route) && req.method!=='GET' && (req.cookies[ACTING_COOKIE] || req.headers['x-family-act']))
+    throw new HttpError(403,'צו טוישן אקאונט פרטים, גיי קודם צוריק צו אדמין.');
   if (route.startsWith('/api/admin/')) {
     const manager=await admin(req);
     if(!manager.is_admin) {
@@ -176,9 +198,10 @@ app.addHook('preHandler', async req => {
 async function newSession(reply: FastifyReply, userId: number) {
   const t = tok();
   await q(`INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3||' days')::interval)`, [sha(t), userId, String(config.sessionDays)]);
-  reply.setCookie(COOKIE, t, { path: '/', httpOnly: true, sameSite: 'lax', secure: config.cookieSecure, maxAge: config.sessionDays * 86400 });
+  reply.setCookie(COOKIE, t, { ...cookieOptions, maxAge: config.sessionDays * 86400 });
+  reply.clearCookie(ACTING_COOKIE,{path:'/'}).clearCookie(ACTING_FAMILY_COOKIE,{path:'/'});
 }
-const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, learning_email_reminders: !!u.learning_email_reminders, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin });
+const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, learning_email_reminders: !!u.learning_email_reminders, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin, acting: u.acting || null });
 
 // ---------------- settings ----------------
 const getSettings = () => q1('SELECT family_yi,family_en,side_a_yi,side_a_en,side_a_family_yi,side_a_family_en,side_b_yi,side_b_en,side_b_family_yi,side_b_family_en FROM settings WHERE id=1');
@@ -278,21 +301,32 @@ app.post('/api/auth/logout', async (req, reply) => {
   const t = req.cookies[COOKIE];
   if (t) await q('DELETE FROM sessions WHERE token_hash=$1', [sha(t)]);
   reply.clearCookie(COOKIE, { path: '/' }); reply.clearCookie('fam_group',{path:'/'});
+  reply.clearCookie(ACTING_COOKIE,{path:'/'}).clearCookie(ACTING_FAMILY_COOKIE,{path:'/'});
   return { ok: true };
+});
+app.post('/api/auth/stop-acting',async(req,reply)=>{
+  const original=req.cookies[COOKIE],acting=req.cookies[ACTING_COOKIE];
+  if(original && acting)await q(`WITH stopped AS (
+    DELETE FROM sessions WHERE token_hash=$1 AND admin_session_hash=$2 RETURNING user_id,admin_session_hash
+  ) INSERT INTO admin_act_as_audit(admin_id,member_id,event)
+    SELECT s.user_id,stopped.user_id,'stop' FROM stopped JOIN sessions s ON s.token_hash=stopped.admin_session_hash`,[sha(acting),sha(original)]);
+  reply.clearCookie(ACTING_COOKIE,{path:'/'}).clearCookie(ACTING_FAMILY_COOKIE,{path:'/'});
+  return {ok:true};
 });
 app.get('/api/me', async (req) => {
   const u = await loadUser(req);
+  const canStopActing=!!(u?.acting || (req.cookies[ACTING_COOKIE] && (await loadUser(req,true))?.is_admin));
   const groupId=u?.family_group_id;
   const groups=u?await q('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND archived_at IS NULL AND ($1::boolean OR id=ANY($2::int[])) ORDER BY name',[u.is_admin,u.family_group_ids]):[];
   const group=groups.find(g=>g.id===groupId);
-  return { user: u ? {...publicUser(u),family_groups:groups,family_name:group?.name || null,selected_family_group_id:group?.id || null} : null, settings: {...await getSettings(),...(group?{family_yi:group.name,side_a_family_yi:'',side_b_family_yi:''}:{})}, email_enabled: emailReady() };
+  return { user: u ? {...publicUser(u),family_groups:groups,family_name:group?.name || null,selected_family_group_id:group?.id || null} : null, settings: {...await getSettings(),...(group?{family_yi:group.name,side_a_family_yi:'',side_b_family_yi:''}:{})}, email_enabled: emailReady(), can_stop_acting:canStopActing };
 });
 app.post('/api/me/family-group',async(req,reply)=>{
   const u=await member(req),group=Number((req.body as any)?.family_group_id);
   if(!Number.isSafeInteger(group)||(!u.is_admin&&!u.family_group_ids.includes(group)))throw new HttpError(403,'די משפחה איז נישט צוגעטיילט צו דיר');
   if(!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine AND archived_at IS NULL',[group]))throw bad('קלייב אויס א משפחה');
-  reply.setCookie('fam_group',String(group),{path:'/',httpOnly:true,sameSite:'lax',secure:config.cookieSecure});
-  await q('DELETE FROM chat_presence WHERE user_id=$1',[u.id]);
+  reply.setCookie(u.acting?ACTING_FAMILY_COOKIE:'fam_group',String(group),cookieOptions);
+  if(!u.acting)await q('DELETE FROM chat_presence WHERE user_id=$1',[u.id]);
   return {ok:true};
 });
 app.get('/api/auth/token/:t', authLimit, async (req) => {
@@ -433,6 +467,66 @@ app.get('/api/admin/users', async (req) => {
   return { owner_phone: manager.is_admin ? owner?.phone || '' : '', users: await q(`SELECT id,name,phone,email,sides,family_group_id,family_group_ids,status,is_admin,is_family_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password,
     (SELECT requested_at FROM password_reset_requests r WHERE r.user_id=users.id AND r.resolved_at IS NULL) reset_requested_at FROM users WHERE ($1::boolean OR (family_group_id=$2 AND NOT is_admin))
     ORDER BY (status='pending') DESC, status, name`,[manager.is_admin,manager.family_group_id]) };
+});
+const memberProfileSql = (alias: string) => `(${personSql(alias,'$1::int[]')} AND
+  (${alias}.side IN ('both','all') OR ${alias}.side=ANY($3::text[]) OR ${personSql(alias,'$2::int[]')}))`;
+async function memberTreeProfileTarget(req: FastifyRequest) {
+  const actor=await admin(req),id=Number((req.params as any).id);
+  if(!actor.is_admin)throw new HttpError(403,'נאר פאר דעם הויפט אדמין');
+  if(!Number.isSafeInteger(id)||id<1)throw bad('קלייב אויס א מעמבער');
+  return {actor,id};
+}
+const memberProfileSelect=`SELECT u.id,u.name,u.person_id,u.sides,u.family_group_id,u.is_family_admin,u.is_admin,
+  ARRAY(SELECT g.id FROM family_groups g WHERE g.id=ANY(u.family_group_ids) AND NOT g.is_quarantine AND g.archived_at IS NULL) groups
+  FROM users u WHERE u.id=$1`;
+const memberProfileParams = (u: any) => [u.groups,u.is_admin?u.groups:u.is_family_admin?[u.family_group_id]:[],u.sides];
+app.get('/api/admin/users/:id/tree-profile',async req=>{
+  const {id}=await memberTreeProfileTarget(req);
+  const user=await q1(memberProfileSelect,[id]);
+  if(!user)throw new HttpError(404,'נישט געטראפן');
+  const people=await q(`SELECT p.id,p.name,p.title,f.name father_name FROM people p
+    LEFT JOIN people f ON f.id=p.father_id AND ${memberProfileSql('f')}
+    WHERE ${memberProfileSql('p')} AND NOT EXISTS (SELECT 1 FROM users u WHERE u.person_id=p.id AND u.id<>$4)
+    ORDER BY p.name,p.id`,[...memberProfileParams(user),id]);
+  return {name:user.name,person_id:user.person_id,people};
+});
+app.put('/api/admin/users/:id/tree-profile',async req=>{
+  const {actor,id}=await memberTreeProfileTarget(req);
+  const body=req.body as {person_id?:number|null}|undefined;
+  if(body?.person_id===undefined)throw bad('קלייב אויס א מענטש');
+  const person=personId(body.person_id);
+  return tx(async c=>{
+    await c.query('SELECT pg_advisory_xact_lock(68427301)');
+    const user=(await c.query(memberProfileSelect+' FOR UPDATE OF u',[id])).rows[0];
+    if(!user)throw new HttpError(404,'נישט געטראפן');
+    if(person && !(await c.query(`SELECT 1 FROM people p WHERE p.id=$4 AND ${memberProfileSql('p')}`,[...memberProfileParams(user),person])).rowCount)
+      throw bad('דער מענטש דארף זיין אין א צוגעטיילטע משפחה פונעם מעמבער');
+    await c.query('UPDATE users SET person_id=$1 WHERE id=$2',[person,id]);
+    await c.query('INSERT INTO family_assignment_audit(admin_id,family_group_id,assignments) VALUES($1,$2,$3)',
+      [actor.id,user.family_group_id,JSON.stringify({kind:'member_tree_profile',member_id:id,previous_person_id:user.person_id,person_id:person})]);
+    return {ok:true};
+  });
+});
+app.post('/api/admin/users/:id/act-as', async(req,reply)=>{
+  const actor=await admin(req),targetId=Number((req.params as any).id);
+  if(!actor.is_admin)throw new HttpError(403,'נאר פאר דעם הויפט אדמין');
+  if(!Number.isSafeInteger(targetId)||targetId<1)throw bad('קלייב אויס א מעמבער');
+  const original=sha(req.cookies[COOKIE]!),acting=tok();
+  await tx(async c=>{
+    const session=(await c.query(`SELECT s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id
+      WHERE s.token_hash=$1 AND s.user_id=$2 AND s.admin_session_hash IS NULL AND s.expires_at>now()
+        AND u.is_admin AND u.status='active' FOR UPDATE OF s`,[original,actor.id])).rows[0];
+    if(!session)throw new HttpError(401,'לאג אין');
+    const target=(await c.query(`SELECT u.id FROM users u JOIN family_groups g ON g.id=u.family_group_id
+      WHERE u.id=$1 AND u.status='active' AND NOT u.is_admin AND NOT g.is_quarantine AND g.archived_at IS NULL FOR SHARE OF u`,[targetId])).rows[0];
+    if(!target)throw new HttpError(404,'דער מעמבער איז נישט פאראן');
+    await c.query('DELETE FROM sessions WHERE admin_session_hash=$1',[original]);
+    await c.query(`INSERT INTO sessions(token_hash,user_id,expires_at,admin_session_hash)
+      VALUES($1,$2,least($3::timestamptz,now()+interval '1 hour'),$4)`,[sha(acting),targetId,session.expires_at,original]);
+    await c.query("INSERT INTO admin_act_as_audit(admin_id,member_id,event) VALUES($1,$2,'start')",[actor.id,targetId]);
+  });
+  reply.setCookie(ACTING_COOKIE,acting,cookieOptions).clearCookie(ACTING_FAMILY_COOKIE,{path:'/'});
+  return {ok:true};
 });
 app.patch('/api/admin/users/:id', async (req) => {
   const me = await admin(req);
@@ -982,10 +1076,68 @@ async function visibleList(u: User, id: number) {
   if (!l || !canSee(u, l.side)) throw new HttpError(404, 'נישט געטראפן');
   return l;
 }
+async function learningEmailRequest(req: FastifyRequest) {
+  const u=await member(req);
+  if(!managesFamily(u)||u.acting)throw new HttpError(403,'נאר פאר אדמין');
+  const list=await visibleList(u,Number((req.params as any).id));
+  if(list.kind!=='mishnayos')throw bad('קלייב אויס א משניות ליסט');
+  const link=`${config.publicUrl}/#learn/${list.id}/${list.family_group_id}`;
+  const message=learningRequestEmail(list.niftar,link);
+  const members=await q<{email:string}>(`SELECT email FROM users WHERE status='active' AND email_verified_at IS NOT NULL
+    AND $1=ANY(family_group_ids) AND ($2='both' OR $2=ANY(sides) OR is_admin OR (is_family_admin AND family_group_id=$1))`,
+    [list.family_group_id,list.side]);
+  const recipients=[...new Set(members.map(member=>normalizeEmail(member.email)).filter(Boolean))].sort();
+  const fingerprint=sha(JSON.stringify({list:list.id,side:list.side,subject:message.subject,link,recipients}));
+  return {u,list,message,recipients,fingerprint};
+}
+const availableMishnayosSql=`SELECT 1 FROM learn_items i WHERE i.list_id=$1 AND (
+    EXISTS (SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx AND p.taken_by IS NULL AND NOT p.done)
+    OR (i.taken_by IS NULL AND NOT i.done AND NOT EXISTS (SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx))) LIMIT 1`;
+app.get('/api/lists/:id/learning-email',async req=>{
+  const {list,message,recipients,fingerprint}=await learningEmailRequest(req);
+  const family=await q1('SELECT name FROM family_groups WHERE id=$1',[list.family_group_id]);
+  return {subject:message.subject,text:message.text,family:family?.name,recipient_count:recipients.length,
+    email_enabled:emailReady(),available:!!await q1(availableMishnayosSql,[list.id]),fingerprint};
+});
+app.post('/api/lists/:id/learning-email',{config:{rateLimit:{max:10,timeWindow:'1 hour'}}},async req=>{
+  const {u,list,message,recipients,fingerprint}=await learningEmailRequest(req);
+  const body=req.body as {request_key?:string;fingerprint?:string}|undefined;
+  const key=body?.request_key;
+  if(typeof key!=='string'||!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(key))throw bad('עפן ווידער דעם אימעיל איבערבליק');
+  if(body?.fingerprint!==fingerprint)throw new HttpError(409,'די ליסט אדער די אימעיל אדרעסן האבן זיך געטוישט. עפן נאכאמאל דעם איבערבליק.');
+  if(!emailReady())throw new HttpError(503,'אימעיל איז נאך נישט פארבונדן');
+  if(!recipients.length)throw bad('נאך קיין באשטעטיגטע אימעיל אדרעסן אין דער משפחה');
+  return tx(async c=>{
+    await c.query(`INSERT INTO learning_email_requests(requested_by,request_key,list_id,fingerprint) VALUES($1,$2,$3,$4)
+      ON CONFLICT(requested_by,request_key) DO NOTHING`,[u.id,key,list.id,fingerprint]);
+    const request=(await c.query(`SELECT *,created_at<now()-interval '23 hours' expired FROM learning_email_requests
+      WHERE requested_by=$1 AND request_key=$2 FOR UPDATE`,[u.id,key])).rows[0];
+    if(request.list_id!==list.id || request.fingerprint!==fingerprint)throw new HttpError(409,'עפן ווידער דעם אימעיל איבערבליק');
+    let sent=request.sent_count;
+    if(sent<recipients.length) {
+      if(request.expired)throw new HttpError(409,'דער אימעיל איבערבליק איז אלט. עפן א נייעם.');
+      if(!(await c.query(availableMishnayosSql,[list.id])).rowCount)throw bad('אלע חלקים זענען שוין גענומען');
+    }
+    while(sent<recipients.length){
+      const batch=recipients.slice(sent,sent+100);
+      try { await sendLearningRequestBatch(batch,message,`familye/mishnayos-request/${u.id}/${key}/${sent}`); }
+      catch(error) { req.log.warn({err:error,listId:list.id},'Mishnayos request email batch failed');break; }
+      sent+=batch.length;
+      await c.query('UPDATE learning_email_requests SET sent_count=$1 WHERE requested_by=$2 AND request_key=$3',[sent,u.id,key]);
+    }
+    return {sent,total:recipients.length};
+  });
+});
 app.get('/api/lists/:id', async (req) => {
   const u = await member(req); const l = await visibleList(u, Number((req.params as any).id));
   const items = await q(`SELECT i.idx,i.taken_by,i.done,tu.name taken_name FROM learn_items i LEFT JOIN users tu ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(tu.family_group_ids) AND tu.id=i.taken_by WHERE list_id=$1 ORDER BY idx`, [l.id]);
-  const counts = await q(`SELECT idx,count(*)::int total,count(taken_by)::int taken,count(*) FILTER(WHERE done)::int done FROM learn_portions WHERE list_id=$1 GROUP BY idx`,[l.id]);
+  const counts = await q(`WITH claims AS (
+      SELECT idx,taken_by,count(*)::int total,count(*) FILTER (WHERE done)::int done
+      FROM learn_portions WHERE list_id=$1 GROUP BY idx,taken_by
+    ) SELECT c.idx,sum(c.total)::int total,coalesce(sum(c.total) FILTER (WHERE c.taken_by IS NOT NULL),0)::int taken,
+      sum(c.done)::int done,coalesce(json_agg(json_build_object('name',u.name,'count',c.total) ORDER BY u.name,u.id)
+        FILTER (WHERE u.id IS NOT NULL),'[]') assignees
+    FROM claims c LEFT JOIN users u ON u.id=c.taken_by AND $2=ANY(u.family_group_ids) GROUP BY c.idx`,[l.id,l.family_group_id]);
   const help = await q(`SELECT h.*,u.name requested_name,v.name helper_name FROM learn_help_requests h LEFT JOIN users u ON u.id=h.requested_by AND nullif(current_setting('familye.family_group_id',true),'')::int=ANY(u.family_group_ids) LEFT JOIN users v ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(v.family_group_ids) AND v.id=h.helper_id WHERE h.list_id=$1 AND h.resolved_at IS NULL ORDER BY h.created_at`,[l.id]);
   const clock = reminderClock(), units = await remainingLearning(async (sql,params)=>({rows:await q(sql,params)}),l.id,u.id,l.kind);
   return { daily_plan:dailyLearning(l.kind,units,l.target_date,clock.date), remaining_units:units.length, plan_date:clock.date, reminder_hour:config.learningReminderHour, reminder_timezone:config.timezone, list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items: items.map(i=>({...i,parts:counts.find(c=>c.idx===i.idx)||null})), help, masechtos: MASECHTOS };
@@ -1230,6 +1382,24 @@ app.get('/api/directory-people', async req => {
   const u = await member(req);
   return { people: await q(`${personSelect()} WHERE ${personSideSql('p',1)} ORDER BY p.id`, [mySides(u)]) };
 });
+app.get('/api/cousins',async req=>{
+  const u=await member(req);
+  const groups=await q<{id:number;name:string}>(`SELECT id,name FROM family_groups WHERE NOT is_quarantine AND archived_at IS NULL
+    AND ($1::boolean OR id=ANY($2::int[])) ORDER BY name`,[u.is_admin,u.family_group_ids]);
+  const raw=(req.query as {groups?:string}).groups;
+  if(raw!==undefined && (typeof raw!=='string'||(raw!==''&&!/^\d+(,\d+)*$/.test(raw))))throw bad('קלייב אויס ריכטיגע משפחות');
+  const selected=raw===undefined?groups.map(g=>g.id):raw===''?[]:[...new Set(raw.split(',').map(Number))];
+  if(selected.some(id=>!groups.some(g=>g.id===id)))throw new HttpError(403,'די משפחה איז נישט צוגעטיילט צו דיר');
+  const managed=u.is_admin?selected:u.primary_family_admin?selected.filter(id=>id===u.primary_family_group_id):[];
+  const members=await q(`WITH roster AS (
+    SELECT u.id,u.name,u.person_id,ARRAY(SELECT g FROM unnest($1::int[]) g WHERE g=ANY(u.family_group_ids)
+      AND (g=ANY($2::int[]) OR u.is_admin OR u.sides && $3::text[])) group_ids FROM users u WHERE u.status='active'
+  ) SELECT r.id,r.name,r.group_ids,p.id person_id,p.lineage_term,f.id father_id,f.name father_name
+    FROM roster r LEFT JOIN people p ON p.id=r.person_id AND ${memberProfileSql('p')}
+    LEFT JOIN people f ON f.id=p.father_id AND ${memberProfileSql('f')}
+    WHERE cardinality(r.group_ids)>0 ORDER BY r.name,r.id`,[selected,managed,u.sides]);
+  return {groups,selected,members};
+});
 app.get('/api/directory', async (req) => { const u = await member(req); return { families: await listDir(u) }; });
 const mayEditDir = (u: User, d: any) => managesFamily(u) || d.owner_id === u.id || d.created_by === u.id;
 async function saveDirectory(u:User,b:any,id?:number) {
@@ -1319,6 +1489,7 @@ app.get('/api/chat/:room',async req=>{
 });
 app.post('/api/chat/:room/presence',async req=>{
   const u=await member(req),room=String((req.params as any).room);await chatRoom(u,room);
+  if(u.acting)return {ok:true};
   await q(`INSERT INTO chat_presence(user_id,room,active_at) VALUES($1,$2,CASE WHEN $3 THEN now() ELSE '-infinity'::timestamptz END)
     ON CONFLICT(user_id) DO UPDATE SET family_group_id=excluded.family_group_id,room=$2,seen_at=now(),active_at=CASE WHEN $3 THEN now() WHEN chat_presence.room=$2 THEN chat_presence.active_at ELSE '-infinity'::timestamptz END`,[u.id,room,!!(req.body as any)?.active]);
   return {ok:true};
