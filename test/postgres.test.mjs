@@ -313,6 +313,22 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal(canonicalList.families.length,2);
   assert.match(canonicalList.niftar,/Canonical name.* ז״ל$/);
   assert.equal((await request('/lists/'+legacyList.body.list.id,undefined,admin.cookie)).body.list.niftar,canonicalList.niftar);
+  const secondYahrzeit=(await adminPool.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,family_group_id)
+    VALUES('Second memorial','a',23,'ADAR',$1) RETURNING id`,[testFamily])).rows[0].id;
+  const combined=await request('/lists',{kind:'mishnayos',yahrzeit_ids:[synced.id,secondYahrzeit,secondYahrzeit]},admin.cookie);
+  assert.equal(combined.status,200,JSON.stringify(combined.body));
+  assert.deepEqual(combined.body.list.yahrzeit_ids,[synced.id,secondYahrzeit]);
+  assert.match(combined.body.list.niftar,/Canonical name.*ז״ל · Second memorial ז״ל$/);
+  const selectedDates=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits
+    .filter(y=>combined.body.list.yahrzeit_ids.includes(y.id)).map(y=>y.next.ymd).sort();
+  assert.equal(combined.body.list.target_date,selectedDates[0]);
+  const secondPerson=await createPerson({name:'Second canonical person'});
+  assert.equal((await request('/people/'+secondPerson.id,{legacy_yahrzeit_id:secondYahrzeit,life_status:'deceased',death_hday:23,death_hmonth:'ADAR'},admin.cookie,'PUT')).status,200);
+  const secondCanonical=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits.find(y=>y.person_id===secondPerson.id);
+  const updatedCombined=(await request('/lists/'+combined.body.list.id,undefined,admin.cookie)).body;
+  assert.deepEqual(updatedCombined.list.yahrzeit_ids,[synced.id,secondCanonical.id]);
+  assert.match(updatedCombined.list.niftar,/Canonical name.*ז״ל · Second canonical person ז״ל$/);
+  assert.equal(updatedCombined.items.length,63,'one set of portions for both dedications');
 
   // Public recovery never reveals account existence or creates a reset token.
   assert.equal((await request('/auth/forgot-password',{phone:'123'})).status,400);

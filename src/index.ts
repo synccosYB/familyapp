@@ -15,6 +15,7 @@ import { familyContext, familySql, personSql, personGroupsSql } from './family-s
 import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
 import { dailyLearning, reminderClock, remainingLearning } from './learning-reminders.js';
+import { learningListFieldsSql, learningTitleSql } from './learning-dedications.js';
 import { startJobs } from './jobs.js';
 import { MASECHTOS } from './masechtos.js';
 import { emailReady, learningRequestEmail, normalizeEmail, sendAccountEmail, sendLearningRequestBatch } from './email.js';
@@ -995,6 +996,11 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     if(legacy) {
       const canonical=(await c.query('SELECT id FROM yahrzeits WHERE person_id=$1',[row.id])).rows[0];
       if(canonical && canonical.id!==legacy.id) {
+        await c.query(`DELETE FROM learn_list_dedications d USING learn_lists l
+          WHERE d.list_id=l.id AND d.yahrzeit_id IN ($1,$2) AND (l.yahrzeit_id IN ($1,$2)
+            OR (d.yahrzeit_id=$2 AND EXISTS(SELECT 1 FROM learn_list_dedications other
+              WHERE other.list_id=d.list_id AND other.yahrzeit_id=$1)))`,[canonical.id,legacy.id]);
+        await c.query('UPDATE learn_list_dedications SET yahrzeit_id=$1 WHERE yahrzeit_id=$2',[canonical.id,legacy.id]);
         await c.query('UPDATE learn_lists SET yahrzeit_id=$1 WHERE yahrzeit_id=$2',[canonical.id,legacy.id]);
         await c.query('INSERT INTO yahrzeit_reminders(user_id,yahrzeit_id) SELECT user_id,$1 FROM yahrzeit_reminders WHERE yahrzeit_id=$2 ON CONFLICT DO NOTHING',[canonical.id,legacy.id]);
         await c.query("UPDATE yahrzeits SET relation=CASE WHEN relation='' THEN $1 ELSE relation END,note=CASE WHEN note='' THEN $2 ELSE note END WHERE id=$3",[legacy.relation,legacy.note,canonical.id]);
@@ -1054,16 +1060,9 @@ app.post('/api/person-reviews/:id/resolve',async req=>{
 });
 
 // ---------------- mishnayos & tehillim ----------------
-// Linked list titles are projections of the canonical person, not independently edited copies.
-const learningTitleSql = (param: number) => `regexp_replace(btrim(coalesce(
-  (SELECT concat_ws(' ',nullif(p.title,''),p.name,CASE WHEN f.id IS NOT NULL THEN concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) END)
-    FROM yahrzeits y JOIN people p ON p.id=y.person_id LEFT JOIN people f ON f.id=p.father_id AND ${personSideSql('f',param)}
-    WHERE y.id=l.yahrzeit_id AND ${personSideSql('p',param)}),
-  (SELECT concat_ws(' ',y.name,nullif(y.father_name,'')) FROM yahrzeits y WHERE y.id=l.yahrzeit_id AND y.person_id IS NULL AND ${sideSql('y.side',param)}),l.niftar)),
-  '([[:space:]]+ז[״"“”]ל[.!?]?)+$', '') || ' ז״ל'`;
 app.get('/api/lists', async (req) => {
   const u = await member(req);
-  const rows = await q(`SELECT l.*, ${learningTitleSql(1)} niftar, (SELECT coalesce(json_agg(json_build_object('id',fam.id,'name',fam.name)),'[]') FROM families fam JOIN person_families pf ON pf.family_id=fam.id JOIN yahrzeits y ON y.person_id=pf.person_id WHERE y.id=l.yahrzeit_id AND fam.family_group_id=l.family_group_id) families, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
+  const rows = await q(`SELECT l.*, ${learningListFieldsSql('$1::text[]')}, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
       count(*) FILTER (WHERE i.done)::int done,
       count(*) FILTER (WHERE EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NOT NULL) AND EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL))::int partial,
       count(*) FILTER (WHERE i.taken_by=$2 OR EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by=$2))::int mine
@@ -1072,7 +1071,7 @@ app.get('/api/lists', async (req) => {
   return { lists: rows.map((r) => ({ ...r, days: r.target_date ? daysUntil(r.target_date) : null })), masechtos: MASECHTOS };
 });
 async function visibleList(u: User, id: number) {
-  const l = await q1(`SELECT l.*,${learningTitleSql(2)} niftar FROM learn_lists l WHERE l.id=$1 AND ${familySql('l')}`, [id,mySides(u)]);
+  const l = await q1(`SELECT l.*,${learningListFieldsSql('$2::text[]')} FROM learn_lists l WHERE l.id=$1 AND ${familySql('l')}`, [id,mySides(u)]);
   if (!l || !canSee(u, l.side)) throw new HttpError(404, 'נישט געטראפן');
   return l;
 }
@@ -1140,27 +1139,40 @@ app.get('/api/lists/:id', async (req) => {
     FROM claims c LEFT JOIN users u ON u.id=c.taken_by AND $2=ANY(u.family_group_ids) GROUP BY c.idx`,[l.id,l.family_group_id]);
   const help = await q(`SELECT h.*,u.name requested_name,v.name helper_name FROM learn_help_requests h LEFT JOIN users u ON u.id=h.requested_by AND nullif(current_setting('familye.family_group_id',true),'')::int=ANY(u.family_group_ids) LEFT JOIN users v ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(v.family_group_ids) AND v.id=h.helper_id WHERE h.list_id=$1 AND h.resolved_at IS NULL ORDER BY h.created_at`,[l.id]);
   const clock = reminderClock(), units = await remainingLearning(async (sql,params)=>({rows:await q(sql,params)}),l.id,u.id,l.kind);
-  return { daily_plan:dailyLearning(l.kind,units,l.target_date,clock.date), remaining_units:units.length, plan_date:clock.date, reminder_hour:config.learningReminderHour, reminder_timezone:config.timezone, list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items: items.map(i=>({...i,parts:counts.find(c=>c.idx===i.idx)||null})), help, masechtos: MASECHTOS };
+  const plan = dailyLearning(l.kind,units,l.target_date,clock.date);
+  const daily_plan = plan && {lines:plan.lines, days:plan.days, remaining:plan.remaining};
+  return { daily_plan, remaining_units:units.length, plan_date:clock.date, reminder_hour:config.learningReminderHour, reminder_timezone:config.timezone, list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items: items.map(i=>({...i,parts:counts.find(c=>c.idx===i.idx)||null})), help, masechtos: MASECHTOS };
 });
 app.post('/api/lists', async (req) => {
   const u = await member(req); const b: any = req.body || {};
   const kind = b.kind === 'mishnayos' ? 'mishnayos' : b.kind === 'tehillim' ? 'tehillim' : '';
   if (!kind) throw bad('קלייב אויס תהילים אדער משניות');
-  let niftar = str(b.niftar, 150), side = b.side, yid: number | null = b.yahrzeit_id ? Number(b.yahrzeit_id) : null, target = str(b.target_date, 10) || null;
-  if (yid) {
-    const y = (await listYahrzeits(u)).find(y=>y.id===yid);
-    if (!y || !canSee(u, y.side)) throw bad('יארצייט נישט געטראפן');
-    niftar = niftar || [y.name, y.father_name].filter(Boolean).join(' ');
-    side = side || y.side;
-    if (!target) target = nextYahrzeit(y.hday, y.hmonth, y.death_year)?.ymd || null;
+  const rawIds: unknown = b.yahrzeit_ids ?? (b.yahrzeit_id ? [b.yahrzeit_id] : []);
+  if (!Array.isArray(rawIds) || rawIds.some(id => !['number','string'].includes(typeof id) || !Number.isSafeInteger(Number(id)) || Number(id)<1)) {
+    throw bad('קלייב אויס ריכטיגע יארצייטן');
   }
+  const ids = [...new Set(rawIds.map(Number))];
+  const visible = ids.length ? new Map((await listYahrzeits(u)).map(y => [y.id,y])) : new Map();
+  const selected = ids.map(id => visible.get(id));
+  if (selected.some(y => !y || !canSee(u,y.side))) throw new HttpError(404,'יארצייט נישט געטראפן');
+  const [first,...additional] = selected;
+  const dedication = (y: {name: string; father_name: string}) => [y.name,y.father_name].filter(Boolean).join(' ');
+  const niftar = str(b.niftar,150) || (first && dedication(first));
   if (!niftar) throw bad('לעילוי נשמת וועמען?');
+  const target = str(b.target_date,10) || selected.flatMap(y => y.next?.ymd ? [y.next.ymd] : []).sort()[0] || null;
   if (target && !/^\d{4}-\d{2}-\d{2}$/.test(target)) throw bad('דאטום איז נישט ריכטיג');
-  side = okSide(u, side || 'both');
-  const l = await q1(`INSERT INTO learn_lists(kind,niftar,side,yahrzeit_id,target_date,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [kind, niftar, side, yid, target, str(b.note, 300), u.id]);
+  const side = okSide(u, b.side || first?.side || 'both');
   const n = kind === 'tehillim' ? 150 : MASECHTOS.length, start = kind === 'tehillim' ? 1 : 0;
-  await q(`INSERT INTO learn_items(list_id,idx) SELECT $1, g FROM generate_series($2::int,$3::int) g`, [l.id, start, start + n - 1]);
-  return { list: l };
+  return tx(async c => {
+    const {id} = (await c.query(`INSERT INTO learn_lists(kind,niftar,side,yahrzeit_id,target_date,note,created_by)
+      VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,[kind,niftar,side,first?.id ?? null,target,str(b.note,300),u.id])).rows[0];
+    if (additional.length) await c.query(`INSERT INTO learn_list_dedications(list_id,position,yahrzeit_id,niftar)
+      SELECT $1, position+1, yahrzeit_id, niftar
+      FROM unnest($2::int[],$3::text[]) WITH ORDINALITY AS d(yahrzeit_id,niftar,position)`,[id,additional.map(y => y.id),additional.map(dedication)]);
+    await c.query(`INSERT INTO learn_items(list_id,idx) SELECT $1, g FROM generate_series($2::int,$3::int) g`,[id,start,start+n-1]);
+    const list = (await c.query(`SELECT l.*,${learningListFieldsSql('$2::text[]')} FROM learn_lists l WHERE l.id=$1`,[id,mySides(u)])).rows[0];
+    return {list};
+  });
 });
 app.delete('/api/lists/:id', async (req) => {
   const u = await member(req); const l = await visibleList(u, Number((req.params as any).id));
@@ -1574,7 +1586,7 @@ app.get('/api/home', async (req) => {
   const sims = (await q(`SELECT s.id,s.kind,s.whose,s.gdate,s.time_text,s.hdate_text,s.hall,s.address,s.audience FROM simchas s WHERE ${sideSql('s.audience', 1)} AND s.gdate >= $2 ORDER BY s.gdate LIMIT 4`, [mySides(u), todayYmd()]))
     .map((s) => ({ ...s, hebrew: s.hdate_text || hebrewForYmd(s.gdate), days: daysUntil(s.gdate) }));
   const msgs = await q(`SELECT m.id,m.room,m.body,m.created_at,u.name FROM messages m LEFT JOIN users u ON u.id=m.user_id AND m.family_group_id=ANY(u.family_group_ids) WHERE ${familySql('m')} AND m.room = ANY($1::text[]) ORDER BY m.id DESC LIMIT 5`, [roomsFor(u)]);
-  const lists = await q(`SELECT l.id,l.kind,${learningTitleSql(1)} niftar,l.target_date,count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
+  const lists = await q(`SELECT l.id,l.kind,${learningTitleSql('$1::text[]')} niftar,l.target_date,count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
     WHERE ${sideSql('l.side', 1)} AND (l.target_date IS NULL OR l.target_date >= $2) GROUP BY l.id ORDER BY l.target_date NULLS LAST LIMIT 4`, [mySides(u), todayYmd()]);
   const counts = await q1(`SELECT (SELECT count(*) FROM users WHERE ${familyContext.getStore()!.id}=ANY(family_group_ids) AND status='active')::int members, (SELECT count(*) FROM users WHERE ${familyContext.getStore()!.id}=ANY(family_group_ids) AND status='pending')::int pending`);
   return { yahrzeits: yz, simchas: sims, messages: msgs, lists, members: (await chatPeers(u)).length, pending: u.is_admin ? counts.pending : 0, today: hebrewForYmd(todayYmd()) };

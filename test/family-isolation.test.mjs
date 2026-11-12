@@ -66,6 +66,7 @@ test('families isolate owners, members, invitations, records, chat and direct UR
    ['/lists/'+lb.id,undefined,'GET'],['/lists/'+lb.id+'/items/1',{action:'take'},'POST'],
    ['/yahrzeits/'+yb.id+'/remind',{on:true},'POST'],['/yahrzeits/'+yb.id,undefined,'DELETE'],
    ['/lists',{kind:'tehillim',yahrzeit_id:yb.id},'POST'],
+   ['/lists',{kind:'tehillim',yahrzeit_ids:[ya.id,yb.id]},'POST'],
    ['/simchas/'+sb.id+'/rsvp',{answer:'yes',people:1},'POST'],
    ['/chat/message/'+mb.id,undefined,'DELETE'],['/chat/all',{body:'Reply attack',reply_to:mb.id},'POST'],
    ['/directory',{husband_person_id:pb.id,side:'both'},'POST']]) assert.equal((await req(url,body,m.cookie,method)).status,404,url);

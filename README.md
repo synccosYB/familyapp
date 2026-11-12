@@ -107,7 +107,16 @@ Alternatively, build the container with `docker build -t familye .`. Supply the 
 ## Daily Mishnayos and Tehillim email reminders
 
 Members enable daily learning emails under **My account** after verifying their email.
-Each learning list also shows today's exact personal portions. The plan divides unfinished
+The reminder includes the Hebrew text of today's portions. Long readings include the full
+text in a UTF-8 attachment. The bundled public-domain editions are Sefaria's [Torat Emet 357
+Mishnah](https://www.sefaria.org/Mishnah_Berakhot?tab=versions), [vocalized Bikkurim chapter
+4](https://www.sefaria.org/Mishnah_Bikkurim.4?lang=he), and [Tanach with Ta'amei
+Hamikra](https://www.sefaria.org/Psalms?tab=versions). The learning catalogue fixes their order
+and numbering. Sending mail does not need to fetch text from a third-party service.
+
+A list can be dedicated to multiple yahrzeits. An explicit completion date applies to the
+whole list. A blank date uses the earliest upcoming selected yahrzeit. Each learning list
+also shows today's exact personal portions. The plan divides unfinished
 claimed Mishnayos (including individual mishnayos and legacy whole masechtos) or Tehillim
 chapters over the remaining calendar days, including the deadline. Members mark completed
 portions in the list; missed days increase the next day's portion. Completed or returned
