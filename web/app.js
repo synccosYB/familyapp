@@ -192,18 +192,32 @@ function familyInviteForm() {
 }
 
 // yahrzeits
-V.yz = async () => {
-  const { yahrzeits } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
-  const L = yahrzeits.filter(y => !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
-  return `<h1>${htmlWord("yahrzeits.heading")}</h1><div class="cap">${htmlWord("yahrzeits.yz.01")}</div>${familySelector(yahrzeits,'yzFamily',word("yahrzeits.yz.03"))}
+async function useLinkedFamily() {
+  const group = Number(location.hash.split('/')[2]);
+  if (group && group!==ME.selected_family_group_id) {
+    await api('/me/family-group',{method:'POST',body:{family_group_id:group}});
+    await loadMe();
+  }
+}
+V.yz = async arg => {
+  const id = Number(arg);
+  if (id) await useLinkedFamily();
+  const { yahrzeits, email_days } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
+  const L = yahrzeits.filter(y => id ? y.id===id : !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
+  const reminders = !ME.acting && `<section class="card" style="margin-bottom:14px"><h2>${htmlWord("yahrzeits.reminders.heading")}</h2>
+    <p>${htmlWord("yahrzeits.reminders.schedule",{days:email_days})}</p>
+    ${EMAIL_READY ? (ME.email_verified ? '' : `<p class="muted"><a href="#me">${htmlWord("yahrzeits.reminders.verify")}</a></p>`) : `<p class="muted">${htmlWord("shared.emaillearn.02")}</p>`}
+    ${ME.person_id ? '' : `<p class="muted">${htmlWord("yahrzeits.reminders.link_profile")}</p>`}
+    <button class="btn l" type="button" data-act="ancestorreminders" aria-pressed="${ME.yahrzeit_ancestor_emails}" ${!ME.yahrzeit_ancestor_emails && (!EMAIL_READY || !ME.email_verified) ? 'disabled' : ''}>${htmlWord(ME.yahrzeit_ancestor_emails?'yahrzeits.reminders.disable_branch':'yahrzeits.reminders.enable_branch')}</button>
+    </section>`;
+  return `<h1>${htmlWord(id?'yahrzeits.reminders.detail':'yahrzeits.heading')}</h1>${id?`<p><a href="#yz">${htmlWord("yahrzeits.reminders.all")}</a></p>`:`<div class="cap">${htmlWord("yahrzeits.yz.01")}</div>${reminders || ''}${familySelector(yahrzeits,'yzFamily',word("yahrzeits.yz.03"))}`}
   ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(yahrzeitName(y))}</b>
    ${y.families?.length?`<div class="yahrzeit-families">${familyTags(y)}</div>`:''}
    <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` ${htmlWord("yahrzeits.yz.06", { date: gdate(y.next.ymd) })} <b style="color:#4338ca">${esc(inDays(y.next.days))}</b>` : ''}</div>
    ${y.kever ? `<div class="muted">🪦 ${esc(y.kever)}</div>` : ''}${y.kever_address?`<div class="muted" dir="auto">📍 ${esc(y.kever_address)}</div><div class="btns">${navBtns(y.kever_address)}</div>`:''}${y.note ? `<div class="muted">${esc(y.note)}</div>` : ''}</div>
-   <div class="btns"><button class="btn s ${y.remind ? 'g' : 'l'}" data-act="remind" data-id="${y.id}" data-on="${y.remind ? 0 : 1}">${y.remind ? htmlWord("yahrzeits.yz.07") : htmlWord("yahrzeits.yz.08")}</button>
-   <button class="btn s l" data-act="newlist" data-yz="${y.id}">${htmlWord("yahrzeits.yz.04")}</button><button class="btn s l" data-act="edityz" data-id="${y.id}">${htmlWord("yahrzeits.yz.05")}</button></div></div>`).join('') || empty('🕯️', word("yahrzeits.yz.09"))}
-  <button class="btn" style="margin-top:10px" data-act="edityz" data-id="0">${htmlWord("yahrzeits.add")}</button>
-  <div class="muted" style="margin-top:10px">${htmlWord("yahrzeits.yz.02")}</div>`;
+   <div class="btns">${ME.acting?'':`<button class="btn s ${y.remind ? 'g' : 'l'}" type="button" aria-pressed="${y.remind}" data-act="remind" data-id="${y.id}" data-on="${y.remind ? 0 : 1}">${htmlWord(y.remind?'yahrzeits.reminders.disable_one':'yahrzeits.reminders.enable_one')}</button>`}
+   <button class="btn s l" data-act="newlist" data-yz="${y.id}">${htmlWord("yahrzeits.yz.04")}</button><button class="btn s l" data-act="shareyz" data-id="${y.id}">${htmlWord("yahrzeits.reminders.whatsapp")}</button><button class="btn s l" data-act="edityz" data-id="${y.id}">${htmlWord("yahrzeits.yz.05")}</button></div></div>`).join('') || empty('🕯️', word(id?'yahrzeits.reminders.missing':'yahrzeits.yz.09'))}
+  ${id?reminders || '':`<button class="btn" style="margin-top:10px" data-act="edityz" data-id="0">${htmlWord("yahrzeits.add")}</button>`}`;
 };
 async function yzForm(id) {
   const y=(STATE.yzs||[]).find(x=>x.id===id);
@@ -408,11 +422,7 @@ V.learn = async (arg) => {
   <div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${htmlWord("learning.learn.06", { taken: l.taken, total: l.total })}${l.partial?` ${htmlWord("learning.learn.13", { partial: l.partial })}`: ''} ${htmlWord("learning.learn.07", { done: l.done })}</div></a>`).join('') || empty('📖', word("learning.learn.15"))}`;
 };
 async function learnDetail(id) {
-  const group=Number(location.hash.split('/')[2]);
-  if(group && group!==ME.selected_family_group_id){
-    await api('/me/family-group',{method:'POST',body:{family_group_id:group}});
-    await loadMe();
-  }
+  await useLinkedFamily();
   const { list: l, items, masechtos, help=[], daily_plan, remaining_units, plan_date, reminder_hour, reminder_timezone } = await api('/lists/' + id); STATE.list = { l, items, masechtos, help };
   const taken = items.filter(i => i.parts ? i.parts.taken===i.parts.total : i.taken_by).length, done = items.filter(i => i.parts ? i.parts.done===i.parts.total : i.done).length;
   const partial = items.filter(i=>i.parts && i.parts.taken>0 && i.parts.taken<i.parts.total).length;
@@ -586,11 +596,7 @@ async function listForm(yzId, trigger) {
 
 // simchas
 V.sim = async (id) => {
-  const group = Number(location.hash.split('/')[2]);
-  if (id && group && group !== ME.selected_family_group_id) {
-    await api('/me/family-group', {method:'POST',body:{family_group_id:group}});
-    await loadMe();
-  }
+  if (id) await useLinkedFamily();
   const past = STATE.simPast;
   const { simchas } = await api('/simchas' + (id ? '?id='+encodeURIComponent(id) : past ? '?past=1' : '')); STATE.sims = simchas;
   if (id) return `<h1>${htmlWord("simchas.sim.01")}</h1><p><a href="#sim">${htmlWord("simchas.sim.02")}</a></p>${simchas.length ? simchas.map(simCard).join('') : empty('🎉',word("simchas.sim.03"))}`;
@@ -840,7 +846,7 @@ async function go() {
   wordingNeedsRender = false;
   editingMainForm = false;
   const h = (location.hash || '').slice(1);
-  const familyLink=/^(?:sim|learn)\/\d+\/\d+$/.test(h);
+  const familyLink=/^(?:sim|learn|yz)\/\d+\/\d+$/.test(h);
   if(!ME && STATE.canStopActing){stopPoll();clearChrome();$('m').innerHTML=`<div class="login">${actingBanner()}</div>`;return;}
   if (h.startsWith('join=')) {
     stopPoll(); clearChrome();
@@ -975,7 +981,25 @@ ${word("shared.sharelearn.07")}`;
   treeside: (el) => { STATE.treeSide = el.dataset.v; STATE.treeZoom=null; refresh(); }, treeview: (el) => { STATE.treeView = el.dataset.v; refresh(); },
   room: (el) => { STATE.room = el.dataset.v; go(); },
   simpast: (el) => { STATE.simPast = el.dataset.v === '1'; go(); },
-  remind: async (el) => { const on = el.dataset.on === '1'; await api(`/yahrzeits/${el.dataset.id}/remind`, { method: 'POST', body: { on } }); toast(on ? word("shared.remind.01") : word("shared.remind.02")); refresh(); },
+  remind: async el => {
+    const on = el.dataset.on === '1';
+    await api(`/yahrzeits/${el.dataset.id}/remind`, {method:'POST',body:{on}});
+    toast(word(on ? (ME.email_verified && EMAIL_READY ? 'shared.remind.01' : 'yahrzeits.reminders.saved_pending') : 'shared.remind.02'));
+    return refresh();
+  },
+  ancestorreminders: async () => {
+    const result = await api('/me/yahrzeit-reminders',{method:'POST',body:{on:!ME.yahrzeit_ancestor_emails}});
+    ME.yahrzeit_ancestor_emails = result.yahrzeit_ancestor_emails;
+    toast(word("shared.portionaction.01"));
+    return refresh();
+  },
+  shareyz: el => {
+    const y = STATE.yzs.find(y=>y.id===Number(el.dataset.id));
+    const link = `${location.origin}/#yz/${y.id}/${ME.selected_family_group_id}`;
+    const date = y.next ? `${y.next.hebrew} · ${gdate(y.next.ymd)}` : y.hebrew;
+    const message = [word("email_yahrzeit.subject",{name:yahrzeitName(y)}),date,word("email_yahrzeit.evening"),link].join('\n');
+    modal(`<h2>${htmlWord("yahrzeits.reminders.share_heading")}</h2><textarea readonly id="rl" rows="5" aria-label="${htmlWord("yahrzeits.reminders.share_label")}">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">${htmlWord("yahrzeits.reminders.share_open")}</a><button class="btn l" data-act="copy">${htmlWord("simchas.share_sim.03")}</button><button class="btn l" data-act="close">${htmlWord("simchas.share_sim.04")}</button></div>`);
+  },
   edityz: (el) => yzForm(Number(el.dataset.id)),
   delyz: async (el) => { if (!confirm(word("shared.delyz.01"))) return; await api('/yahrzeits/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast(word("shared.delyz.02")); refresh(); },
   editp: (el) => personForm(Number(el.dataset.id)),

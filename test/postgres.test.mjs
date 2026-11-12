@@ -147,6 +147,7 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await portion(a,0,{action:'take',chapter:99})).status,400);
   const rangeRace=await Promise.all([portion(a,0,{action:'take',chapter:2}),portion(b,0,{action:'take',chapter:2,mishnah:1})]);assert.deepEqual(rangeRace.map(r=>r.status).sort(),[200,409]);
   assert.equal((await request('/me/learning-reminders',{on:true},a.cookie)).status,400,'unverified email cannot opt in');
+  assert.equal((await request('/me/yahrzeit-reminders',{on:true},a.cookie)).status,400,'unverified email cannot opt in to ancestor reminders');
   assert.equal((await request('/me/learning-reminders',{on:false},a.cookie)).body.user.learning_email_reminders,false);
   const granularDetail=await request('/lists/'+gl,undefined,a.cookie);assert.ok(granularDetail.body.daily_plan.lines.every(line=>line.startsWith('ברכות')));assert.ok(granularDetail.body.remaining_units>0);assert.equal(granularDetail.body.reminder_timezone,'America/New_York');assert.ok(granularDetail.body.items[0].parts.taken>0);assert.ok(granularDetail.body.items[0].parts.total>granularDetail.body.items[0].parts.taken);
   await adminPool.query(`UPDATE ${schema}.learn_items SET taken_by=$1,done=true WHERE list_id=$2 AND idx=2`,[b.body.user.id,gl]);
@@ -395,6 +396,8 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await mailRequest('/auth/verify-email',{token:verifyToken})).status,200);
   assert.equal((await mailRequest('/auth/verify-email',{token:verifyToken})).status,400,'verification is single use');
   assert.equal((await mailRequest('/me',undefined,admin.cookie)).body.user.email_verified,true);
+  assert.equal((await mailRequest('/me/yahrzeit-reminders',{on:true},admin.cookie)).body.yahrzeit_ancestor_emails,true);
+  assert.equal((await mailRequest('/me',undefined,admin.cookie)).body.user.yahrzeit_ancestor_emails,true);
   const before=(await emails()).length;
   assert.equal((await mailRequest('/auth/forgot-password',{phone:'8455550100'})).status,200);
   const resetEmail=(await emails()).at(-1);assert.equal((await emails()).length,before+1);

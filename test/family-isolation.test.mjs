@@ -47,6 +47,10 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const person=async(owner,name)=>ok(await req('/people',{name,side:'both',life_status:'deceased',death_hday:1,death_hmonth:'TISHREI',new_family:name+' label',family_group_id:gb},owner.cookie)).person;
   const pa=await person(a,'A ancestor'),pb=await person(b,'B ancestor');assert.equal(pa.family_group_id,ga,'body group ignored');
   const ya=ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits[0],yb=ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits[0];
+  ok(await req('/yahrzeits/'+ya.id+'/remind',{on:true},a.cookie));
+  assert.equal(ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits[0].remind,true);
+  ok(await req('/yahrzeits/'+ya.id+'/remind',{on:false},a.cookie));
+  assert.equal(ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits[0].remind,false);
   const la=ok(await req('/lists',{kind:'tehillim',yahrzeit_id:ya.id},a.cookie)).list;
   const lb=ok(await req('/lists',{kind:'tehillim',yahrzeit_id:yb.id},b.cookie)).list;
   const memberMemorial={name:'Member memorial',side:'a',life_status:'deceased',require_yahrzeit:true,death_hday:5};
