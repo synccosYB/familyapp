@@ -1,0 +1,17 @@
+run = "bash deploy/replit-preview.sh"
+modules = ["web", "nodejs-20"]
+
+[nix]
+channel = "stable-25_05"
+
+[agent]
+expertMode = true
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[deployment]
+build = ["sh", "-c", "npm ci --include=dev && npm run build"]
+run = ["bash", "deploy/replit-publish.sh"]
+deploymentTarget = "cloudrun"

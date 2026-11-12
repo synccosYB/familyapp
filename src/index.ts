@@ -476,9 +476,9 @@ app.post('/api/simchas/:id/invite', async (req) => {
   const mime = sniff(buf);
   if (!mime) throw bad('נאר א בילד (JPG/PNG) אדער PDF');
   const id = tok(18);
-  writeFileSync(path.join(UPLOADS, id), buf, { mode: 0o600 });
+  // Store invitation bytes in PostgreSQL across deployment restarts.
   const filename = (part.filename || 'invitation').replace(/[\\/\r\n"]/g, '_').slice(0, 120);
-  await q('INSERT INTO files(id,filename,mime,size,uploaded_by) VALUES($1,$2,$3,$4,$5)', [id, filename, mime, buf.length, u.id]);
+  await q('INSERT INTO files(id,filename,mime,size,uploaded_by,content) VALUES($1,$2,$3,$4,$5,$6)', [id, filename, mime, buf.length, u.id, buf]);
   await q('UPDATE simchas SET file_id=$1 WHERE id=$2', [id, s.id]);
   if (s.file_id) await removeFile(s.file_id);
   return { file: { id, filename, mime, size: buf.length } };
@@ -493,15 +493,15 @@ app.get('/api/files/:id', async (req, reply) => {
   const u = await member(req); const id = String((req.params as any).id);
   const f = await q1(`SELECT f.*, s.audience FROM files f JOIN simchas s ON s.file_id=f.id WHERE f.id=$1`, [id]);
   if (!f || !canSee(u, f.audience)) throw new HttpError(404, 'נישט געטראפן');
-  const p = path.join(UPLOADS, f.id); if (!existsSync(p)) throw new HttpError(404, 'נישט געטראפן');
+  const p = path.join(UPLOADS, f.id); if (!f.content && !existsSync(p)) throw new HttpError(404, 'נישט געטראפן');
   const dl = (req.query as any).dl === '1';
-  reply.header('Content-Type', f.mime).header('Content-Length', statSync(p).size)
+  reply.header('Content-Type', f.mime).header('Content-Length', f.content ? f.content.length : statSync(p).size)
     .header('Content-Disposition', `${dl ? 'attachment' : 'inline'}; filename="invitation${extOf(f.mime)}"; filename*=UTF-8''${encodeURIComponent(f.filename)}`)
     .header('Cache-Control', 'private, max-age=3600').header('X-Content-Type-Options', 'nosniff');
   // images get a locked-down CSP; PDFs get none so the browser's own PDF viewer can open them (a sandbox CSP blocks it)
   if (f.mime !== 'application/pdf') reply.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
   else reply.removeHeader('Content-Security-Policy');
-  return reply.send(createReadStream(p));
+  return reply.send(f.content ? Buffer.from(f.content) : createReadStream(p));
 });
 const extOf = (m: string) => ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'application/pdf': '.pdf', 'image/heic': '.heic' } as any)[m] || '';
 
