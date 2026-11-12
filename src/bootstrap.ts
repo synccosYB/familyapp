@@ -55,7 +55,8 @@ if (config.qaPhonePrefix && normPhoneB(process.env.QA_ADMIN_PHONE) && process.en
 }
 // orphaned uploads
 const up = path.resolve(config.dataDir, 'uploads'); mkdirSync(up, { recursive: true });
-await q('DELETE FROM files f WHERE NOT EXISTS (SELECT 1 FROM simchas s WHERE s.file_id=f.id)');
+await q(`DELETE FROM files f WHERE NOT EXISTS (SELECT 1 FROM simchas s WHERE s.file_id=f.id)
+  AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.file_id=f.id) AND f.created_at<now()-interval '1 day'`);
 const known = new Set((await q('SELECT id FROM files')).map((r: any) => r.id));
 let n = 0; for (const f of readdirSync(up)) if (!known.has(f)) { try { unlinkSync(path.join(up, f)); n++; } catch { /* */ } }
 if (n) log(`removed ${n} orphaned uploads`);
