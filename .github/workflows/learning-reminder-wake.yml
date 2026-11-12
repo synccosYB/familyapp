@@ -1,4 +1,4 @@
-name: Wake the daily learning reminder worker
+name: Wake the daily reminder workers
 
 on:
   schedule:

@@ -104,6 +104,16 @@ local mocked Resend transport and never send real email. Live acceptance require
 
 Alternatively, build the container with `docker build -t familye .`. Supply the existing configuration variables (`DATABASE_URL`, `PUBLIC_URL`, `COOKIE_SECURE`, `ADMIN_NAME`, `ADMIN_PHONE`, `SETUP_TOKEN_SHA256`) through your host, and mount a persistent writable volume at `/data` for uploads and backups. The container listens on 8080 and checks `/api/health`; use an HTTPS reverse proxy. It runs bootstrap on startup and includes PostgreSQL 15 backup tools. Container creation does not itself deploy the app or connect SMS.
 
+## Yahrzeit reminders
+
+Members can follow a yahrzeit or enable reminders for their ancestors on the yahrzeit page.
+Ancestor reminders use the tree profile linked by an admin and only follow parent links within
+families the member can access. Individual reminder choices take precedence. Email requires
+a verified address. The worker starts three days before the observance date, uses the daily
+learning reminder hour and timezone, and sends at most once per member and observance.
+Reminders link to the yahrzeit and to an available Mishnayos list when one exists. The WhatsApp
+button prepares a message for the member to share.
+
 ## Daily Mishnayos and Tehillim email reminders
 
 Members enable daily learning emails under **My account** after verifying their email.

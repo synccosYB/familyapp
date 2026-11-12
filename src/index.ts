@@ -17,7 +17,8 @@ import { familyContext, familySql, personSql, personGroupsSql } from './family-s
 import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
 import { dailyLearning, reminderClock, remainingLearning } from './learning-reminders.js';
-import { learningListFieldsSql, learningTitleSql } from './learning-dedications.js';
+import { availableMishnayosSql, learningListFieldsSql, learningTitleSql } from './learning-dedications.js';
+import { YAHRZEIT_REMINDER_DAYS, yahrzeitAncestorIdsSql } from './yahrzeit-reminders.js';
 import { startJobs } from './jobs.js';
 import { MASECHTOS } from './masechtos.js';
 import { emailReady, learningRequestEmail, normalizeEmail, sendAccountEmail, sendLearningRequestBatch } from './email.js';
@@ -35,7 +36,7 @@ const COOKIE = 'fam_s';
 const ACTING_COOKIE = 'fam_act';
 const ACTING_FAMILY_COOKIE = 'fam_act_group';
 const cookieOptions = { path: '/', httpOnly: true, sameSite: 'lax' as const, secure: config.cookieSecure };
-const accountRoutes = new Set(['/api/me','/api/me/password','/api/me/phone','/api/me/email-verification','/api/me/learning-reminders']);
+const accountRoutes = new Set(['/api/me','/api/me/password','/api/me/phone','/api/me/email-verification','/api/me/learning-reminders','/api/me/yahrzeit-reminders','/api/yahrzeits/:id/remind']);
 
 class HttpError extends Error { constructor(public status: number, public yi: string, public details?: unknown) { super(yi); } }
 const bad = (yi: string) => new HttpError(400, yi);
@@ -50,7 +51,7 @@ const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0
 const pwProblem = (pw: unknown) => (typeof pw !== 'string' || pw.length < 6 ? word("errors.pw_problem.01") : pw.length > 200 ? word("errors.pw_problem.02") : null);
 const SIDE3 = ['a', 'b', 'both'];
 
-interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; learning_email_reminders: boolean; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; primary_family_admin?: boolean; status: string; is_admin: boolean; is_family_admin: boolean; acting?: {admin_id:number; context:string} }
+interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; learning_email_reminders: boolean; yahrzeit_ancestor_emails: boolean; person_id: number | null; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; primary_family_admin?: boolean; status: string; is_admin: boolean; is_family_admin: boolean; acting?: {admin_id:number; context:string} }
 declare module 'fastify' { interface FastifyRequest { user?: User } }
 
 const app = Fastify({ logger: { level: config.logLevel }, trustProxy: config.trustProxy, bodyLimit: 200_000 });
@@ -97,7 +98,7 @@ async function loadUser(req: FastifyRequest, baseOnly=false): Promise<User | nul
   const baseToken=req.cookies[COOKIE];
   if(!baseToken)return null;
   const actingToken=baseOnly?undefined:req.cookies[ACTING_COOKIE];
-  const u = await q1<User & {acting_admin_id:number|null}>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.learning_email_reminders,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin,actor.id acting_admin_id
+  const u = await q1<User & {acting_admin_id:number|null}>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.learning_email_reminders,u.yahrzeit_ancestor_emails,u.person_id,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin,actor.id acting_admin_id
     FROM sessions s JOIN users u ON u.id=s.user_id
     LEFT JOIN sessions original ON original.token_hash=s.admin_session_hash AND original.token_hash=$2
       AND original.admin_session_hash IS NULL AND original.expires_at>now()
@@ -208,7 +209,7 @@ async function newSession(reply: FastifyReply, userId: number) {
   reply.setCookie(COOKIE, t, { ...cookieOptions, maxAge: config.sessionDays * 86400 });
   reply.clearCookie(ACTING_COOKIE,{path:'/'}).clearCookie(ACTING_FAMILY_COOKIE,{path:'/'});
 }
-const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, learning_email_reminders: !!u.learning_email_reminders, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin, acting: u.acting || null });
+const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, learning_email_reminders: !!u.learning_email_reminders, yahrzeit_ancestor_emails: !!u.yahrzeit_ancestor_emails, person_id: u.person_id ?? null, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin, acting: u.acting || null });
 
 // ---------------- settings ----------------
 const getSettings = () => q1('SELECT family_yi,family_en,side_a_yi,side_a_en,side_a_family_yi,side_a_family_en,side_b_yi,side_b_en,side_b_family_yi,side_b_family_en FROM settings WHERE id=1');
@@ -410,6 +411,13 @@ app.post('/api/me/learning-reminders', async req => {
   if (on && (!emailReady() || !u.email_verified_at || !normalizeEmail(u.email))) throw bad(word("errors.29"));
   const updated = await q1('UPDATE users SET learning_email_reminders=$1 WHERE id=$2 RETURNING *',[on,u.id]);
   return {user:publicUser(updated)};
+});
+app.post('/api/me/yahrzeit-reminders', async req => {
+  const u = await member(req), on = (req.body as any)?.on;
+  if (typeof on !== 'boolean') throw bad(word("errors.28"));
+  if (on && (!emailReady() || !u.email_verified_at || !normalizeEmail(u.email))) throw bad(word("errors.29"));
+  await q('UPDATE users SET yahrzeit_ancestor_emails=$1 WHERE id=$2',[on,u.id]);
+  return { yahrzeit_ancestor_emails: on };
 });
 app.post('/api/me/email-verification', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
   const me = await member(req);
@@ -768,7 +776,7 @@ function yzOut(r: any) {
 async function listYahrzeits(u: User) {
   const labelGroups=[...u.family_group_ids,u.family_group_id];
   const rows = await q(`SELECT y.*,CASE WHEN p.id IS NULL THEN y.father_name ELSE coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(fp.title,''),fp.name) FROM people fp WHERE fp.id=p.father_id AND ${personSql('fp')}),'') END father_name,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,p.kever_address,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year,
-    ${personFamilyLabelsSql('y.person_id','$3::int[]')} families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
+    ${personFamilyLabelsSql('y.person_id','$3::int[]')} families, coalesce(r.enabled,p.id IN (${yahrzeitAncestorIdsSql('$1')}),false) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
     LEFT JOIN yahrzeit_reminders r ON r.yahrzeit_id=y.id AND r.user_id=$1 LEFT JOIN users cu ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(cu.family_group_ids) AND cu.id=y.created_by
     WHERE y.archived_at IS NULL AND ${yahrzeitSql('y')} AND (y.side IN ('both','all') OR y.side=ANY($2::text[]))`, [u.id, mySides(u), labelGroups]);
   return rows.map(yzOut).sort((a, b) => (a.next?.days ?? 9999) - (b.next?.days ?? 9999));
@@ -780,7 +788,7 @@ function yzBody(u: User, b: any) {
   const dy = b.death_year ? Number(b.death_year) : null;
   return [name, str(b.father_name, 120), str(b.relation, 80), okSide(u, b.side), hday, b.hmonth, dy && dy > 5000 && dy < 6000 ? dy : null, str(b.kever, 200), str(b.note, 500)];
 }
-app.get('/api/yahrzeits', async (req) => ({ yahrzeits: await listYahrzeits(await member(req)) }));
+app.get('/api/yahrzeits', async (req) => ({ yahrzeits: await listYahrzeits(await member(req)), email_days: YAHRZEIT_REMINDER_DAYS }));
 app.post('/api/yahrzeits',async req=>{
   const u=await member(req),b:any=req.body||{};
   yzBody(u,b);
@@ -801,9 +809,13 @@ app.delete('/api/yahrzeits/:id', async (req) => {
   return { ok: true };
 });
 app.post('/api/yahrzeits/:id/remind', async (req) => {
-  const u = await member(req); const id = Number((req.params as any).id), on = !!(req.body as any)?.on;
-  if (on) await q('INSERT INTO yahrzeit_reminders(user_id,yahrzeit_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [u.id, id]);
-  else await q('DELETE FROM yahrzeit_reminders WHERE user_id=$1 AND yahrzeit_id=$2', [u.id, id]);
+  const u = await member(req); const id = Number((req.params as any).id), on = (req.body as any)?.on;
+  if (typeof on !== 'boolean') throw bad(word("errors.28"));
+  const result = await q1(`INSERT INTO yahrzeit_reminders(user_id,yahrzeit_id,enabled)
+    SELECT $1,y.id,$3 FROM yahrzeits y WHERE y.id=$2 AND y.archived_at IS NULL AND ${yahrzeitSql('y')}
+      AND (y.side IN ('both','all') OR y.side=ANY($4::text[]))
+    ON CONFLICT (user_id,yahrzeit_id) DO UPDATE SET enabled=excluded.enabled RETURNING enabled`,[u.id,id,on,mySides(u)]);
+  if (!result) throw new HttpError(404,word("errors.72"));
   return { remind: on };
 });
 
@@ -1025,7 +1037,14 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
               WHERE other.list_id=d.list_id AND other.yahrzeit_id=$1)))`,[canonical.id,legacy.id]);
         await c.query('UPDATE learn_list_dedications SET yahrzeit_id=$1 WHERE yahrzeit_id=$2',[canonical.id,legacy.id]);
         await c.query('UPDATE learn_lists SET yahrzeit_id=$1 WHERE yahrzeit_id=$2',[canonical.id,legacy.id]);
-        await c.query('INSERT INTO yahrzeit_reminders(user_id,yahrzeit_id) SELECT user_id,$1 FROM yahrzeit_reminders WHERE yahrzeit_id=$2 ON CONFLICT DO NOTHING',[canonical.id,legacy.id]);
+        await c.query('INSERT INTO yahrzeit_reminders(user_id,yahrzeit_id,enabled) SELECT user_id,$1,enabled FROM yahrzeit_reminders WHERE yahrzeit_id=$2 ON CONFLICT DO NOTHING',[canonical.id,legacy.id]);
+        await c.query(`UPDATE yahrzeit_email_deliveries current SET sent_at=prior.sent_at,provider_id=prior.provider_id
+          FROM yahrzeit_email_deliveries prior WHERE current.yahrzeit_id=$1 AND prior.yahrzeit_id=$2
+            AND current.user_id=prior.user_id AND current.occurrence_date=prior.occurrence_date
+            AND current.sent_at IS NULL AND prior.sent_at IS NOT NULL`,[canonical.id,legacy.id]);
+        await c.query(`UPDATE yahrzeit_email_deliveries prior SET yahrzeit_id=$1 WHERE prior.yahrzeit_id=$2
+          AND NOT EXISTS (SELECT 1 FROM yahrzeit_email_deliveries current WHERE current.yahrzeit_id=$1
+            AND current.user_id=prior.user_id AND current.occurrence_date=prior.occurrence_date)`,[canonical.id,legacy.id]);
         await c.query("UPDATE yahrzeits SET relation=CASE WHEN relation='' THEN $1 ELSE relation END,note=CASE WHEN note='' THEN $2 ELSE note END WHERE id=$3",[legacy.relation,legacy.note,canonical.id]);
         await c.query('UPDATE yahrzeits SET canonical_id=$1,archived_at=now() WHERE id=$2',[canonical.id,legacy.id]);
       }
@@ -1114,14 +1133,11 @@ async function learningEmailRequest(req: FastifyRequest) {
   const fingerprint=sha(JSON.stringify({audienceFingerprint,message}));
   return {u,list,message,recipients,fingerprint,audienceFingerprint,previousFingerprint};
 }
-const availableMishnayosSql=`SELECT 1 FROM learn_items i WHERE i.list_id=$1 AND (
-    EXISTS (SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx AND p.taken_by IS NULL AND NOT p.done)
-    OR (i.taken_by IS NULL AND NOT i.done AND NOT EXISTS (SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx))) LIMIT 1`;
 app.get('/api/lists/:id/learning-email',async req=>{
   const {list,message,recipients,fingerprint}=await learningEmailRequest(req);
   const family=await q1('SELECT name FROM family_groups WHERE id=$1',[list.family_group_id]);
   return {subject:message.subject,text:message.text,family:family?.name,recipient_count:recipients.length,
-    email_enabled:emailReady(),available:!!await q1(availableMishnayosSql,[list.id]),fingerprint};
+    email_enabled:emailReady(),available:!!await q1(availableMishnayosSql('$1'),[list.id]),fingerprint};
 });
 app.post('/api/lists/:id/learning-email',{config:{rateLimit:{max:10,timeWindow:'1 hour'}}},async req=>{
   const {u,list,message,recipients,fingerprint,audienceFingerprint,previousFingerprint}=await learningEmailRequest(req);
@@ -1142,7 +1158,7 @@ app.post('/api/lists/:id/learning-email',{config:{rateLimit:{max:10,timeWindow:'
     let sent=request.sent_count;
     if(sent<recipients.length) {
       if(request.expired)throw new HttpError(409,word("errors.68"));
-      if(!(await c.query(availableMishnayosSql,[list.id])).rowCount)throw bad(word("errors.69"));
+      if(!(await c.query(availableMishnayosSql('$1'),[list.id])).rowCount)throw bad(word("errors.69"));
     }
     while(sent<recipients.length){
       const batch=recipients.slice(sent,sent+100);

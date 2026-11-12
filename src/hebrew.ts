@@ -45,8 +45,8 @@ function syntheticDeath(day: number, code: string, deathYear?: number | null): H
 
 export interface Occurrence { ymd: string; days: number; hebrew: string }
 /** Next yahrzeit on or after today (in the family's time zone). */
-export function nextYahrzeit(day: number, code: string, deathYear?: number | null): Occurrence | null {
-  const today = ymdToDate(todayYmd());
+export function nextYahrzeit(day: number, code: string, deathYear?: number | null, ymd = todayYmd()): Occurrence | null {
+  const today = ymdToDate(ymd);
   const death = syntheticDeath(day, code, deathYear);
   const hy = new HDate(today).getFullYear();
   for (const y of [hy - 1, hy, hy + 1, hy + 2]) {

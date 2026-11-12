@@ -27,3 +27,9 @@ export function learningListFieldsSql(sides: string) {
         JOIN person_families pf ON pf.person_id=y.person_id
         WHERE d.list_id=l.id AND pf.family_id=f.id)) families`;
 }
+
+export function availableMishnayosSql(listId: string) {
+  return `SELECT 1 FROM learn_items i WHERE i.list_id=${listId} AND (
+    EXISTS (SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx AND p.taken_by IS NULL AND NOT p.done)
+    OR (i.taken_by IS NULL AND NOT i.done AND NOT EXISTS (SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx))) LIMIT 1`;
+}
