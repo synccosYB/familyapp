@@ -13,6 +13,6 @@ export function personGroupsSql(): string {
   if(!groups.length || groups.some(id=>!Number.isSafeInteger(id)||id<1))throw new Error('Family context is required');
   return `ARRAY[${groups.join(',')}]::int[]`;
 }
-export function personSql(alias='people'): string {
-  return `(${alias}.family_group_id=ANY(${personGroupsSql()}) OR EXISTS(SELECT 1 FROM person_family_access access WHERE access.person_id=${alias}.id AND access.family_group_id=ANY(${personGroupsSql()})))`;
+export function personSql(alias='people', groups=personGroupsSql()): string {
+  return `(${alias}.family_group_id=ANY(${groups}) OR EXISTS(SELECT 1 FROM person_family_access access WHERE access.person_id=${alias}.id AND access.family_group_id=ANY(${groups})))`;
 }

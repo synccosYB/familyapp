@@ -292,7 +292,9 @@ function matchCards(matches,field='person') {
 function renderPersonMatches(field='person',forced) {
   const form=document.querySelector('[data-form="person"]');if(!form)return;
   const query=personNameKey(val(field==='person'?'pn':'new_'+field+'_name'));
-  const matches=forced||(query.length<2?[]:(STATE.people||[]).filter(p=>p.id!==Number(form.dataset.id)&&personNameKey(p.name).includes(query)).slice(0,12));
+  const people=STATE.people||[],id=Number(form.dataset.id);
+  const existingName=field==='person'&&people.some(p=>p.id===id&&personNameKey(p.name)===query);
+  const matches=forced||(query.length<2||existingName?[]:people.filter(p=>p.id!==id&&personNameKey(p.name).includes(query)).slice(0,12));
   const target=$(field==='person'?'personmatches':'matches_'+field);if(target)target.innerHTML=matches.length?'<p>ביסטו שוין דא? קלייב אן עקזיסטירנדיקן מענטש כדי נישט צו מאכן א דאפלטן רעקארד.</p>'+matchCards(matches,field):'';
 }
 V.personreviews=async()=>{
