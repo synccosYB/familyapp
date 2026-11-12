@@ -125,8 +125,9 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
  .tabbar a .i{display:block;font-size:21px;line-height:1.2}
  .tabbar a.on{color:#4338ca}
  .tabbar .badge{position:absolute;top:3px;left:calc(50% - 20px);background:#f59e0b;color:#111;border-radius:99px;padding:0 5px;font-size:10px}
- .topbar{display:flex;align-items:center;justify-content:space-between;background:#1e1b4b;color:#fff;padding:10px 14px;position:sticky;top:0;z-index:14}
- .topbar b{font-size:17px}.topbar span{font-size:12px;opacity:.8}
+ .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#1e1b4b;color:#fff;padding:10px 14px;position:sticky;top:0;z-index:14}
+ .topbar b{font-size:17px}.topbar>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;opacity:.8}
+ .topbar .family-switch{flex:0 1 210px;max-width:72%}
  .chat{height:calc(100dvh - 400px);min-height:240px}
  .toast{bottom:84px}
  .row{flex-wrap:wrap}.row>.btns{flex-basis:100%}
@@ -139,9 +140,25 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
 
 .family-scroll{cursor:grab;user-select:none}.family-scroll.dragging,.family-scroll.dragging *{cursor:grabbing!important}.family-scroll .family-person{cursor:pointer}
 
-.family-switch{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 16px;background:#fff;color:#1e1b4b;font-size:14px}.family-switch select{flex:1 1 180px;min-width:0;max-width:100%;margin:0}
-.family-connection{display:inline-flex;max-width:100%;white-space:normal;overflow-wrap:anywhere;vertical-align:middle}
-.family-switch,.family-connection{line-height:1.5}
+.family-switch{display:grid;gap:4px;min-width:0;color:#e0e7ff;font-size:12px;overflow-wrap:anywhere}
+nav.side .family-switch{margin:0 8px 8px}
+.family-switch select{min-height:44px;min-width:0;max-width:100%;margin:0;padding:7px 9px;background:#312e81;color:#fff;border:1px solid #818cf8;font-size:16px;text-overflow:ellipsis;cursor:pointer}
+.family-switch select:focus-visible{outline:2px solid #e0e7ff;outline-offset:2px}
+.family-switch select:disabled{opacity:.7;cursor:progress}
+.family-switch option{background:#fff;color:#111827}
+.family-connection{display:inline-flex;max-width:100%;white-space:normal;overflow-wrap:anywhere;vertical-align:middle;line-height:1.5}
+.directory-card{min-width:0;padding:14px;overflow-wrap:anywhere}
+.directory-card-heading{display:flex;gap:10px;align-items:flex-start}
+.directory-card-heading b{display:block;font-size:18px}
+.directory-card-heading .tag{margin-top:4px;white-space:normal}
+.directory-card .btn{min-height:44px;max-width:100%;white-space:normal;text-align:center}
+.directory-messages[open]{flex-basis:100%}
+.directory-messages summary{gap:8px}
+.directory-messages summary::-webkit-details-marker{display:none}
+.directory-messages summary::after{content:"";width:6px;height:6px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
+.directory-messages[open] summary::after{transform:rotate(225deg)}
+.directory-message-options{display:grid;gap:8px;margin-top:8px}
+.directory-message-contact{display:grid;gap:6px;padding:10px;border:1px solid #e6e8ec;border-radius:10px}
 .person-family-picker{min-width:0;margin:16px 0;padding:12px;border:1px solid #d1d5db;border-radius:12px}
 .person-family-picker legend{padding-inline:6px;font-weight:700}
 .person-family-picker .muted{margin:0 0 10px}

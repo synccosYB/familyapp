@@ -121,15 +121,29 @@ function actingBanner() {
   const text=ME?.acting?word("navigation.acting_banner.01", { name: ME.name }):word("navigation.acting_banner.02");
   return `<div class="acting-banner" role="status"><strong>${esc(text)}</strong><button type="button" class="btn s l" data-act="stopacting">${htmlWord("navigation.acting_banner.03")}</button></div>`;
 }
+const familySwitchBusy = () => STATE.switchingFamily ? ' disabled aria-busy="true"' : '';
+function familySwitcher() {
+  const groups = ME.family_groups || [];
+  if (groups.length < 2) return '';
+  const selected = STATE.switchingFamily || ME.selected_family_group_id;
+  return `<label class="family-switch">${htmlWord("navigation.render_nav.03")}
+    <select data-change="viewgroup"${familySwitchBusy()}>
+      ${selected ? '' : `<option value="" selected disabled>${htmlWord("admin.options.01")}</option>`}
+      ${groups.map(g=>`<option value="${g.id}" ${g.id===selected?'selected':''}>${esc(g.name)}</option>`).join('')}
+    </select></label>`;
+}
 function renderNav(v) {
   const extra = [['me', '👤', word("navigation.account")]]; if (managesAccounts()) extra.unshift(['admin', '🛡️', word("navigation.admin")]);
-  $('nav').innerHTML = `<div class="lg">${esc(S.family_yi)}</div><div class="sd">${esc(ME.name)} · ${esc(S.family_yi)}</div>` +
+  const switcher = familySwitcher();
+  const familyName = esc(S.family_yi);
+  $('nav').innerHTML = (switcher || `<div class="lg">${familyName}</div>`) +
+    `<div class="sd">${esc(ME.name)}${switcher ? '' : ` · ${familyName}`}</div>` +
     [...pages(), ...extra].map(([k, i, t]) => `<a class="${v === k ? 'on' : ''}" href="#${k}">${i} ${esc(t)}${k === 'admin' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}</a>`).join('') +
     `<a data-act="logout" style="margin-top:14px;opacity:.7">${htmlWord("navigation.render_nav.01")}</a>`;
   const tb = [['home', '🏠', word("navigation.home")], ['yz', '🕯️', word("navigation.yahrzeits")], ['sim', '🎉', word("navigation.simchas")], ['chat', '💬', word("navigation.chat")], ['more', '☰', word("navigation.render_nav.02")]];
   const inMore = !['home', 'yz', 'sim', 'chat'].includes(v);
   $('tabs').innerHTML = tb.map(([k, i, t]) => `<a class="${(k === v || (k === 'more' && inMore)) ? 'on' : ''}" ${k === 'more' ? 'data-act="more"' : `href="#${k}"`}><span class="i">${i}</span>${esc(t)}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}${k === 'more' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}</a>`).join('');
-  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>${(ME.family_groups||[]).length>1?`<label class="family-switch">${htmlWord("navigation.render_nav.03")}<select aria-label="${htmlWord("navigation.render_nav.03")}" data-change="viewgroup">${ME.family_groups.map(g=>`<option value="${g.id}" ${g.id===ME.selected_family_group_id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label>`:''}`;
+  $('top').innerHTML = `<div class="topbar">${switcher || `<b>🌳 ${familyName}</b>`}<span>${esc(ME.name.split(' ')[0])}</span></div>`;
   if(ME.acting)$('top').insertAdjacentHTML('afterbegin',actingBanner());
 }
 function moreSheet() {
@@ -192,12 +206,17 @@ function familyInviteForm() {
 }
 
 // yahrzeits
-async function useLinkedFamily() {
-  const group = Number(location.hash.split('/')[2]);
-  if (group && group!==ME.selected_family_group_id) {
+let linkedFamilyChange = Promise.resolve();
+function useLinkedFamily() {
+  const route = location.hash;
+  const group = Number(route.split('/')[2]);
+  if (!group || STATE.switchingFamily) return;
+  linkedFamilyChange = linkedFamilyChange.catch(() => {}).then(async () => {
+    if (location.hash !== route || STATE.switchingFamily || group === ME.selected_family_group_id) return;
     await api('/me/family-group',{method:'POST',body:{family_group_id:group}});
     await loadMe();
-  }
+  });
+  return linkedFamilyChange;
 }
 V.yz = async arg => {
   const id = Number(arg);
@@ -732,7 +751,7 @@ function markSeen(room, id) { if (id && (SEEN[room] || 0) < id) { SEEN[room] = i
 async function checkUnread() {
   if (!ME || ME.status !== 'active') return;
   try { const { rooms } = await api('/chat-summary'); const u = rooms.some((r) => r.last_id && r.last_id > (SEEN[r.room] || 0) && !(curView() === 'chat' && STATE.room === r.room));
-    if (u !== UNREAD) { UNREAD = u; renderNav(curView()); } } catch { /* */ }
+    if (u !== UNREAD && !document.activeElement?.matches('select[data-change="viewgroup"]')) { UNREAD = u; renderNav(curView()); } } catch { /* */ }
 }
 
 // directory
@@ -776,9 +795,39 @@ V.people = async () => {
   <button class="btn" style="margin-top:14px" data-act="familyinvite">${htmlWord("directory.people.09")}</button>`;
 };
 function dirCards(L) {
-  return L.map((d) => `<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow"><b style="font-size:18px">${esc(d.husband_deceased?withMemorialSuffix(d.husband):d.husband)}${d.husband && d.wife ? ' · ' : ''}${esc(d.wife_deceased?withMemorialSuffix(d.wife):d.wife)}</b><div class="muted">${esc(d.parents)}</div></div>${sideTag(d.side)}</div>
-  <div style="margin-top:10px;display:grid;gap:6px"><div>📍 <span dir="auto">${esc(d.address) || '—'}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap">${d.husband ? `<span><span class="muted">${htmlWord("directory.dir_cards.01")}</span> ${tel(d.phone_h)}</span>` : ''}${d.wife ? `<span><span class="muted">${htmlWord("directory.dir_cards.02")}</span> ${tel(d.phone_w)}</span>` : ''}</div></div>
-  <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">${htmlWord("directory.dir_cards.03")}</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || `<div class="muted">${htmlWord("directory.dir_cards.04")}</div>`;
+  return L.map((d) => {
+    const husband = d.husband_deceased ? withMemorialSuffix(d.husband) : d.husband;
+    const wife = d.wife_deceased ? withMemorialSuffix(d.wife) : d.wife;
+    const messages = directoryMessages([{ name: husband, phone: d.phone_h }, { name: wife, phone: d.phone_w }]);
+    return `<div class="card directory-card"><div class="directory-card-heading"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow">
+      <b>${esc([husband, wife].filter(Boolean).join(' · '))}</b><div class="muted">${esc(d.parents)}</div>${sideTag(d.side)}</div></div>
+    <div style="margin-top:10px;display:grid;gap:6px"><div>📍 <span dir="auto">${esc(d.address) || '—'}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap">${d.husband ? `<span><span class="muted">${htmlWord("directory.dir_cards.01")}</span> ${tel(d.phone_h)}</span>` : ''}${d.wife ? `<span><span class="muted">${htmlWord("directory.dir_cards.02")}</span> ${tel(d.phone_w)}</span>` : ''}</div></div>
+    <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">${htmlWord("directory.dir_cards.03")}</button>` : ''}${navBtns(d.address)}${messages}</div></div>`;
+  }).join('') || `<div class="muted">${htmlWord("directory.dir_cards.04")}</div>`;
+}
+function messageNumber(phone) {
+  const text = String(phone ?? '').trim();
+  if (!/^\+?[\d().\s-]+$/.test(text)) return '';
+  const digits = text.replace(/\D/g, '');
+  const dialPrefix = !text.startsWith('+') && digits.startsWith('00');
+  const international = text.startsWith('+') || dialPrefix;
+  let number = dialPrefix ? digits.slice(2) : digits;
+  if (!international && number.length === 10) number = `1${number}`;
+  if (!international && number.length < 11) return '';
+  return /^[1-9]\d{6,14}$/.test(number) ? number : '';
+}
+function directoryMessages(contacts) {
+  const available = contacts.map(({ name, phone }) => ({ name, number: messageNumber(phone) }))
+    .filter(contact => contact.name && contact.number);
+  if (!available.length) return '';
+  const sms = word("directory.message.sms"), whatsapp = word("directory.message.whatsapp");
+  const options = available.map(({ name, number }) => `<div class="directory-message-contact">
+    <div><strong>${esc(name)}</strong> <span class="muted" dir="ltr">+${number}</span></div>
+    <div class="btns"><a class="btn s l" href="sms:+${number}" aria-label="${esc(`${sms} · ${name}`)}">${esc(sms)}</a>
+    <a class="btn s l" href="https://wa.me/${number}" target="_blank" rel="noopener noreferrer" aria-label="${esc(`${whatsapp} · ${name}`)}">${esc(whatsapp)}</a></div>
+  </div>`).join('');
+  return `<details class="directory-messages"><summary class="btn s l">${htmlWord("directory.message.choose")}</summary>
+    <div class="directory-message-options">${options}</div></details>`;
 }
 async function dirForm(id, mine) {
   const {people}=await api('/directory-people');
@@ -821,7 +870,7 @@ V.admin = async () => {
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
   const sidesBox = (u) => !ME.is_admin&&(u.family_group_ids||[]).length>1?`<span class="muted">${htmlWord("admin.sides_box.01")}</span>`:['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
   return `<a class="btn l" href="#personreviews">${htmlWord("admin.02")}</a><h1>${htmlWord("admin.03")}</h1><div class="cap">${htmlWord("admin.04")}</div>
-  ${ME.is_admin?`<section class="card"><h2>${htmlWord("admin.14")}</h2>${groups.length?field(word("admin.17"),`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):`<p role="status">${htmlWord("admin.18")}</p>`}<form data-form="newgroup">${field(word("admin.19"),'<input id="groupname" maxlength="120" required>')}<button class="btn">${htmlWord("admin.15")}</button></form><button class="btn l" data-act="unassigned">${htmlWord("admin.16")}</button></section>`:''}
+  ${ME.is_admin?`<section class="card"><h2>${htmlWord("admin.14")}</h2>${groups.length?field(word("admin.17"),`<select id="admin-family-switch" data-change="viewgroup"${familySwitchBusy()}>${options(STATE.switchingFamily || ME.selected_family_group_id)}</select>`):`<p role="status">${htmlWord("admin.18")}</p>`}<form data-form="newgroup">${field(word("admin.19"),'<input id="groupname" maxlength="120" required>')}<button class="btn">${htmlWord("admin.15")}</button></form><button class="btn l" data-act="unassigned">${htmlWord("admin.16")}</button></section>`:''}
   <form class="card" data-form="renamegroup">${field(word("admin.20"),`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="${htmlWord("admin.21")}" required>`)}<button class="btn">${htmlWord("admin.05")}</button><div class="err"></div></form>
   <h2>${htmlWord("admin.06", { length: resets.length })}</h2><p class="muted">${htmlWord("admin.07")}</p>
   ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>${htmlWord("admin.22")}</button></div>`).join('') || `<div class="muted">${htmlWord("admin.23")}</div>`}
@@ -886,9 +935,18 @@ async function go() {
   const [v, arg] = h.split('/'); const view = V[v] && !['login', 'pending', 'setpw'].includes(v) ? v : 'home';
   $('m').classList.toggle('tree-workspace',view==='tree' && STATE.treeView==='tree');
   if (view !== 'chat') stopPoll();
+  const navUser = ME, navPending = PENDING;
   renderNav(view);
   const my = ++RENDER;
-  try { const html = await V[view](arg); if (my !== RENDER) return; const keep = STATE.keepScroll; $('m').innerHTML = html; if (!keep) window.scrollTo(0, 0); STATE.keepScroll = false; renderNav(view); observeFamilyTree(); }
+  try {
+    const html = await V[view](arg);
+    if (my !== RENDER) return;
+    $('m').innerHTML = html;
+    if (!STATE.keepScroll) window.scrollTo(0, 0);
+    STATE.keepScroll = false;
+    if (ME !== navUser || PENDING !== navPending) renderNav(view);
+    observeFamilyTree();
+  }
   catch (e) { if (my === RENDER) { if (e.status === 401 || e.status === 403) { await loadMe(); if (!ME || ME.status !== 'active') return go(); } $('m').innerHTML = `<div class="empty"><div class="e">⚠️</div>${esc(e.message)}<div style="margin-top:10px"><button class="btn s" data-act="reload">${htmlWord("account.go.11")}</button></div></div>`; } }
 }
 const refresh = () => { STATE.keepScroll = true; return go(); };
@@ -1055,7 +1113,31 @@ const CHANGE = {
     STATE.cousinFamilies=[...document.querySelectorAll('input[name="cousin-family"]:checked')].map(el=>Number(el.value));
     return refresh();
   },
-  viewgroup:async el=>{if(!el.value)return;await api('/me/family-group',{method:'POST',body:{family_group_id:Number(el.value)}});location.reload();},
+  viewgroup:async el=>{
+    const group = Number(el.value);
+    if (!group || group === ME.selected_family_group_id || STATE.switchingFamily) return;
+    const updateSelectors = (value, busy) => {
+      for (const select of document.querySelectorAll('select[data-change="viewgroup"]')) {
+        select.value = String(value ?? '');
+        select.disabled = busy;
+        if (busy) select.setAttribute('aria-busy', 'true');
+        else select.removeAttribute('aria-busy');
+      }
+    };
+    STATE.switchingFamily = group;
+    updateSelectors(group, true);
+    try {
+      await linkedFamilyChange.catch(() => {});
+      await api('/me/family-group',{method:'POST',body:{family_group_id:group}});
+      const [view, id] = location.hash.slice(1).split('/');
+      if (id && ['learn','sim','yz'].includes(view)) history.replaceState(null, '', `#${view}`);
+      location.reload();
+    } catch (error) {
+      STATE.switchingFamily = null;
+      updateSelectors(ME?.selected_family_group_id, false);
+      throw error;
+    }
+  },
   membershippick:el=>{const boxes=[...document.querySelectorAll('[name=membership]')];const count=boxes.filter(b=>b.checked).length;boxes.forEach(b=>b.disabled=!b.checked&&count>=4);$('membershipcount').textContent=count+' / 4';},
   privatechat: el=>{if(!el.value)return;const id=Number(el.value);STATE.room='dm:'+Math.min(ME.id,id)+':'+Math.max(ME.id,id);return go();},
   chatfile: el=>{const f=el.files[0];STATE.chatUpload=null;if(f&&f.size>10*1024*1024){el.value='';throw new Error(word("shared.chatfile.01"));}$('chatfilename').textContent=f?' · '+f.name:'';},

@@ -352,6 +352,25 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.ok(ok(await req('/people',undefined,switched)).people.some(p=>p.id===pb.id));
   assert.ok(ok(await req('/people',undefined,switched)).people.some(p=>p.id===pa.id),'canonical tree combines only explicitly assigned families');
   assert.equal((await req('/people/'+pa.id,{note:'wrong view'},switched,'PUT')).status,404);
+  const primaryB=ok(await req('/people',{name:'Primary side B',side:'b'},root.cookie,'POST',ga)).person;
+  const secondaryB=ok(await req('/people',{name:'Secondary side B',side:'b'},root.cookie,'POST',gb)).person;
+  const unassignedB=ok(await req('/people',{name:'Unassigned side B',side:'b'},root.cookie,'POST',extra[2])).person;
+  const visibleTreeIds=async cookie=>new Set(ok(await req('/people',undefined,cookie)).people.map(p=>p.id));
+  for(const cookie of [multi.cookie,switched]) {
+    const ids=await visibleTreeIds(cookie);
+    assert.ok(ids.has(primaryB.id) && ids.has(secondaryB.id),'both authorized sides stay visible across family selections');
+    assert.ok(!ids.has(unassignedB.id),'unassigned families stay isolated');
+  }
+  await db.query(`UPDATE ${schema}.users SET sides=$1 WHERE id=$2`,[['a'],uid]);
+  try {
+    for(const cookie of [multi.cookie,switched]) {
+      const ids=await visibleTreeIds(cookie);
+      assert.ok(ids.has(primaryB.id),'primary-family admin keeps access to both primary sides');
+      assert.ok(!ids.has(secondaryB.id),'primary-family admin rights do not grant secondary side access');
+    }
+  } finally {
+    await db.query(`UPDATE ${schema}.users SET sides=$1 WHERE id=$2`,[profile.sides,uid]);
+  }
   const multiPeers=ok(await req('/chat-members',undefined,b.cookie)).members;assert.ok(multiPeers.some(p=>p.id===uid),'secondary members appear in chat');
   const secondaryInvite=ok(await req('/family-invitations',{sides:['a']},switched)).link.split('#join=')[1];
   assert.equal(ok(await req('/family-invitations/'+secondaryInvite)).family_name,'Parnes');
