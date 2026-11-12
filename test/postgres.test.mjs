@@ -259,7 +259,7 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.ok((await adminPool.query(`SELECT archived_at FROM ${schema}.yahrzeits WHERE id=$1`,[legacy.id])).rows[0].archived_at,'keep legacy provenance');
   await request('/people/'+father.id,{name:'Canonical name',kever:'Updated cemetery',kever_address:'1 Cemetery Road, New York, NY'},admin.cookie,'PUT');
   const synced=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits[0];assert.equal(synced.id,canonicalCalendar[0].id);assert.equal(synced.kever,'Updated cemetery');assert.equal(synced.kever_address,'1 Cemetery Road, New York, NY');assert.match(synced.name,/Canonical name/);
-  const canonicalLearningIndex=await request('/lists',undefined,admin.cookie);assert.equal(canonicalLearningIndex.status,200,JSON.stringify(canonicalLearningIndex.body));assert.equal(canonicalLearningIndex.body.lists.find(l=>l.id===legacyList.body.list.id).families.length,2);
+  const canonicalLearningIndex=await request('/lists',undefined,admin.cookie);assert.equal(canonicalLearningIndex.status,200,JSON.stringify(canonicalLearningIndex.body));assert.equal(canonicalLearningIndex.body.lists.find(l=>l.id===legacyList.body.list.id).families.length,2);assert.match(canonicalLearningIndex.body.lists.find(l=>l.id===legacyList.body.list.id).niftar,/Canonical name/);assert.match((await request('/lists/'+legacyList.body.list.id,undefined,admin.cookie)).body.list.niftar,/Canonical name/);
 
   // Public recovery never reveals account existence or creates a reset token.
   assert.equal((await request('/auth/forgot-password',{phone:'123'})).status,400);

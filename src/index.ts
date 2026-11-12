@@ -566,9 +566,15 @@ app.delete('/api/people/:id', async req => {
 });
 
 // ---------------- mishnayos & tehillim ----------------
+// Linked list titles are projections of the canonical person, not independently edited copies.
+const learningTitleSql = (param: number) => `coalesce(
+  (SELECT concat_ws(' ',nullif(p.title,''),p.name,CASE WHEN f.id IS NOT NULL THEN concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) END)
+    FROM yahrzeits y JOIN people p ON p.id=y.person_id LEFT JOIN people f ON f.id=p.father_id AND ${sideSql('f.side',param)}
+    WHERE y.id=l.yahrzeit_id AND ${sideSql('p.side',param)}),
+  (SELECT concat_ws(' ',y.name,nullif(y.father_name,'')) FROM yahrzeits y WHERE y.id=l.yahrzeit_id AND y.person_id IS NULL AND ${sideSql('y.side',param)}),l.niftar)`;
 app.get('/api/lists', async (req) => {
   const u = await member(req);
-  const rows = await q(`SELECT l.*, (SELECT coalesce(json_agg(json_build_object('id',fam.id,'name',fam.name)),'[]') FROM families fam JOIN person_families pf ON pf.family_id=fam.id JOIN yahrzeits y ON y.person_id=pf.person_id WHERE y.id=l.yahrzeit_id) families, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
+  const rows = await q(`SELECT l.*, ${learningTitleSql(1)} niftar, (SELECT coalesce(json_agg(json_build_object('id',fam.id,'name',fam.name)),'[]') FROM families fam JOIN person_families pf ON pf.family_id=fam.id JOIN yahrzeits y ON y.person_id=pf.person_id WHERE y.id=l.yahrzeit_id) families, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
       count(*) FILTER (WHERE i.done)::int done,
       count(*) FILTER (WHERE EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NOT NULL) AND EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL))::int partial,
       count(*) FILTER (WHERE i.taken_by=$2 OR EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by=$2))::int mine
@@ -577,7 +583,7 @@ app.get('/api/lists', async (req) => {
   return { lists: rows.map((r) => ({ ...r, days: r.target_date ? daysUntil(r.target_date) : null })), masechtos: MASECHTOS };
 });
 async function visibleList(u: User, id: number) {
-  const l = await q1('SELECT * FROM learn_lists WHERE id=$1', [id]);
+  const l = await q1(`SELECT l.*,${learningTitleSql(2)} niftar FROM learn_lists l WHERE l.id=$1`, [id,mySides(u)]);
   if (!l || !canSee(u, l.side)) throw new HttpError(404, 'נישט געטראפן');
   return l;
 }
@@ -961,7 +967,7 @@ app.get('/api/home', async (req) => {
   const sims = (await q(`SELECT s.id,s.kind,s.whose,s.gdate,s.time_text,s.hdate_text,s.hall,s.address,s.audience FROM simchas s WHERE ${sideSql('s.audience', 1)} AND s.gdate >= $2 ORDER BY s.gdate LIMIT 4`, [mySides(u), todayYmd()]))
     .map((s) => ({ ...s, hebrew: s.hdate_text || hebrewForYmd(s.gdate), days: daysUntil(s.gdate) }));
   const msgs = await q(`SELECT m.id,m.room,m.body,m.created_at,u.name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.room = ANY($1::text[]) ORDER BY m.id DESC LIMIT 5`, [roomsFor(u)]);
-  const lists = await q(`SELECT l.id,l.kind,l.niftar,l.target_date,count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
+  const lists = await q(`SELECT l.id,l.kind,${learningTitleSql(1)} niftar,l.target_date,count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
     WHERE ${sideSql('l.side', 1)} AND (l.target_date IS NULL OR l.target_date >= $2) GROUP BY l.id ORDER BY l.target_date NULLS LAST LIMIT 4`, [mySides(u), todayYmd()]);
   const counts = await q1(`SELECT (SELECT count(*) FROM users WHERE status='active')::int members, (SELECT count(*) FROM users WHERE status='pending')::int pending`);
   return { yahrzeits: yz, simchas: sims, messages: msgs, lists, members: counts.members, pending: u.is_admin ? counts.pending : 0, today: hebrewForYmd(todayYmd()) };
