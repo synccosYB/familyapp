@@ -808,20 +808,27 @@ V.admin = async () => {
   const options=(id)=>`<option value="">${htmlWord("admin.options.01")}</option>`+groups.map(g=>`<option value="${g.id}" ${g.id===id?'selected':''}>${esc(g.name)}</option>`).join('');
   const { users, owner_phone } = await api('/admin/users'); STATE.users = users; PENDING = users.filter((u) => u.status === 'pending').length;
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
-  const parentsButton = u => (ME.is_admin || u.family_group_ids.length === 1) && groups.some(g => u.family_group_ids.includes(g.id))
-    ? `<button class="btn s l" data-act="linkparents" data-id="${u.id}">${htmlWord("member_parents.action")}</button>` : '';
+  const parentLinks = u => {
+    if (!u.tree_parent_status || !groups.some(g => u.family_group_ids.includes(g.id))) return '';
+    const action=word(u.tree_parent_status==='connected' ? 'member_parents.view' : 'member_parents.action');
+    return `<div class="member-tree-status">
+      <span class="muted">${htmlWord('member_parents.status.'+u.tree_parent_status)}</span>
+      ${u.tree_parent_status==='main_admin' ? '' : `<button type="button" class="btn s l" data-act="linkparents" data-id="${u.id}"
+        aria-label="${htmlWord('member_parents.action_for',{action,name:u.name})}">${esc(action)}</button>`}
+    </div>`;
+  };
   const sidesBox = (u) => !ME.is_admin&&(u.family_group_ids||[]).length>1?`<span class="muted">${htmlWord("admin.sides_box.01")}</span>`:['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
   return `<a class="btn l" href="#personreviews">${htmlWord("admin.02")}</a><h1>${htmlWord("admin.03")}</h1><div class="cap">${htmlWord("admin.04")}</div>
   ${ME.is_admin?`<section class="card"><h2>${htmlWord("admin.14")}</h2>${groups.length?field(word("admin.17"),`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):`<p role="status">${htmlWord("admin.18")}</p>`}<form data-form="newgroup">${field(word("admin.19"),'<input id="groupname" maxlength="120" required>')}<button class="btn">${htmlWord("admin.15")}</button></form><button class="btn l" data-act="unassigned">${htmlWord("admin.16")}</button></section>`:''}
   <form class="card" data-form="renamegroup">${field(word("admin.20"),`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="${htmlWord("admin.21")}" required>`)}<button class="btn">${htmlWord("admin.05")}</button><div class="err"></div></form>
   <h2>${htmlWord("admin.06", { length: resets.length })}</h2><p class="muted">${htmlWord("admin.07")}</p>
   ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>${htmlWord("admin.22")}</button></div>`).join('') || `<div class="muted">${htmlWord("admin.23")}</div>`}
-  <h2>${htmlWord("admin.08", { length: pend.length })}</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div></div>
-   <div class="btns">${ME.is_admin?`<button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}${parentsButton(u)}<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.24")}</button><button class="btn s r" data-act="reject" data-id="${u.id}">${htmlWord("admin.25")}</button></div></div>`).join('') || `<div class="muted">${htmlWord("admin.27")}</div>`}
+  <h2>${htmlWord("admin.08", { length: pend.length })}</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div>${parentLinks(u)}</div>
+   <div class="btns">${ME.is_admin?`<button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.24")}</button><button class="btn s r" data-act="reject" data-id="${u.id}">${htmlWord("admin.25")}</button></div></div>`).join('') || `<div class="muted">${htmlWord("admin.27")}</div>`}
   <h2>${htmlWord("admin.09", { length: rest.length })}</h2>${ME.is_admin?`<p>${htmlWord("admin.28")} <b>${htmlWord("admin.29")}</b>${htmlWord("admin.30")}</p>`:''}<table class="t resp"><thead><tr><th>${htmlWord("admin.10")}</th><th>${htmlWord("admin.11")}</th><th>${htmlWord("admin.12")}</th><th>${htmlWord("admin.13")}</th><th></th></tr></thead><tbody>
-  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ` <span class="tag y">${htmlWord("admin.32")}</span>` : u.is_family_admin?` <span class="tag y">${htmlWord("admin.33")}</span>`:''}${u.has_password ? '' : ` <span class="tag">${htmlWord("admin.34")}</span>`}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<div>${groups.filter(g=>(u.family_group_ids||[]).includes(g.id)).map(g=>`<span class="tag g">${esc(g.name)}</span>`).join(' ')||`<span class="tag">${htmlWord("admin.35")}</span>`}</div><button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}</td>
+  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ` <span class="tag y">${htmlWord("admin.32")}</span>` : u.is_family_admin?` <span class="tag y">${htmlWord("admin.33")}</span>`:''}${u.has_password ? '' : ` <span class="tag">${htmlWord("admin.34")}</span>`}${parentLinks(u)}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<div>${groups.filter(g=>(u.family_group_ids||[]).includes(g.id)).map(g=>`<span class="tag g">${esc(g.name)}</span>`).join(' ')||`<span class="tag">${htmlWord("admin.35")}</span>`}</div><button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}</td>
    <td>${u.status === 'active' ? `<span class="tag g">${htmlWord("admin.36")}</span>` : `<span class="tag b">${htmlWord("admin.37")}</span>`}</td>
-   <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.38")}</button>` : ''}${parentsButton(u)}
+   <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.38")}</button>` : ''}
    ${ME.is_admin && u.status==='active' && !u.is_admin && groups.some(g=>g.id===u.family_group_id)?`<button class="btn s l" data-act="actas" data-id="${u.id}">${htmlWord("admin.39")}</button>`:''}
    ${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s l" data-act="mkadmin" data-id="${u.id}" data-v="${u.is_admin ? 0 : 1}">${u.is_admin ? htmlWord("admin.40") : htmlWord("admin.41")}</button>` : ''}
    ${!u.is_admin&&u.id!==ME.id&&(ME.is_admin||(u.family_group_ids||[]).length===1)?`<button class="btn s l" data-act="familyadmin" data-id="${u.id}" data-v="${u.is_family_admin?'0':'1'}">${u.is_family_admin?htmlWord("admin.42"):htmlWord("admin.43")}</button>`:''}
@@ -906,20 +913,52 @@ async function memberParentsForm(trigger) {
   const complete = current?.has_father && current.has_mother;
   const matchesName = p => personNameKey(p.name) === personNameKey(profile.name);
   const available = profile.people.filter(p => p.linkable).sort((a,b) => Number(matchesName(b)) - Number(matchesName(a)));
-  modal(`<h2 id="member-parents-title" tabindex="-1">${htmlWord("member_parents.title", { name: profile.name })}</h2>
+  const picker = (key, label, options) => `<div class="member-parent-picker">
+    <label for="member-${key}">${esc(label)}</label>
+    <input type="search" data-parent-search="member-${key}" dir="auto" autocomplete="off"
+      aria-label="${htmlWord('member_parents.search_for',{label})}" placeholder="${htmlWord('member_parents.search')}">
+    <select id="member-${key}" name="${key}" ${key==='person_id'?'required':''}>
+      <option value="">${htmlWord('shared.linkcousin.06')}</option>${options}
+    </select>
+    <p class="muted" role="status" hidden>${htmlWord('member_parents.no_matches')}</p>
+  </div>`;
+  function enableSearch(container) {
+    for (const input of container.querySelectorAll('[data-parent-search]')) {
+      const select=$(input.dataset.parentSearch);
+      const message=select.nextElementSibling;
+      const options=[...select.options].map(option=>({option,key:personNameKey(option.textContent)}));
+      input.addEventListener('input',()=>{
+        const terms=input.value.trim().split(/\s+/).map(personNameKey).filter(Boolean);
+        const selected=select.value;
+        const matches=options.filter(({option,key})=>Number(option.value) && terms.every(term=>key.includes(term)));
+        const visible=new Set(matches.map(({option})=>option));
+        select.replaceChildren(...options.map(({option})=>option).filter(option=>
+          !Number(option.value) || option.value===selected || visible.has(option)));
+        select.value=selected;
+        message.hidden=!terms.length || matches.length>0;
+      });
+      input.addEventListener('keydown',event=>{
+        if (event.key==='Enter') { event.preventDefault(); select.focus(); }
+      });
+    }
+  }
+  const title = complete ? 'member_parents.view_title' : 'member_parents.title';
+  modal(`<h2 id="member-parents-title" tabindex="-1">${htmlWord(title,{name:profile.name})}</h2>
     <form id="member-parents-form" data-form="memberparents" data-id="${id}" data-current-person="${current?.id || ''}">
+    <div class="member-parents-body">
     ${current ? `<p><b>${esc(personName(current))}</b></p><input type="hidden" name="person_id" value="${current.id}">`
-      : field(word("shared.linkcousin.05"), `<select id="member-tree-person" name="person_id" required><option value="">${htmlWord("shared.linkcousin.06")}</option>
-        <option value="new">${htmlWord("member_parents.create")}</option>${available.map(option).join('')}</select>`)}
+      : picker('person_id',word('shared.linkcousin.05'),`<option value="new">${htmlWord('member_parents.create')}</option>${available.map(option).join('')}`)}
     <div id="member-parents-family" hidden>${field(word("member_parents.family"), `<select id="member-tree-family" name="family_group_id">
       ${profile.groups.map(g => `<option value="${g.id}" ${g.id === profile.family_group_id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>`)}</div>
-    <div id="member-parents-fields"></div>
-    <div class="err" role="alert"></div><div class="btns">
+    <div id="member-parents-fields"></div></div>
+    <div class="member-parents-footer"><div class="err" role="alert"></div><div class="btns">
       ${complete ? '' : `<button type="submit" class="btn" disabled>${htmlWord("shared.linkcousin.03")}</button>`}
       <button type="button" class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button>
-    </div></form>`);
+    </div></div></form>`);
+  $('mb').classList.add('member-parents-dialog');
   const form = $('member-parents-form'), save = form.querySelector('button[type="submit"]');
   const fields = $('member-parents-fields'), selection = form.elements.person_id, family = form.elements.family_group_id;
+  enableSearch(form);
   function updateSave() {
     if (!save) return;
     const child = people.get(Number(selection.value));
@@ -936,14 +975,14 @@ async function memberParentsForm(trigger) {
       (!child || (![child.id, child.spouse_id, child.second_spouse_id, child.father_id, child.mother_id].includes(p.id)
         && (p.side === 'both' || p.side === child.side))));
     const parentField = (key, label, isLinked, parent) => isLinked
-      ? `<div class="row"><span>${esc(label)}</span><strong>${parent ? esc(personName(parent)) : htmlWord("member_parents.linked")}</strong></div>`
-      : field(label, `<select id="member-${key}" name="${key}"><option value="">${htmlWord("shared.linkcousin.06")}</option>
-        ${candidates.map(option).join('')}</select>`);
+      ? `<div class="member-parent-linked"><span class="muted">${esc(label)}</span><strong>${parent ? esc(personName(parent)) : htmlWord("member_parents.linked")}</strong></div>`
+      : picker(key,label,candidates.map(option).join(''));
     fields.innerHTML = selection.value ? `
-      ${parentField('father_id', word("tree.08"), child?.has_father, people.get(child?.father_id))}
-      ${parentField('mother_id', word("tree.09"), child?.has_mother, people.get(child?.mother_id))}
+      <div class="member-parent-grid">${parentField('father_id', word("tree.08"), child?.has_father, people.get(child?.father_id))}
+      ${parentField('mother_id', word("tree.09"), child?.has_mother, people.get(child?.mother_id))}</div>
       ${child?.has_legacy_parent ? parentField('parent_id', word("tree.person_form.17"), true, people.get(child.parent_id)) : ''}
       ${!candidates.length && !(child?.has_father && child?.has_mother) ? `<p class="muted">${htmlWord("member_parents.no_choices")}</p>` : ''}` : '';
+    enableSearch(fields);
     updateSave();
   }
   form.addEventListener('change', event => {
@@ -1179,7 +1218,9 @@ const FORMS = {
     if (mother_id?.value) body.mother_id = Number(mother_id.value);
     await api(`/admin/users/${f.dataset.id}/tree-parents`, { method: 'PUT', body });
     if (!f.isConnected) return;
-    closeModal();toast(word("member_parents.saved"));return refresh();
+    closeModal();toast(word("member_parents.saved"));
+    await refresh();
+    $('m').querySelector(`[data-act="linkparents"][data-id="${f.dataset.id}"]`)?.focus({preventScroll:true});
   },
   sendlearningemail:async f=>{
     const button=f.querySelector('button[type="submit"]');

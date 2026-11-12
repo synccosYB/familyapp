@@ -377,6 +377,8 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const mother=ok(await req('/people',{name:'Roster mother',side:'both'},root.cookie,'POST',gb)).person;
   const descendant=ok(await req('/people',{name:'Roster descendant',side:'both',parent_id:sibling1.id},root.cookie,'POST',gb)).person;
   const parentsUrl=`/admin/users/${memberId}/tree-parents`;
+  const parentStatus=async ()=>ok(await req('/admin/users',undefined,root.cookie)).users.find(u=>u.id===memberId).tree_parent_status;
+  assert.equal(await parentStatus(),'no_profile');
   const options=ok(await req(parentsUrl,undefined,root.cookie));
   assert.equal(options.person_id,null);
   assert.deepEqual(options.people.find(p=>p.id===sibling1.id).groups,[gb]);
@@ -387,11 +389,13 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.equal((await req(parentsUrl,{person_id:sibling1.id,father_id:descendant.id},root.cookie,'PUT')).status,400,'reject a cycle through a legacy parent');
   assert.equal(ok(await req(parentsUrl,undefined,root.cookie)).person_id,null,'failed writes leave the account unlinked');
   ok(await req(parentsUrl,{person_id:sibling1.id,expected_person_id:null,father_id:pb.id},root.cookie,'PUT'));
+  assert.equal(await parentStatus(),'no_mother');
   const partial=ok(await req(parentsUrl,undefined,root.cookie)).people.find(p=>p.id===sibling1.id);
   assert.equal(partial.father_id,pb.id);
   assert.equal(partial.has_mother,false);
   assert.equal((await req(parentsUrl,{person_id:sibling1.id,father_id:sibling2.id,mother_id:mother.id},root.cookie,'PUT')).status,409,'a filled parent cannot be replaced by a stale form');
   ok(await req(parentsUrl,{person_id:sibling1.id,expected_person_id:sibling1.id,mother_id:mother.id},root.cookie,'PUT'));
+  assert.equal(await parentStatus(),'connected');
   const connected=ok(await req('/people',undefined,root.cookie,'GET',gb)).people.find(p=>p.id===sibling1.id);
   assert.equal(connected.father_id,pb.id);
   assert.equal(connected.mother_id,mother.id);
