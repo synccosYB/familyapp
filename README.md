@@ -7,6 +7,10 @@ Live: https://familye.sites.tab.bot/ (Bochner / Biderman — באכנער / בי
 ## What it does
 - **Sign up / log in**: name, phone, password, and which side you are a cousin on (father's, mother's, or both).
   New cousins wait for an admin to approve them. No SMS provider needed.
+- **My account**: edit name/email, change password, and change the login phone after confirming the current password.
+  Phone changes reject an occupied number, retain the current browser session, and expire other sessions and unused
+  recovery links. SMS verification is not connected. The configured owner's identity stays attached to the same
+  user record across phone changes and restarts.
 - **Admin** (🛡️): approve / reject, change a member's side(s), make others admin, one-time "set password" link for a
   member who forgot (opens WhatsApp with the link), edit the family name and the two side names.
 - **Yahrzeits** (🕯️): name + father's name, relation, side, Hebrew day + month (Adar / Adar I / Adar II), optional year,

@@ -27,11 +27,15 @@ if (!(await q1('SELECT 1 FROM settings WHERE id=1'))) {
 }
 const A = config.admin, phone = normPhoneB(A.phone);
 if (phone && A.name) {
-  let u = await q1('SELECT * FROM users WHERE phone=$1', [phone]);
+  const owner = await q1('SELECT bootstrap_admin_id FROM settings WHERE id=1');
+  let u = owner?.bootstrap_admin_id
+    ? await q1('SELECT * FROM users WHERE id=$1', [owner.bootstrap_admin_id])
+    : await q1('SELECT * FROM users WHERE phone=$1', [phone]);
   if (!u) {
     u = await q1(`INSERT INTO users(name,phone,email,sides,status,is_admin,approved_at) VALUES($1,$2,$3,'{a,b}','active',true,now()) RETURNING *`, [A.name, phone, A.email || null]);
     log(`admin user created (${A.name})`);
   } else if (!u.is_admin || u.status !== 'active') { await q(`UPDATE users SET is_admin=true,status='active' WHERE id=$1`, [u.id]); }
+  await q('UPDATE settings SET bootstrap_admin_id=$1 WHERE id=1 AND bootstrap_admin_id IS NULL', [u.id]);
   if (!u.password_hash && A.setupTokenSha256 && !(await q1('SELECT 1 FROM password_tokens WHERE token_hash=$1', [A.setupTokenSha256]))) {
     await q(`INSERT INTO password_tokens(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3||' days')::interval)`, [A.setupTokenSha256, u.id, String(A.setupTokenDays)]);
     log('admin one-time setup token stored');

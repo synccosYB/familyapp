@@ -174,6 +174,36 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/auth/forgot-password',{phone:'8455550101'})).status,200);
   assert.equal((await request('/auth/forgot-password',{phone:'8455550101'})).status,429,'public requests are rate limited');
 
+  // Phone changes require this member's password and preserve a stable owner identity.
+  assert.equal((await request('/me/phone',{phone:'8455550109',password:'build-admin-password'},a.cookie)).status,401);
+  assert.equal((await request('/me/phone',{phone:'123',password:'build-admin-password'},admin.cookie)).status,400);
+  assert.equal((await request('/me/phone',{phone:'8455550109',password:'wrong'},admin.cookie)).status,400);
+  assert.equal((await request('/me/phone',{phone:'8455550102',password:'build-admin-password'},admin.cookie)).status,409);
+  const otherAdminSession=await request('/auth/login',{phone:'8455550100',password:'build-admin-password'});
+  const samePhone=await request('/me/phone',{phone:'(845) 555-0100',password:'build-admin-password'},admin.cookie);
+  assert.equal(samePhone.status,200);assert.equal(samePhone.body.user.phone,'18455550100');
+  assert.equal((await request('/people',undefined,otherAdminSession.cookie)).status,200,'saving the same phone keeps other sessions');
+  const ownerReset=await request(`/admin/users/${admin.body.user.id}/reset-link`,{},admin.cookie);
+  const changedPhone=await request('/me/phone',{phone:'+1 (845) 555-0109',password:'build-admin-password',user_id:b.body.user.id},admin.cookie);
+  assert.equal(changedPhone.status,200);assert.equal(changedPhone.body.user.phone,'18455550109');
+  assert.equal(changedPhone.body.user.id,admin.body.user.id,'only the signed-in account can change');
+  assert.equal((await request('/me',undefined,admin.cookie)).body.user.phone,'18455550109');
+  assert.equal((await request('/people',undefined,otherAdminSession.cookie)).status,401,'other sessions expire');
+  assert.equal((await request('/auth/token/'+ownerReset.body.link.split('#setpw=')[1])).status,404,'old reset links expire');
+  assert.equal((await request('/auth/login',{phone:'8455550100',password:'build-admin-password'})).status,401);
+  assert.equal((await request('/auth/login',{phone:'8455550109',password:'build-admin-password'})).status,200);
+  const reboot=run('dist/bootstrap.js');assert.equal((await once(reboot,'exit'))[0],0,logs);
+  assert.equal((await adminPool.query('SELECT count(*)::int n FROM users WHERE is_admin')).rows[0].n,1,'bootstrap must not recreate the owner at the old number');
+  assert.equal((await request('/admin/users',undefined,admin.cookie)).body.owner_phone,'18455550109');
+  await request('/admin/users/'+b.body.user.id,{is_admin:true},admin.cookie,'PATCH');
+  assert.equal((await request('/admin/users/'+admin.body.user.id,{is_admin:false},b.cookie,'PATCH')).status,403);
+  assert.equal((await request('/admin/users/'+admin.body.user.id,undefined,b.cookie,'DELETE')).status,403);
+  const phoneRace=await Promise.all([
+    request('/me/phone',{phone:'8455550199',password:'new-member-password'},winner.cookie),
+    request('/me/phone',{phone:'+1 845 555 0199',password:'build-member-password'},b.cookie)
+  ]);
+  assert.deepEqual(phoneRace.map(r=>r.status).sort(),[200,409],'two accounts cannot claim the same phone');
+
  }finally{
   if(child&&child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}
   await adminPool.query(`DROP SCHEMA ${schema} CASCADE`);await adminPool.end();await rm(data,{recursive:true,force:true});
