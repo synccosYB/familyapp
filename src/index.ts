@@ -250,7 +250,7 @@ function yzOut(r: any) {
   return { ...r, hebrew: `${gem(r.hday)} ${MONTH_YI[r.hmonth] || r.hmonth}`, next: n };
 }
 async function listYahrzeits(u: User) {
-  const rows = await q(`SELECT y.*, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y
+  const rows = await q(`SELECT y.*, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y
     LEFT JOIN yahrzeit_reminders r ON r.yahrzeit_id=y.id AND r.user_id=$1 LEFT JOIN users cu ON cu.id=y.created_by
     WHERE ${sideSql('y.side', 2)}`, [u.id, mySides(u)]);
   return rows.map(yzOut).sort((a, b) => (a.next?.days ?? 9999) - (b.next?.days ?? 9999));
@@ -293,7 +293,7 @@ app.post('/api/yahrzeits/:id/remind', async (req) => {
 });
 
 // ---------------- family tree: canonical person records ----------------
-const personSelect = `SELECT p.*, f.name father_name, f.title father_title, m.name mother_name, m.title mother_title,
+const personSelect = `SELECT p.*, coalesce((SELECT json_agg(json_build_object('id',fam.id,'name',fam.name) ORDER BY fam.name) FROM person_families pf JOIN families fam ON fam.id=pf.family_id WHERE pf.person_id=p.id),'[]') families, f.name father_name, f.title father_title, m.name mother_name, m.title mother_title,
   sp.name spouse_name, sp.title spouse_title FROM people p
   LEFT JOIN people f ON f.id=p.father_id LEFT JOIN people m ON m.id=p.mother_id
   LEFT JOIN people sp ON sp.id=p.spouse_id`;
@@ -344,18 +344,37 @@ async function savePerson(u: User, b: any, id?: number) {
         UNION SELECT side FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows;
       if (incoming.some(r=>side!=='both' && r.side!==side)) throw bad('די סייד דארף שטימען מיט די פארבינדונגען');
     }
-    const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year];
+    const lineage=str(b.lineage_term,4);
+    if (!['','בן','בת'].includes(lineage)) throw bad('קלייב אויס בן אדער בת');
+    const previousFamilies=id?(await c.query('SELECT family_id FROM person_families WHERE person_id=$1',[id])).rows.map(r=>r.family_id):[];
+    const requestedFamilies=b.family_ids===undefined?previousFamilies:b.family_ids;
+    if(!Array.isArray(requestedFamilies) || requestedFamilies.some((v:any)=>!Number.isSafeInteger(Number(v))||Number(v)<1)) throw bad('קלייב אויס ריכטיגע משפחות');
+    const familyIds:number[]=[...new Set<number>(requestedFamilies.map(Number))];
+    const newFamily=str(b.new_family,80);
+    if(newFamily) {
+      const family=(await c.query(`INSERT INTO families(name,created_by) VALUES($1,$2) ON CONFLICT(lower(name)) DO UPDATE SET name=families.name RETURNING id`,[newFamily,u.id])).rows[0];
+      if(!familyIds.includes(family.id)) familyIds.push(family.id);
+    }
+    if(familyIds.length) {
+      const found=(await c.query('SELECT id FROM families WHERE id=ANY($1::int[])',[familyIds])).rows;
+      if(found.length!==familyIds.length) throw bad('א משפחה איז נישט געפונען');
+    }
+    const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year,lineage];
     if (old?.spouse_id && old.spouse_id!==spouse) await c.query('UPDATE people SET spouse_id=NULL WHERE id=$1 AND spouse_id=$2',[old.spouse_id,id]);
-    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14 WHERE id=$15 RETURNING *`,[...vals,id])).rows[0]
-      : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,[...vals,u.id])).rows[0];
+    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15 WHERE id=$16 RETURNING *`,[...vals,id])).rows[0]
+      : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[...vals,u.id])).rows[0];
     if (spouse) await c.query('UPDATE people SET spouse_id=$1 WHERE id=$2',[row.id,spouse]);
+    await c.query('DELETE FROM person_families WHERE person_id=$1',[row.id]);
+    if(familyIds.length) await c.query('INSERT INTO person_families(person_id,family_id) SELECT $1,unnest($2::int[])',[row.id,familyIds]);
+    if(father) await c.query("UPDATE people SET lineage_term='בן' WHERE id=$1 AND lineage_term=''",[father]);
+    if(mother) await c.query("UPDATE people SET lineage_term='בת' WHERE id=$1 AND lineage_term=''",[mother]);
     // A complete known date makes one shared yahrzeit; unknown dates remain unknown.
     if (status==='deceased' && day && month) {
       await c.query(`INSERT INTO yahrzeits(name,side,hday,hmonth,death_year,person_id,created_by)
         VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(person_id) DO UPDATE SET name=excluded.name,side=excluded.side,hday=excluded.hday,hmonth=excluded.hmonth,death_year=excluded.death_year`,[[row.title,row.name].filter(Boolean).join(' '),side,day,month,year,row.id,u.id]);
     } else await c.query('DELETE FROM yahrzeits WHERE person_id=$1',[row.id]);
     // Keep a linked yahrzeit name in sync when its person's father is renamed too.
-    await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=$1 OR p.father_id=$1)`,[row.id]);
+    await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=ANY($1::int[]) OR p.father_id=$2)`,[[row.id,father,mother].filter(Boolean),row.id]);
     return row;
   });
 }

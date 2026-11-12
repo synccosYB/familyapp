@@ -38,6 +38,9 @@ const famOf = (c) => (c === 'a' ? S.side_a_family_yi : c === 'b' ? S.side_b_fami
 const sideName = (c) => (c === 'a' ? S.side_a_yi : c === 'b' ? S.side_b_yi : c === 'all' ? 'אלע קאזינס' : 'ביידע סיידס');
 const sideLong = (c) => sideName(c) + (famOf(c) ? ' · משפחת ' + famOf(c) : '');
 const sideTag = (c) => `<span class="tag ${c === 'a' || c === 'b' ? c : 'g'}">${esc(c === 'a' || c === 'b' ? (famOf(c) || sideName(c)) : sideName(c))}</span>`;
+const familyTags = (p) => (p.families || []).map(f=>`<span class="tag g">${esc(f.name)}</span>`).join(' ');
+const familyChoices = (rows) => [...new Map(rows.flatMap(p=>p.families || []).map(f=>[f.id,f])).values()].sort((a,b)=>a.name.localeCompare(b.name));
+const familySelector = (rows,key,label) => field(label,`<select data-change="familyfilter" data-key="${key}"><option value="">אלע משפחות</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`);
 const both = () => ME && (ME.is_admin || (ME.sides.includes('a') && ME.sides.includes('b')));
 const mySides = () => (ME.is_admin ? ['a', 'b'] : ME.sides);
 const vis = (s) => STATE.side === 'all' || s === STATE.side || s === 'both' || s === 'all';
@@ -112,7 +115,7 @@ V.home = async () => {
   <a class="card" href="#sim" style="text-decoration:none;color:inherit"><div class="muted">שמחות וואס קומען</div><div class="big">${h.simchas.length}</div></a>
   <a class="card" href="#learn" style="text-decoration:none;color:inherit"><div class="muted">משניות / תהילים ליסטס</div><div class="big">${h.lists.length}</div></a>
   <a class="card" href="#people" style="text-decoration:none;color:inherit"><div class="muted">קאזינס אין אפ</div><div class="big">${h.members}</div></a></div>
-  <h2>🕯️ קומט באלד</h2>${h.yahrzeits.length ? h.yahrzeits.map((y) => `<div class="row"><div class="grow"><b>${esc(y.name)} ${esc(y.father_name)}</b><div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}${esc(y.hebrew)} · ${gdate(y.next.ymd)} · <b>${inDays(y.next.days)}</b></div></div>${sideTag(y.side)}</div>`).join('')
+  <h2>🕯️ קומט באלד</h2>${h.yahrzeits.length ? h.yahrzeits.map((y) => `<div class="row"><div class="grow"><b>${esc(y.name)} ${esc(y.father_name)}</b><div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}${esc(y.hebrew)} · ${gdate(y.next.ymd)} · <b>${inDays(y.next.days)}</b></div></div>${familyTags(y)}</div>`).join('')
     : empty('🕯️', 'נאך קיין יארצייטן. לייג צו די זיידעס און באבעס.', '<a class="btn s" href="#yz">+ לייג צו א יארצייט</a>')}
   ${h.lists.length ? `<h2>📖 לערנען</h2>${h.lists.map((l) => `<a class="row" href="#learn/${l.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${l.kind === 'tehillim' ? 'תהילים' : 'משניות'} · ${esc(l.niftar)}</b><div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${l.taken} פון ${l.total} גענומען${l.target_date ? ' · ביז ' + gdate(l.target_date) : ''}</div></div><span class="btn s">נעם</span></a>`).join('')}` : ''}
   <h2>🎉 שמחות</h2>${h.simchas.length ? h.simchas.map((x) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(x.kind)} · ${esc(x.whose)}</b><div class="muted">${gdate(x.gdate)} · ${esc(x.hebrew)}${x.hall ? ' · ' + esc(x.hall) : ''} · ${inDays(x.days)}</div></div><div class="btns">${navBtns(x.address)}<a class="btn s l" href="#sim">RSVP</a></div></div>`).join('')
@@ -126,9 +129,9 @@ function inviteLink() { return 'https://wa.me/?text=' + encodeURIComponent(`${S.
 // yahrzeits
 V.yz = async () => {
   const { yahrzeits } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
-  const L = yahrzeits.filter((y) => vis(y.side));
-  return `<h1>🕯️ יארצייטן</h1><div class="cap">אלע זיידעס, באבעס און משפחה. דער דאטום פאר דעם יאר ווערט אויסגערעכנט פונעם אידישן דאטום.</div>${seg()}
-  ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(y.name)} ${esc(y.father_name)}</b> ${sideTag(y.side)}
+  const L = yahrzeits.filter(y => !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
+  return `<h1>🕯️ יארצייטן</h1><div class="cap">אלע זיידעס, באבעס און משפחה. דער דאטום פאר דעם יאר ווערט אויסגערעכנט פונעם אידישן דאטום.</div>${familySelector(yahrzeits,'yzFamily','משפחה')}
+  ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(y.name)} ${esc(y.father_name)}</b> ${familyTags(y)}
    <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` · דעם יאר: ${gdate(y.next.ymd)} · <b style="color:#4338ca">${inDays(y.next.days)}</b>` : ''}</div>
    ${y.kever ? `<div class="muted">🪦 ${esc(y.kever)}</div>` : ''}${y.note ? `<div class="muted">${esc(y.note)}</div>` : ''}</div>
    <div class="btns"><button class="btn s ${y.remind ? 'g' : 'l'}" data-act="remind" data-id="${y.id}" data-on="${y.remind ? 0 : 1}">${y.remind ? '🔔 מען דערמאנט דיך' : '🔔 רימיינד מיר'}</button>
@@ -155,18 +158,18 @@ async function yzForm(id) {
 // family tree
 V.tree = async () => {
   const { people } = await api('/people'); STATE.people = people;
-  const sides = mySides(); if (!STATE.treeSide || !sides.includes(STATE.treeSide)) STATE.treeSide = sides[0];
-  const s = STATE.treeSide, P = people.filter((p) => p.side === s || p.side === 'both');
+  const P = people; // Server permissions determine visibility; family membership never cuts spouse/ancestor links.
   const {units,edges,generationConflicts}=familyUnits(P); STATE.treeEdges=edges;
   const graphMode=STATE.treeView==='tree' && !generationConflicts.length;
-  const node = p => `<button class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="editp" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</strong>${p.father_name?`<span class="muted tree-relation">טאטע: ${esc(p.father_name)}</span>`:''}${p.mother_name?`<span class="muted tree-relation">מאמע: ${esc(p.mother_name)}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">מאן / ווייב: ${esc(p.spouse)}</span>`:''}</button>`;
+  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="editp" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</strong>${p.father_name?`<span class="muted tree-relation">טאטע: ${esc(p.father_name)}</span>`:''}${p.mother_name?`<span class="muted tree-relation">מאמע: ${esc(p.mother_name)}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">מאן / ווייב: ${esc(p.spouse)}</span>`:''}</button>`;
   const couple = unit => `<section class="family-unit ${unit.members.length===2?'married':''}" aria-label="${unit.members.length===2?'פארהייראטע פארפאלק':'מענטש'}">${unit.members.length===2?'<div class="marriage-label">פארהייראט</div>':''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
   const treeHtml=graphMode
     ? `<div class="tree-toolbar" aria-label="בוים פארגרעסערונג"><button class="btn s l" data-act="treezoom" data-v="fit">פאס צום עקראַן</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="פארקלענערן בוים">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="פארגרעסערן בוים">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">+ לייג צו אין בוים</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
-     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>נאמען</th><th>מאן / ווייב</th><th>טאטע</th><th>מאמע</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length===2?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="editp" data-id="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</button></td><td>${esc(p.spouse_name||p.spouse)||'—'}</td><td>${esc(p.father_name)||'—'}</td><td>${esc(p.mother_name)||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
+     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>נאמען</th><th>מאן / ווייב</th><th>טאטע</th><th>מאמע</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length===2?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="editp" data-id="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</button> ${familyTags(p)}</td><td>${esc(p.spouse_name||p.spouse)||'—'}</td><td>${esc(p.father_name)||'—'}</td><td>${esc(p.mother_name)||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
   return `<h1>🌳 פעמילי טרי</h1><div class="cap">דריק אויף א נאמען צו עדיטן אדער צולייגן קינדער.</div>
-  <div class="btns" style="margin-bottom:6px">${sides.length > 1 ? `<div class="seg">${sides.map((c) => `<button class="${s === c ? 'on' : ''}" data-act="treeside" data-v="${c}">${esc(sideLong(c))}</button>`).join('')}</div>` : `<b style="margin-bottom:14px">${esc(sideLong(s))}</b>`}
+  ${familySelector(P,'treeFamily','הדגש משפחה (אלע פארבינדונגען בלייבן אין בוים)')}
+  <div class="btns" style="margin-bottom:6px">
   <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">בוים</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">ליסט</button></div></div>
   ${generationConflicts.length ? '<p class="err" role="alert">די משפחה לינקס שטימען נישט מיט די דורות. מען ווייזט א ליסט ביז די לינקס ווערן איבערגעקוקט.</p>' : ''}
   ${units.length ? `<div class="card">${treeHtml}</div>` : empty('🌳','דער בוים איז נאך ליידיג. הייב אן מיט די זיידע און באבע.')}
@@ -235,7 +238,10 @@ async function personForm(id, parentId) {
   ${choice('father_id','טאטע')}${choice('mother_id','מאמע')}${choice('spouse_id','מאן / ווייב')}
   ${p.parent_id ? choice('parent_id','פריערדיגער עלטערן לינק (נאכנישט באשטימט טאטע / מאמע)') : '<input type="hidden" id="pparent_id" value="">'}
   ${p.spouse && !p.spouse_id ? `<p class="muted">פריערדיגער מאן / ווייב נאמען: ${esc(p.spouse)}. קלייב דעם מענטש אויבן צו פארבינדן.</p>` : ''}
-  ${field('סייד',`<select id="pside">${sideOptions(p.side)}</select>`)}
+  ${field('ייחוס',`<select id="plineage"><option value="">נישט באקאנט</option><option value="בן" ${p.lineage_term==='בן'?'selected':''}>בן</option><option value="בת" ${p.lineage_term==='בת'?'selected':''}>בת</option></select>`)}
+  <fieldset><legend>משפחות (מען קען אויסקלייבן מער ווי איינס)</legend>${familyChoices(P).map(f=>`<label style="display:inline-flex;gap:6px;margin:6px"><input type="checkbox" name="person_family" value="${f.id}" ${(p.families || []).some(x=>x.id===f.id)?'checked':''}>${esc(f.name)}</label>`).join('')}
+  ${field('צולייגן א נייע משפחה',`<input id="pnewfamily" maxlength="80" placeholder="משפחה נאמען">`)}</fieldset>
+  ${field('ווער קען זען (צוטריט גרופע)',`<select id="pside">${sideOptions(p.side)}</select>`)}
   ${field('לעבנס סטאטוס',`<select id="plife"><option value="unknown" ${!p.life_status||p.life_status==='unknown'?'selected':''}>נישט באקאנט</option><option value="living" ${p.life_status==='living'?'selected':''}>לעבט</option><option value="deceased" ${p.life_status==='deceased'?'selected':''}>נפטר / נפטרת</option></select>`)}
   <details ${p.niftar?'open':''}><summary>אידישער פטירה דאטום (אויב באקאנט)</summary>
   <div class="grid g2"><div>${field('טאג פון פטירה',`<select id="pday"><option value="">— נישט באקאנט —</option>${Array.from({length:30},(_,i)=>`<option value="${i+1}" ${p.death_hday===i+1?'selected':''}>${hebD(i+1)}</option>`).join('')}</select>`)}</div>
@@ -523,7 +529,7 @@ const FORMS = {
   setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); location.hash = '#home'; },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
-  person: async (f) => { const id = Number(f.dataset.id); const b = {name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno')};
+  person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno')};
     await api(id ? '/people/' + id : '/people', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ ' + b.name + ' געסעיווט'); refresh(); },
   list: async () => { const r = await api('/lists', { method: 'POST', body: { kind: val('lk'), yahrzeit_id: val('lyz') || null, niftar: val('ln'), target_date: val('ld'), side: val('ls') } }); closeModal(); toast('✓ ליסט געמאכט'); location.hash = '#learn/' + r.list.id; },
   sim: async (f) => { const id = Number(f.dataset.id); const kind = val('sk') === 'אנדערע' ? (val('sko') || 'שמחה') : val('sk');
@@ -546,7 +552,7 @@ document.addEventListener('click', async (ev) => {
   const f = ACT[el.dataset.act]; if (!f) return; if (el.tagName === 'A' && !el.getAttribute('href')) ev.preventDefault();
   try { await f(el, ev); } catch (e) { fail(e); }
 });
-document.addEventListener('change', async (ev) => { const el = ev.target.closest('[data-change]'); if (!el) return; try { await CHANGE[el.dataset.change](el); } catch (e) { fail(e); } });
+document.addEventListener('change', async (ev) => { const el = ev.target.closest('[data-change]'); if (!el || el.dataset.change==='familyfilter') return; try { await CHANGE[el.dataset.change](el); } catch (e) { fail(e); } });
 document.addEventListener('input', (ev) => {
   const el = ev.target; if (el.dataset.input !== 'q') return; STATE.q = el.value;
   const Q = STATE.q.trim(); const L = (STATE.dir || []).filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
@@ -559,7 +565,7 @@ document.addEventListener('submit', async (ev) => {
   try { await FORMS[f.dataset.form](f); } catch (e) { if (e.status === 401 && f.dataset.form !== 'login') return fail(e); if (err) err.textContent = e.message; else fail(e); }
   finally { if (btn && document.body.contains(btn)) btn.disabled = false; }
 });
-document.addEventListener('change', (ev) => { if (ev.target.id === 'sk') $('skow').style.display = ev.target.value === 'אנדערע' ? '' : 'none';
+document.addEventListener('change', (ev) => { if(ev.target.dataset.change==='familyfilter') { STATE[ev.target.dataset.key]=ev.target.value; refresh(); } if (ev.target.id === 'sk') $('skow').style.display = ev.target.value === 'אנדערע' ? '' : 'none';
   if (ev.target.id === 'sf') { const f = ev.target.files[0]; $('ip').innerHTML = !f ? '' : f.type === 'application/pdf' ? `<div class="muted" style="margin:-4px 0 12px">📄 ${esc(f.name)}</div>` : `<img src="${URL.createObjectURL(f)}" style="max-width:100%;max-height:200px;border-radius:8px;margin:-4px 0 12px">`; } });
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeModal(); });
 window.addEventListener('hashchange', () => { closeModal(); go(); });
