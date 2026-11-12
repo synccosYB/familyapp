@@ -13,6 +13,7 @@ function closeModal() { $('md').classList.remove('on'); $('mb').innerHTML = ''; 
 
 async function api(path, opts = {}) {
   const o = { method: opts.method || 'GET', headers: { 'x-familye': '1' }, credentials: 'same-origin' };
+  if(ME?.selected_family_group_id && !/^\/(me|auth)(\/|$)/.test(path))o.headers['x-family-group']=String(ME.selected_family_group_id);
   if (opts.body instanceof FormData) o.body = opts.body;
   else if (opts.body !== undefined) { o.body = JSON.stringify(opts.body); o.headers['content-type'] = 'application/json'; }
   const r = await fetch('/api' + path, o);
@@ -72,7 +73,7 @@ function renderNav(v) {
   const tb = [['home', '🏠', 'היים'], ['yz', '🕯️', 'יארצייטן'], ['sim', '🎉', 'שמחות'], ['chat', '💬', 'טשעט'], ['more', '☰', 'מער']];
   const inMore = !['home', 'yz', 'sim', 'chat'].includes(v);
   $('tabs').innerHTML = tb.map(([k, i, t]) => `<a class="${(k === v || (k === 'more' && inMore)) ? 'on' : ''}" ${k === 'more' ? 'data-act="more"' : `href="#${k}"`}><span class="i">${i}</span>${t}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}${k === 'more' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}</a>`).join('');
-  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>`;
+  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>${(ME.family_groups||[]).length>1?`<label class="family-switch">משפחה וואס דו קוקסט יעצט<select aria-label="משפחה וואס דו קוקסט יעצט" data-change="viewgroup">${ME.family_groups.map(g=>`<option value="${g.id}" ${g.id===ME.selected_family_group_id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label>`:''}`;
 }
 function moreSheet() {
   const L = [['tree', '🌳', 'פעמילי טרי'], ['learn', '📖', 'משניות און תהילים'], ['people', '👥', 'קאזינס / אדרעסן'], ...(isManager() ? [['admin', '🛡️', 'אדמין' + (PENDING ? ` (${PENDING} ווארטן)` : '')]] : []), ['me', '👤', 'מיין אקאונט']];
@@ -557,6 +558,18 @@ async function dirForm(id, mine) {
   <div class="err" id="ferr"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button>${id ? `<button type="button" class="btn r" style="margin-right:auto" data-act="deldir" data-id="${id}">🗑</button>` : ''}</div></form>`);
 }
 
+async function assignFamilies(id,selected) {
+  const u=STATE.users.find(u=>u.id===id);if(!u)return;
+  const {groups}=await api('/admin/family-groups');STATE.groups=groups;
+  const chosen=selected||(u.family_group_ids||[]).filter(id=>groups.some(g=>g.id===id));
+  modal(`<h2>בחר משפחות — ${esc(u.name)}</h2><p>קלייב איינס ביז פיר משפחות. דער מעמבער קען זען נאר די צוגעטיילטע משפחות. דאס מאכט נישט קיין קאפיעס פון מענטשן.</p>
+  ${!groups.length?'<p role="status">נאך נישטא קיין משפחות. מאך די ערשטע משפחה אונטן.</p>':''}
+  <form data-form="memberships" data-id="${id}"><fieldset><legend>משפחות <span id="membershipcount">${chosen.length} / 4</span></legend>
+  ${groups.map(g=>`<label style="display:flex;align-items:center;gap:12px;min-height:48px"><input type="checkbox" name="membership" data-change="membershippick" value="${g.id}" ${chosen.includes(g.id)?'checked':chosen.length>=4?'disabled':''}>${esc(g.name)}${g.id===u.family_group_id?' (הויפט משפחה)':''}</label>`).join('')}</fieldset>
+  <div class="err" role="alert"></div><div class="btns"><button class="btn" ${groups.length?'':'disabled'}>סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>
+  <hr><label for="assignnewgroup">פעלט א משפחה? מאך א נייע</label><input id="assignnewgroup" maxlength="120"><button type="button" class="btn l" data-act="createassigngroup" data-id="${id}">מאך משפחה</button>`);
+}
+
 // admin
 V.admin = async () => {
   if (!isManager()) return '<div class="muted">נאר פאר אדמין</div>';
@@ -564,21 +577,21 @@ V.admin = async () => {
   const options=(id)=>'<option value="">— קלייב א משפחה —</option>'+groups.map(g=>`<option value="${g.id}" ${g.id===id?'selected':''}>${esc(g.name)}</option>`).join('');
   const { users, owner_phone } = await api('/admin/users'); STATE.users = users; PENDING = users.filter((u) => u.status === 'pending').length;
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
-  const sidesBox = (u) => ['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
+  const sidesBox = (u) => !ME.is_admin&&(u.family_group_ids||[]).length>1?'<span class="muted">מערערע משפחות — נאר דער הויפט אדמין קען עדיטן</span>':['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
   return `<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>🛡️ אדמין</h1><div class="cap">אפרובירן נייע קאזינס, טוישן סייד, מאכן אנדערע אדמין.</div>
-  ${ME.is_admin?`<section class="card"><h2>משפחה צוטריט</h2>${field('משפחה וואס דו קוקסט יעצט',`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`)}<form data-form="newgroup">${field('מאך א נייע משפחה','<input id="groupname" maxlength="120" required>')}<button class="btn">מאך משפחה</button></form><button class="btn l" data-act="unassigned">צוטיילן אלטע רעקארדס</button></section>`:''}
+  ${ME.is_admin?`<section class="card"><h2>משפחה צוטריט</h2>${groups.length?field('משפחה וואס דו קוקסט יעצט',`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):'<p role="status">נאך נישטא קיין צוטריט משפחות. מאך קודם די משפחות אונטן, דערנאך קלייב ביי יעדן מעמבער איינס ביז פיר משפחות.</p>'}<form data-form="newgroup">${field('מאך א נייע משפחה','<input id="groupname" maxlength="120" required>')}<button class="btn">מאך משפחה</button></form><button class="btn l" data-act="unassigned">צוטיילן אלטע רעקארדס</button></section>`:''}
   <form class="card" data-form="renamegroup">${field('עדיט משפחה נאמען',`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="דער ריכטיגער משפחה נאמען" required>`)}<button class="btn">סעיוו משפחה נאמען</button><div class="err"></div></form>
   <h2>🔑 פאסווארט בקשות (${resets.length})</h2><p class="muted">באשטעטיג ווער דער מענטש איז איידער דו שיקסט א לינק. דער לינק איז איינמאליג און גוט פאר איין שעה.</p>
-  ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}">🔑 מאך א לינק</button></div>`).join('') || '<div class="muted">נאך קיין בקשות.</div>'}
+  ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>🔑 מאך א לינק</button></div>`).join('') || '<div class="muted">נאך קיין בקשות.</div>'}
   <h2>⏳ ווארטן אויף אפרוביישן (${pend.length})</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div></div>
-   <div class="btns"><button class="btn s g" data-act="approve" data-id="${u.id}">✓ אפרובירן</button><button class="btn s r" data-act="reject" data-id="${u.id}">✗ אפזאגן</button></div></div>`).join('') || '<div class="muted">קיינער ווארט נישט.</div>'}
-  <h2>👥 אלע מעמבערס (${rest.length})</h2><table class="t resp"><thead><tr><th>נאמען</th><th>טעלעפאן</th><th>סייד</th><th>סטאטוס</th><th></th></tr></thead><tbody>
-  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ' <span class="tag y">הויפט אדמין</span>' : u.is_family_admin?' <span class="tag y">משפחה אדמין</span>':''}${u.has_password ? '' : ' <span class="tag">נאך קיין פאסווארט</span>'}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<label>משפחה<select data-change="usergroup" data-id="${u.id}">${options(u.family_group_id)}</select></label>`:''}</td>
+   <div class="btns">${ME.is_admin?`<button class="btn s l" data-act="assignfamilies" data-id="${u.id}">בחר משפחות (ביז 4)</button>`:''}<button class="btn s g" data-act="approve" data-id="${u.id}">✓ אפרובירן</button><button class="btn s r" data-act="reject" data-id="${u.id}">✗ אפזאגן</button></div></div>`).join('') || '<div class="muted">קיינער ווארט נישט.</div>'}
+  <h2>👥 אלע מעמבערס (${rest.length})</h2>${ME.is_admin?'<p>געפין דעם מעמבער, דריק <b>בחר משפחות</b>, צייכן אן ביז פיר משפחות און סעיוו. דער מעמבער קען דערנאך טוישן צווישן די צוגעטיילטע משפחות אויבן אין דער אפ.</p>':''}<table class="t resp"><thead><tr><th>נאמען</th><th>טעלעפאן</th><th>סייד</th><th>סטאטוס</th><th></th></tr></thead><tbody>
+  ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ' <span class="tag y">הויפט אדמין</span>' : u.is_family_admin?' <span class="tag y">משפחה אדמין</span>':''}${u.has_password ? '' : ' <span class="tag">נאך קיין פאסווארט</span>'}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<div>${groups.filter(g=>(u.family_group_ids||[]).includes(g.id)).map(g=>`<span class="tag g">${esc(g.name)}</span>`).join(' ')||'<span class="tag">נאך נישט צוגעטיילט</span>'}</div><button class="btn s l" data-act="assignfamilies" data-id="${u.id}">בחר משפחות (ביז 4)</button>`:''}</td>
    <td>${u.status === 'active' ? '<span class="tag g">אקטיוו</span>' : '<span class="tag b">אפגעזאגט</span>'}</td>
    <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">אפרובירן</button>` : ''}
    ${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s l" data-act="mkadmin" data-id="${u.id}" data-v="${u.is_admin ? 0 : 1}">${u.is_admin ? 'נעם אוועק אדמין' : 'מאך אדמין'}</button>` : ''}
-   ${!u.is_admin&&u.id!==ME.id?`<button class="btn s l" data-act="familyadmin" data-id="${u.id}" data-v="${u.is_family_admin?'0':'1'}">${u.is_family_admin?'נעם אוועק משפחה אדמין':'מאך משפחה אדמין'}</button>`:''}
-   <button class="btn s l" data-act="resetlink" data-id="${u.id}">🔑 פאסווארט לינק</button>${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s r" data-act="deluser" data-id="${u.id}">🗑</button>` : ''}</div></td></tr>`).join('')}</tbody></table>
+   ${!u.is_admin&&u.id!==ME.id&&(ME.is_admin||(u.family_group_ids||[]).length===1)?`<button class="btn s l" data-act="familyadmin" data-id="${u.id}" data-v="${u.is_family_admin?'0':'1'}">${u.is_family_admin?'נעם אוועק משפחה אדמין':'מאך משפחה אדמין'}</button>`:''}
+   <button class="btn s l" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>🔑 פאסווארט לינק</button>${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s r" data-act="deluser" data-id="${u.id}">🗑</button>` : ''}</div></td></tr>`).join('')}</tbody></table>
   ${ME.is_admin?`<h2>⚙️ משפחה נעמען</h2><form data-form="settings" class="card">
   ${field('נאמען פון דער אפ (אידיש)', `<input id="st_family_yi" value="${esc(S.family_yi)}">`)}${field('Name (English)', `<input id="st_family_en" class="ltr" value="${esc(S.family_en)}">`)}
   <div class="grid g2"><div>${field('סייד א (אידיש)', `<input id="st_side_a_yi" value="${esc(S.side_a_yi)}">`)}${field('משפחה נאמען', `<input id="st_side_a_family_yi" value="${esc(S.side_a_family_yi)}">`)}${field('Side A (English)', `<input id="st_side_a_en" class="ltr" value="${esc(S.side_a_en)}">`)}${field('Family name (English)', `<input id="st_side_a_family_en" class="ltr" value="${esc(S.side_a_family_en)}">`)}</div>
@@ -636,6 +649,8 @@ async function loadMe() { const r = await api('/me'); ME = r.user; EMAIL_READY =
 
 // ---------- actions ----------
 const ACT = {
+  assignfamilies:el=>assignFamilies(Number(el.dataset.id)),
+  createassigngroup:async el=>{const chosen=[...document.querySelectorAll('[name=membership]:checked')].map(e=>Number(e.value));const {group}=await api('/admin/family-groups',{method:'POST',body:{name:val('assignnewgroup')}});if(chosen.length<4)chosen.push(group.id);await assignFamilies(Number(el.dataset.id),chosen);},
   reuseperson:async el=>{
     const field=el.dataset.field,id=Number(el.dataset.id);
     if(field==='person')return personForm(id);
@@ -719,8 +734,8 @@ const ACT = {
   copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast('✓ קאפירט'); },
 };
 const CHANGE = {
-  viewgroup:async el=>{await api('/admin/select-family-group',{method:'POST',body:{family_group_id:Number(el.value)}});location.reload();},
-  usergroup:async el=>{if(!el.value)return;await api('/admin/users/'+el.dataset.id+'/family-group',{method:'PUT',body:{family_group_id:Number(el.value)}});toast('משפחה צוגעטיילט — דער מעמבער דארף נאכאמאל לאגין');await loadMe();refresh();},
+  viewgroup:async el=>{if(!el.value)return;await api('/me/family-group',{method:'POST',body:{family_group_id:Number(el.value)}});location.reload();},
+  membershippick:el=>{const boxes=[...document.querySelectorAll('[name=membership]')];const count=boxes.filter(b=>b.checked).length;boxes.forEach(b=>b.disabled=!b.checked&&count>=4);$('membershipcount').textContent=count+' / 4';},
   privatechat: el=>{if(!el.value)return;const id=Number(el.value);STATE.room='dm:'+Math.min(ME.id,id)+':'+Math.max(ME.id,id);return go();},
   chatfile: el=>{const f=el.files[0];STATE.chatUpload=null;if(f&&f.size>10*1024*1024){el.value='';throw new Error('מאקסימום 10 MB');}$('chatfilename').textContent=f?' · '+f.name:'';},
   newrelative: el => { $('new_' + el.dataset.key).hidden = el.value !== 'new'; },
@@ -731,7 +746,8 @@ const CHANGE = {
 };
 const FORMS = {
   renamegroup:async()=>{await api('/admin/family-groups/'+val('renamegroupid'),{method:'PATCH',body:{name:val('renamegroupname')}});await loadMe();refresh();},
-  newgroup:async()=>{await api('/admin/family-groups',{method:'POST',body:{name:val('groupname')}});refresh();},
+  newgroup:async()=>{const {group}=await api('/admin/family-groups',{method:'POST',body:{name:val('groupname')}});await api('/me/family-group',{method:'POST',body:{family_group_id:group.id}});location.reload();},
+  memberships:async f=>{const ids=[...f.querySelectorAll('[name=membership]:checked')].map(e=>Number(e.value));if(!ids.length)throw new Error('קלייב כאטש איין משפחה');await api('/admin/users/'+f.dataset.id+'/family-group',{method:'PUT',body:{family_group_ids:ids}});closeModal();toast('משפחות צוגעטיילט — דער מעמבער דארף נאכאמאל לאגין');await loadMe();refresh();},
   assignrecords:async f=>{const records={};for(const e of f.querySelectorAll('[name=assignrecord]:checked'))(records[e.dataset.table]||=[]).push(e.value);await api('/admin/assign-records',{method:'POST',body:{family_group_id:Number(val('assigngroup')),records}});closeModal();toast('צוגעטיילט');refresh();},
   portionhelp: async ()=>{const scope=STATE.portionScope;await api(`/lists/${STATE.list.l.id}/items/${scope.idx}/help`,{method:'POST',body:{...scope,note:val('helpnote')}});closeModal();await go();toast('✓ דיין בקשה איז אין דער ליסט');},
   familyinvite: async () => {

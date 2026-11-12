@@ -96,3 +96,5 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
 @media(min-width:801px){.topbar{display:none}}
 
 .family-scroll{cursor:grab;user-select:none}.family-scroll.dragging,.family-scroll.dragging *{cursor:grabbing!important}.family-scroll .family-person{cursor:pointer}
+
+.family-switch{display:flex;align-items:center;gap:12px;padding:8px 16px;background:#fff;color:#1e1b4b;font-size:14px}.family-switch select{min-width:0;max-width:65%;margin:0}
