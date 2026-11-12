@@ -250,6 +250,7 @@ const defaults: Record<string, string> = Object.freeze({
   "directory.people.15": "לייג צו דיין משפחה",
   "directory.people.16": "אז די קאזינס זאלן האבן דיין אדרעס און טעלעפאן",
   "directory.people.17": "+ מיין משפחה",
+  "directory.people.18": "נישט פארבונדן צום בוים",
   "email_account.send_account_email.01": "באשטעטיג מיין אימעיל",
   "email_account.send_account_email.02": "שטעל איין א נייעם פאסווארט",
   "email_account.send_account_email.03": "באשטעטיג דיין אימעיל — אונזער משפחה",
