@@ -852,6 +852,9 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if(old[key] && !(await c.query(`SELECT 1 FROM people WHERE id=$1 AND ${personSql()}`,[old[key]])).rows.length && b[key]!==undefined && String(b[key]||'')!==String(old[key]))throw new HttpError(403,'די פארבינדונג דארף ווערן געענדערט דורך דעם הויפט אדמין');
     }
     b = {...(old || {}),...b};
+    if (b.require_yahrzeit === true && (b.life_status !== 'deceased' ||
+      !Number.isInteger(Number(b.death_hday)) || Number(b.death_hday) < 1 || Number(b.death_hday) > 30 ||
+      !(MONTH_CODES as readonly string[]).includes(b.death_hmonth))) throw bad('קלייב אויס דעם טאג און חודש פון פטירה');
     const name = str(b.name,120); if (!name) throw bad('שרייב א נאמען');
     const side = okSide(u,b.side);
     const context=familyContext.getStore()!;

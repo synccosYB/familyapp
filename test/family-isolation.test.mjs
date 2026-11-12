@@ -49,6 +49,14 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const ya=ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits[0],yb=ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits[0];
   const la=ok(await req('/lists',{kind:'tehillim',yahrzeit_id:ya.id},a.cookie)).list;
   const lb=ok(await req('/lists',{kind:'tehillim',yahrzeit_id:yb.id},b.cookie)).list;
+  const memberMemorial={name:'Member memorial',side:'a',life_status:'deceased',require_yahrzeit:true,death_hday:5};
+  assert.equal((await req('/people',memberMemorial,m.cookie)).status,400,'new yahrzeit needs a Hebrew day and month');
+  assert.ok(!ok(await req('/people',undefined,m.cookie)).people.some(p=>p.name===memberMemorial.name));
+  const memberPerson=ok(await req('/people',{...memberMemorial,death_hmonth:'ELUL'},m.cookie)).person;
+  const memberYahrzeit=ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits.find(y=>y.person_id===memberPerson.id);
+  assert.equal(memberYahrzeit.hmonth,'ELUL','the family owner can see the member’s new yahrzeit');
+  assert.ok(!ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits.some(y=>y.person_id===memberPerson.id));
+  assert.deepEqual(ok(await req('/lists',{kind:'mishnayos',yahrzeit_ids:[memberYahrzeit.id]},a.cookie)).list.yahrzeit_ids,[memberYahrzeit.id]);
   const da=ok(await req('/directory',{husband_person_id:pa.id,side:'both'},a.cookie)).family;
   const sb=ok(await req('/simchas',{kind:'Wedding',whose:'B private',gdate:'2099-01-01',audience:'all'},b.cookie)).simcha;
   assert.deepEqual(ok(await req('/simchas?id='+sb.id,undefined,m.cookie)).simchas,[]);
