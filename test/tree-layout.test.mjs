@@ -24,3 +24,9 @@ test('invalid legacy cycles cannot hang rendering',()=>{
   const {units}=familyUnits([{id:1,parent_id:2},{id:2,parent_id:1}]);
   assert.equal(units.length,2);assert.ok(units.every(u=>Number.isFinite(u.level)));
 });
+
+
+test('spouses follow the displayed parent branches even when created in the opposite order',()=>{
+  const {units}=familyUnits([{id:1},{id:2},{id:3},{id:4},{id:5,father_id:3,mother_id:4,spouse_id:6},{id:6,father_id:1,mother_id:2,spouse_id:5}]);
+  assert.deepEqual(units.find(u=>u.members.length===2).members.map(p=>p.id),[6,5]);
+});
