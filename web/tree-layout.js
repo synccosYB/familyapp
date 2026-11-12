@@ -74,3 +74,16 @@ export function fitTreeScale(width, height, availableWidth, availableHeight) {
   if (![width,height,availableWidth,availableHeight].every(n=>Number.isFinite(n) && n>0)) return 1;
   return Math.max(0.2,Math.min(1,availableWidth/width,availableHeight/height));
 }
+
+
+// Use the scroll viewport's actual inner size, not its scrollbar-inclusive box.
+// Quantize extents to pixels so floating-point values at a fit boundary cannot
+// alternately add/remove overflow and trigger another layout.
+export function treeViewportLayout(width, height, viewportWidth, viewportHeight, zoom = null) {
+  const scale = zoom == null
+    ? fitTreeScale(width,height,Math.max(1,viewportWidth-1),Math.max(1,viewportHeight-1))
+    : Math.max(0.2,Math.min(2,zoom));
+  const scaledWidth = Math.round(width*scale), scaledHeight = Math.round(height*scale);
+  return {scale,stageWidth:Math.max(viewportWidth,scaledWidth),stageHeight:Math.max(viewportHeight,scaledHeight),
+    right:Math.max(0,Math.floor((viewportWidth-scaledWidth)/2)),top:Math.max(0,Math.floor((viewportHeight-scaledHeight)/2))};
+}

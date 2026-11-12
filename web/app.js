@@ -1,5 +1,5 @@
 'use strict';
-import { familyUnits, fitTreeScale } from './tree-layout.js';
+import { familyUnits, treeViewportLayout } from './tree-layout.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -164,7 +164,7 @@ V.tree = async () => {
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
   const treeHtml=graphMode
     ? `<div class="tree-toolbar" aria-label="בוים פארגרעסערונג"><button class="btn s l" data-act="treezoom" data-v="fit">פאס צום עקראַן</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="פארקלענערן בוים">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="פארגרעסערן בוים">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">+ לייג צו אין בוים</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
-    : `<div class="family-list">${units.map(couple).join('')}</div>`;
+     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>נאמען</th><th>מאן / ווייב</th><th>טאטע</th><th>מאמע</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length===2?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="editp" data-id="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</button></td><td>${esc(p.spouse_name||p.spouse)||'—'}</td><td>${esc(p.father_name)||'—'}</td><td>${esc(p.mother_name)||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
   return `<h1>🌳 פעמילי טרי</h1><div class="cap">דריק אויף א נאמען צו עדיטן אדער צולייגן קינדער.</div>
   <div class="btns" style="margin-bottom:6px">${sides.length > 1 ? `<div class="seg">${sides.map((c) => `<button class="${s === c ? 'on' : ''}" data-act="treeside" data-v="${c}">${esc(sideLong(c))}</button>`).join('')}</div>` : `<b style="margin-bottom:14px">${esc(sideLong(s))}</b>`}
   <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">בוים</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">ליסט</button></div></div>
@@ -192,28 +192,40 @@ function drawFamilyLines() {
 }
 function updateFamilyViewport() {
   const map=$('family-map'),viewport=$('family-viewport'),stage=$('family-stage'); if(!map||!viewport||!stage) return;
-  const width=map.offsetWidth,height=map.offsetHeight;
-  const availableHeight=Math.max(220,window.innerHeight-viewport.getBoundingClientRect().top-(window.innerWidth<=800?88:24));
-  const scale=STATE.treeZoom ?? fitTreeScale(width,height,viewport.clientWidth,availableHeight);
-  STATE.treeScale=scale;
-  viewport.style.height=availableHeight+'px';
-  viewport.style.maxHeight=availableHeight+'px';
-  stage.style.width=Math.max(viewport.clientWidth,Math.ceil(width*scale))+'px';
-  stage.style.height=Math.max(availableHeight,Math.ceil(height*scale))+'px';
-  map.style.top=Math.max(0,(availableHeight-height*scale)/2)+'px';
-  map.style.right=Math.max(0,(viewport.clientWidth-width*scale)/2)+'px';
-  map.style.transform=`scale(${scale})`;
+  const oldScale=Number(map.dataset.scale),oldBounds=map.getBoundingClientRect(),oldViewport=viewport.getBoundingClientRect();
+  const anchor=oldScale?{x:(oldViewport.left+viewport.clientLeft+viewport.clientWidth/2-oldBounds.left)/oldScale,
+    y:(oldViewport.top+viewport.clientTop+viewport.clientHeight/2-oldBounds.top)/oldScale}:null;
+  // Document position is stable when page scroll anchoring changes during zoom.
+  const documentTop=viewport.getBoundingClientRect().top+window.scrollY;
+  const outerHeight=Math.max(220,Math.floor(window.innerHeight-documentTop-(window.innerWidth<=800?104:40)));
+  viewport.style.height=outerHeight+'px';viewport.style.maxHeight=outerHeight+'px';
+  const layout=treeViewportLayout(map.offsetWidth,map.offsetHeight,viewport.clientWidth,viewport.clientHeight,STATE.treeZoom);
+  const {scale}=layout;STATE.treeScale=scale;
+  stage.style.width=layout.stageWidth+'px';stage.style.height=layout.stageHeight+'px';
+  map.style.top=layout.top+'px';map.style.right=layout.right+'px';map.style.transform=`scale(${scale})`;map.dataset.scale=String(scale);
+  if(STATE.treeZoom==null) {viewport.scrollLeft=0;viewport.scrollTop=0;}
+  else if(anchor) {
+    const next=map.getBoundingClientRect(),bounds=viewport.getBoundingClientRect();
+    viewport.scrollLeft+=next.left+anchor.x*scale-(bounds.left+viewport.clientLeft+viewport.clientWidth/2);
+    viewport.scrollTop+=next.top+anchor.y*scale-(bounds.top+viewport.clientTop+viewport.clientHeight/2);
+  }
   if($('tree-scale')) $('tree-scale').textContent=Math.round(scale*100)+'%';
   drawFamilyLines();
 }
+let treeLayoutFrame=0;
+function scheduleFamilyViewport() {
+  if(treeLayoutFrame) return;
+  treeLayoutFrame=requestAnimationFrame(()=>{treeLayoutFrame=0;updateFamilyViewport();});
+}
 function observeFamilyTree() {
   treeObserver?.disconnect();
-  const map=$('family-map'),viewport=$('family-viewport'); if(!map||!viewport) return;
-  if(typeof ResizeObserver!=='undefined') {treeObserver=new ResizeObserver(updateFamilyViewport);treeObserver.observe(map);treeObserver.observe(viewport);}
-  requestAnimationFrame(updateFamilyViewport);
-  document.fonts?.ready.then(updateFamilyViewport);
+  const map=$('family-map'); if(!map) return;
+  // Never observe the scroll viewport: scrollbar changes are an output of zoom.
+  // Observing them fed that output back into the next fit calculation.
+  if(typeof ResizeObserver!=='undefined') {treeObserver=new ResizeObserver(scheduleFamilyViewport);treeObserver.observe(map);treeObserver.observe($('m'));}
+  scheduleFamilyViewport();document.fonts?.ready.then(scheduleFamilyViewport);
 }
-window.addEventListener('resize',updateFamilyViewport);
+window.addEventListener('resize',scheduleFamilyViewport);
 async function personForm(id, parentId) {
   const {people:P}=await api('/people'); STATE.people=P;
   const p = P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null};
