@@ -87,6 +87,17 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/people',undefined,a.cookie)).status,401);
   const again=await request('/auth/login',{phone:'8455550101',password:'build-member-password'});assert.equal(again.status,200);
   assert.equal((await request('/people',undefined,again.cookie)).body.people.length,2);
+  // Add relatives directly from the parent/spouse dropdown without leaving the form.
+  const inline=await request('/people',{name:'Inline child',side:'a',new_relatives:{father_id:{name:'Inline father',title:'Rabbi'},mother_id:{name:'Inline mother'},spouse_id:{name:'Inline spouse'}}},admin.cookie);
+  assert.equal(inline.status,200,JSON.stringify(inline.body));
+  const inlineRows=(await request('/people',undefined,admin.cookie)).body.people;
+  for(const key of ['father_id','mother_id','spouse_id'])assert.ok(inlineRows.some(p=>p.id===inline.body.person[key]));
+  assert.equal(inlineRows.find(p=>p.id===inline.body.person.spouse_id).spouse_id,inline.body.person.id);
+  assert.equal(inlineRows.find(p=>p.id===inline.body.person.father_id).life_status,'unknown');
+  const beforeInlineFailure=inlineRows.length;
+  assert.equal((await request('/people',{name:'Invalid inline child',side:'a',new_relatives:{father_id:{name:'Must roll back'},mother_id:{name:''}}},admin.cookie)).status,400);
+  assert.equal((await request('/people',undefined,admin.cookie)).body.people.length,beforeInlineFailure,'failed save must not create an orphan relative');
+  assert.equal((await request('/people',undefined,b.cookie)).body.people.length,0,'inline relatives follow the same side visibility');
   // Structured relationships are shared by tree, household directory and yahrzeits.
   const createPerson=async body=>{const r=await request('/people',{side:'a',...body},admin.cookie);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.person;};
   const father=await createPerson({name:'Structured father',title:'Rabbi',life_status:'deceased',death_hday:12,death_hmonth:'KISLEV'});

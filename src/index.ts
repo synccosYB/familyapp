@@ -462,6 +462,17 @@ async function savePerson(u: User, b: any, id?: number) {
     b = {...(old || {}),...b};
     const name = str(b.name,120); if (!name) throw bad('שרייב א נאמען');
     const side = okSide(u,b.side);
+    // Inline relatives and their links commit together, so a failed form leaves no orphan people.
+    for (const key of ['father_id','mother_id','spouse_id']) {
+      const draft = b.new_relatives?.[key];
+      if (!draft) continue;
+      if (b[key]) throw bad('קלייב אן עקזיסטירנדיקן מענטש אדער לייג צו א נייעם');
+      const relativeName = str(draft.name,120);
+      if (!relativeName) throw bad('שרייב דעם נאמען פונעם נייעם מענטש');
+      const relative = (await c.query(`INSERT INTO people(name,title,side,life_status,lineage_term,created_by)
+        VALUES($1,$2,$3,'unknown',$4,$5) RETURNING id`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id])).rows[0];
+      b[key] = relative.id;
+    }
     const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id);
     const legacyParent = b.parent_id !== undefined ? personId(b.parent_id) : old?.parent_id || null;
     if ((father && father===mother) || (spouse && [father,mother,legacyParent].includes(spouse)) || [father,mother,spouse,legacyParent].some(v=>v && v===id)) throw bad('די משפחה לינקס זענען נישט ריכטיג');

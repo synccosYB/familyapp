@@ -241,7 +241,7 @@ window.addEventListener('resize',scheduleFamilyViewport);
 async function personForm(id, parentId) {
   const {people:P}=await api('/people'); STATE.people=P;
   const p = P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null};
-  const choice=(key,label)=>field(label,`<select id="p${key}"><option value="">— נישט באקאנט / קיין לינק —</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`);
+  const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">— נישט באקאנט / קיין לינק —</option><option value="new">+ לייג צו א נייעם מענטש</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">ווערט צוגעלייגט און פארבונדן ווען דו סעיווסט.</p>${field('טיטל', `<input id="new_${key}_title" dir="auto">`)}${field('נאמען', `<input id="new_${key}_name" dir="auto">`)}</div>`);
   modal(`<h2 style="margin-top:0">${id ? '✏️ ' + esc(p.name) : '+ מענטש אין פעמילי טרי'}</h2><form data-form="person" data-id="${id}">
   <div class="grid g2"><div>${field('טיטל',`<input id="ptitle" value="${esc(p.title)}" placeholder="הרב / מרת">`)}</div><div>${field('נאמען',`<input id="pn" value="${esc(p.name)}">`)}</div></div>
   ${choice('father_id','טאטע')}${choice('mother_id','מאמע')}${choice('spouse_id','מאן / ווייב')}
@@ -556,6 +556,7 @@ const ACT = {
   copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast('✓ קאפירט'); },
 };
 const CHANGE = {
+  newrelative: el => { $('new_' + el.dataset.key).hidden = el.value !== 'new'; },
   upinv: async (el) => { const f = el.files[0]; if (!f) return; if (f.size > 10 * 1024 * 1024) return toast('⚠️ די פייל איז צו גרויס (מאקסימום 10 MB)'); toast('⬆ אפלאודינג…');
     const fd = new FormData(); fd.append('file', f); await api(`/simchas/${el.dataset.id}/invite`, { method: 'POST', body: fd }); toast('✓ אינוויטעישן אפלאודעד'); refresh(); },
   usides: async (el) => { const u = STATE.users.find((x) => x.id === Number(el.dataset.id)); const s = new Set(u.sides); el.checked ? s.add(el.dataset.v) : s.delete(el.dataset.v);
@@ -576,6 +577,10 @@ const FORMS = {
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
   person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno')};
+    b.new_relatives = {};
+    for (const key of ['father_id','mother_id','spouse_id']) if (b[key] === 'new') {
+      b.new_relatives[key] = { name: val('new_' + key + '_name'), title: val('new_' + key + '_title') }; b[key] = null;
+    }
     await api(id ? '/people/' + id : '/people', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ ' + b.name + ' געסעיווט'); refresh(); },
   list: async () => { const r = await api('/lists', { method: 'POST', body: { kind: val('lk'), yahrzeit_id: val('lyz') || null, niftar: val('ln'), target_date: val('ld'), side: val('ls') } }); closeModal(); toast('✓ ליסט געמאכט'); location.hash = '#learn/' + r.list.id; },
   sim: async (f) => { const id = Number(f.dataset.id); const kind = val('sk') === 'אנדערע' ? (val('sko') || 'שמחה') : val('sk');
