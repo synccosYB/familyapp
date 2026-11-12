@@ -5,7 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import fstatic from '@fastify/static';
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash, verify } from '@node-rs/argon2';
@@ -770,9 +770,8 @@ app.post('/api/simchas/:id/invite', async (req) => {
   const mime = sniff(buf);
   if (!mime) throw bad('נאר א בילד (JPG/PNG) אדער PDF');
   const id = tok(18);
-  writeFileSync(path.join(UPLOADS, id), buf, { mode: 0o600 });
   const filename = (part.filename || 'invitation').replace(/[\\/\r\n"]/g, '_').slice(0, 120);
-  await q('INSERT INTO files(id,filename,mime,size,uploaded_by) VALUES($1,$2,$3,$4,$5)', [id, filename, mime, buf.length, u.id]);
+  await q('INSERT INTO files(id,filename,mime,size,uploaded_by,content) VALUES($1,$2,$3,$4,$5,$6)', [id, filename, mime, buf.length, u.id,buf]);
   await q('UPDATE simchas SET file_id=$1 WHERE id=$2', [id, s.id]);
   if (s.file_id) await removeFile(s.file_id);
   return { file: { id, filename, mime, size: buf.length } };
@@ -794,15 +793,15 @@ app.get('/api/files/:id', async (req, reply) => {
     const sim=await q1('SELECT audience FROM simchas WHERE file_id=$1',[id]);
     if(!sim||!canSee(u,sim.audience))throw new HttpError(404,'נישט געטראפן');
   }
-  const p = path.join(UPLOADS, f.id); if (!existsSync(p)) throw new HttpError(404, 'נישט געטראפן');
+  const p = path.join(UPLOADS, f.id); if (!f.content && !existsSync(p)) throw new HttpError(404, 'נישט געטראפן');
   const dl = (req.query as any).dl === '1' || f.mime === 'application/octet-stream';
-  reply.header('Content-Type', f.mime).header('Content-Length', statSync(p).size)
+  reply.header('Content-Type', f.mime).header('Content-Length', f.content ? f.content.length : statSync(p).size)
     .header('Content-Disposition', `${dl ? 'attachment' : 'inline'}; filename="invitation${extOf(f.mime)}"; filename*=UTF-8''${encodeURIComponent(f.filename)}`)
     .header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
   // images get a locked-down CSP; PDFs get none so the browser's own PDF viewer can open them (a sandbox CSP blocks it)
   if (f.mime !== 'application/pdf') reply.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
   else reply.removeHeader('Content-Security-Policy');
-  return reply.send(createReadStream(p));
+  return reply.send(f.content || createReadStream(p));
 });
 const extOf = (m: string) => ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'application/pdf': '.pdf', 'image/heic': '.heic' } as any)[m] || '';
 
@@ -919,9 +918,7 @@ app.post('/api/chat/:room/attachment',async req=>{
   const part=await req.file();if(!part)throw bad('קלייב אויס א פייל');
   const buf=await part.toBuffer();if(!buf.length)throw bad('די פייל איז ליידיג');
   const mime=sniff(buf)||'application/octet-stream',id=tok(18),filename=(part.filename||'attachment').replace(/[\\/\r\n"]/g,'_').slice(0,120);
-  writeFileSync(path.join(UPLOADS,id),buf,{mode:0o600});
-  try {await q('INSERT INTO files(id,filename,mime,size,uploaded_by,chat_room) VALUES($1,$2,$3,$4,$5,$6)',[id,filename,mime,buf.length,u.id,room]);}
-  catch(e){unlinkSync(path.join(UPLOADS,id));throw e;}
+  await q('INSERT INTO files(id,filename,mime,size,uploaded_by,chat_room,content) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,filename,mime,buf.length,u.id,room,buf]);
   return {file:{id,filename,mime,size:buf.length}};
 });
 app.post('/api/chat/:room',{config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{
