@@ -832,9 +832,10 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     if(father) await c.query("UPDATE people SET lineage_term='בן' WHERE id=$1 AND lineage_term=''",[father]);
     if(mother) await c.query("UPDATE people SET lineage_term='בת' WHERE id=$1 AND lineage_term=''",[mother]);
     // A complete known date makes one shared yahrzeit; unknown dates remain unknown.
+    // Inherit the canonical person's owner, not the editor's currently selected family.
     if (status==='deceased' && day && month) {
-      await c.query(`INSERT INTO yahrzeits(name,side,hday,hmonth,death_year,person_id,created_by,kever)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(person_id) DO UPDATE SET name=excluded.name,side=excluded.side,hday=excluded.hday,hmonth=excluded.hmonth,death_year=excluded.death_year,kever=excluded.kever`,[[row.title,row.name].filter(Boolean).join(' '),side,day,month,year,row.id,u.id,row.kever]);
+      await c.query(`INSERT INTO yahrzeits(name,side,hday,hmonth,death_year,person_id,created_by,kever,family_group_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(person_id) DO UPDATE SET name=excluded.name,side=excluded.side,hday=excluded.hday,hmonth=excluded.hmonth,death_year=excluded.death_year,kever=excluded.kever`,[[row.title,row.name].filter(Boolean).join(' '),side,day,month,year,row.id,u.id,row.kever,row.family_group_id]);
     } else await c.query('DELETE FROM yahrzeits WHERE person_id=$1',[row.id]);
     if(legacy) {
       const canonical=(await c.query('SELECT id FROM yahrzeits WHERE person_id=$1',[row.id])).rows[0];

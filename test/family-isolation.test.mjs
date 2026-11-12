@@ -76,6 +76,25 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   // Global admin can select either family without broadening ordinary membership.
   assert.equal(ok(await req('/people',undefined,root.cookie,'GET',gb)).people[0].id,pb.id);
   ok(await req('/people/'+pb.id,{note:'Global correction'},root.cookie,'PUT',gb));
+  // A canonical memorial belongs to its person, even when an admin has another family selected.
+  await db.query(`UPDATE ${schema}.users SET family_group_ids=ARRAY[family_group_id,$1,$2] WHERE id=$3`,[ga,gb,root.body.user.id]);
+  const memorialFather=ok(await req('/people',{name:'Memorial father',side:'both'},root.cookie,'POST',ga)).person;
+  const memorialMother=ok(await req('/people',{name:'Memorial mother',side:'both'},root.cookie,'POST',ga)).person;
+  const memorialSpouse=ok(await req('/people',{name:'Memorial spouse',side:'both'},root.cookie,'POST',ga)).person;
+  const memorialPerson=ok(await req('/people',{name:'Memorial person',side:'both',life_status:'deceased',father_id:memorialFather.id,mother_id:memorialMother.id,spouse_id:memorialSpouse.id},root.cookie,'POST',ga)).person;
+  const memorialChild=ok(await req('/people',{name:'Memorial child',side:'both',father_id:memorialPerson.id},root.cookie,'POST',ga)).person;
+  ok(await req('/people/'+memorialPerson.id,{note:'Save without a date'},root.cookie,'PUT',gb));
+  const dated=ok(await req('/people/'+memorialPerson.id,{death_hday:5,death_hmonth:'ELUL'},root.cookie,'PUT',gb)).person;
+  assert.equal(dated.death_hday,5);assert.equal(dated.death_hmonth,'ELUL');
+  assert.equal(dated.father_id,memorialFather.id);assert.equal(dated.mother_id,memorialMother.id);assert.equal(dated.spouse_id,memorialSpouse.id);
+  assert.equal(ok(await req('/people',undefined,a.cookie)).people.find(p=>p.id===memorialChild.id).father_id,memorialPerson.id);
+  const memorial=ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits.find(y=>y.person_id===memorialPerson.id);
+  assert.equal(memorial.family_group_id,ga);assert.equal(memorial.hday,5);assert.equal(memorial.hmonth,'ELUL');
+  assert.ok(!ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits.some(y=>y.person_id===memorialPerson.id));
+  ok(await req('/people/'+memorialPerson.id,{death_hday:6},root.cookie,'PUT',gb));
+  assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.yahrzeits WHERE person_id=$1`,[memorialPerson.id])).rows[0].n,1);
+  // Unrelated groups still cannot manufacture cross-family memorial links directly.
+  await assert.rejects(db.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,person_id,family_group_id) VALUES('Invalid memorial','both',1,'ELUL',$1,$2)`,[memorialFather.id,gb]),/foreign key/);
   // Legacy records remain hidden; explicit assignment is atomic and checked for cross-family edges.
   const legacy=(await db.query(`INSERT INTO ${schema}.people(name,side) VALUES('Legacy hidden','a') RETURNING id`)).rows[0];
   assert.ok(!JSON.stringify(ok(await req('/people',undefined,a.cookie))).includes('Legacy hidden'));
