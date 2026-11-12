@@ -32,7 +32,7 @@ if (phone && A.name) {
     ? await q1('SELECT * FROM users WHERE id=$1', [owner.bootstrap_admin_id])
     : await q1('SELECT * FROM users WHERE phone=$1', [phone]);
   if (!u) {
-    u = await q1(`INSERT INTO users(name,phone,email,sides,status,is_admin,approved_at) VALUES($1,$2,$3,'{a,b}','active',true,now()) RETURNING *`, [A.name, phone, A.email || null]);
+    u = await q1(`INSERT INTO users(name,phone,email,sides,status,is_admin,approved_at,family_group_id) VALUES($1,$2,$3,'{a,b}','active',true,now(),(SELECT id FROM family_groups WHERE is_quarantine)) RETURNING *`, [A.name, phone, A.email || null]);
     log(`admin user created (${A.name})`);
   } else if (!u.is_admin || u.status !== 'active') { await q(`UPDATE users SET is_admin=true,status='active' WHERE id=$1`, [u.id]); }
   await q('UPDATE settings SET bootstrap_admin_id=$1 WHERE id=1 AND bootstrap_admin_id IS NULL', [u.id]);
@@ -45,7 +45,7 @@ if (phone && A.name) {
 if (config.qaPhonePrefix && normPhoneB(process.env.QA_ADMIN_PHONE) && process.env.QA_ADMIN_PASSWORD) {
   const p = normPhoneB(process.env.QA_ADMIN_PHONE);
   const h = await hash(process.env.QA_ADMIN_PASSWORD, { memoryCost: 19456, timeCost: 2, parallelism: 1 });
-  await q(`INSERT INTO users(name,phone,sides,status,is_admin,is_qa,password_hash,approved_at) VALUES('QA טעסט אדמין',$1,'{a,b}','active',true,true,$2,now())
+  await q(`INSERT INTO users(name,phone,sides,status,is_admin,is_qa,password_hash,approved_at,family_group_id) VALUES('QA טעסט אדמין',$1,'{a,b}','active',true,true,$2,now(),(SELECT id FROM family_groups WHERE is_quarantine))
     ON CONFLICT (phone) DO UPDATE SET password_hash=$2, is_admin=true, status='active', is_qa=true`, [p, h]);
   log('QA mode on');
 } else {

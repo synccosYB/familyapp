@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash, verify } from '@node-rs/argon2';
 import { config } from './config.js';
+import { familyContext, familySql } from './family-scope.js';
 import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
 import { startJobs } from './jobs.js';
@@ -39,7 +40,7 @@ const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0
 const pwProblem = (pw: unknown) => (typeof pw !== 'string' || pw.length < 6 ? 'דאס פאסווארט דארף האבן כאטש 6 אותיות' : pw.length > 200 ? 'צו לאנג' : null);
 const SIDE3 = ['a', 'b', 'both'];
 
-interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; sides: string[]; status: string; is_admin: boolean }
+interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; sides: string[]; family_group_id: number | null; status: string; is_admin: boolean; is_family_admin: boolean }
 declare module 'fastify' { interface FastifyRequest { user?: User } }
 
 const app = Fastify({ logger: { level: config.logLevel }, trustProxy: config.trustProxy, bodyLimit: 200_000 });
@@ -62,6 +63,8 @@ await app.register(fstatic, { root: WEB, prefix: '/', index: ['index.html'], max
 app.setErrorHandler((err: any, req, reply) => {
   if (err instanceof HttpError) return reply.code(err.status).send({ error: err.yi });
   if (err.statusCode === 429) return reply.code(429).send({ error: 'צו פיל פרואוון, ווארט א מינוט' });
+  if (err.code === '23503') return reply.code(400).send({error:'פארבונדענע רעקארדס מוזן זיין אין דער זעלבער משפחה. קלייב זיי אויס אינאיינעם.'});
+  if (err.code === '23505') return reply.code(409).send({error:'דער רעקארד עקזיסטירט שוין'});
   if (err.code === 'FST_REQ_FILE_TOO_LARGE') return reply.code(413).send({ error: `די פייל איז צו גרויס (מאקסימום ${config.uploadMaxMb} MB)` });
   if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: 'פעלער: ' + err.message });
   req.log.error(err);
@@ -69,7 +72,9 @@ app.setErrorHandler((err: any, req, reply) => {
 });
 
 // CSRF: state-changing API calls must carry our header (a cross-site form cannot set it); cookie is SameSite=Lax too.
-app.addHook('onRequest', async (req) => {
+app.addHook('onRequest', (_req, _reply, done) => familyContext.run({}, done));
+app.addHook('onRequest', async (req,reply) => {
+  if(req.url.startsWith('/api/'))reply.header('Cache-Control','private, no-store');
   if (req.url.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers['x-familye'] !== '1')
     throw new HttpError(403, 'פארבאטן');
 });
@@ -77,7 +82,7 @@ app.addHook('onRequest', async (req) => {
 async function loadUser(req: FastifyRequest): Promise<User | null> {
   const t = req.cookies[COOKIE];
   if (!t) return null;
-  const u = await q1<User>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.sides,u.status,u.is_admin FROM sessions s JOIN users u ON u.id=s.user_id
+  const u = await q1<User>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.family_group_id,u.sides,u.status,u.is_admin,u.is_family_admin FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token_hash=$1 AND s.expires_at>now()`, [sha(t)]);
   return u || null;
 }
@@ -89,12 +94,13 @@ async function member(req: FastifyRequest): Promise<User> {
   q('UPDATE users SET last_seen_at=now() WHERE id=$1 AND (last_seen_at IS NULL OR last_seen_at<now()-interval \'5 min\')', [u.id]).catch(() => {});
   return u;
 }
-async function admin(req: FastifyRequest) { const u = await member(req); if (!u.is_admin) throw new HttpError(403, 'נאר פאר אדמין'); return u; }
-const seesAll = (u: User) => u.is_admin || (u.sides.includes('a') && u.sides.includes('b'));
-const mySides = (u: User) => (u.is_admin ? ['a', 'b'] : u.sides);
+async function admin(req: FastifyRequest) { const u = await member(req); if (!managesFamily(u)) throw new HttpError(403, 'נאר פאר אדמין'); return u; }
+const managesFamily = (u: User) => u.is_admin || u.is_family_admin;
+const seesAll = (u: User) => managesFamily(u) || (u.sides.includes('a') && u.sides.includes('b'));
+const mySides = (u: User) => (managesFamily(u) ? ['a', 'b'] : u.sides);
 const canSee = (u: User, side: string) => side === 'both' || side === 'all' || mySides(u).includes(side);
 // SQL fragment: rows whose side is visible to u (param index n holds mySides)
-const sideSql = (col: string, n: number) => `(${col} IN ('both','all') OR ${col} = ANY($${n}::text[]))`;
+const sideSql = (col: string, n: number) => `(${familySql(col.includes('.') ? col.split('.')[0] : '')} AND (${col} IN ('both','all') OR ${col} = ANY($${n}::text[])))`;
 function okSide(u: User, side: unknown, allowed = SIDE3): string {
   const s = String(side || '');
   if (!allowed.includes(s)) throw bad('קלייב אויס א סייד');
@@ -104,12 +110,55 @@ function okSide(u: User, side: unknown, allowed = SIDE3): string {
   return s;
 }
 
+// Account/auth and global administration remain available to unassigned members/admins.
+// Everything else under /api is family content, including future routes by default.
+app.addHook('preHandler', async req => {
+  const route = req.routeOptions.url || '';
+  if (route.startsWith('/api/admin/')) {
+    const manager=await admin(req);
+    if(!manager.is_admin) {
+      if(!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[manager.family_group_id])) throw new HttpError(403,'משפחה נישט צוגעטיילט');
+      const groupEdit=req.method==='PATCH'&&route==='/api/admin/family-groups/:id';
+      if(groupEdit&&Number((req.params as any).id)!==manager.family_group_id)throw new HttpError(404,'נישט געטראפן');
+      const permitted=groupEdit||(req.method==='GET' && ['/api/admin/users','/api/admin/family-groups'].includes(route)) ||
+        (req.method==='PATCH' && route==='/api/admin/users/:id') ||
+        (req.method==='POST' && route==='/api/admin/users/:id/reset-link');
+      if(!permitted) throw new HttpError(403,'נאר פאר דעם הויפט אדמין');
+      const target=(req.params as any)?.id;
+      if(target && !groupEdit && !await q1('SELECT 1 FROM users WHERE id=$1 AND family_group_id=$2 AND NOT is_admin',[target,manager.family_group_id])) throw new HttpError(404,'נישט געטראפן');
+    }
+    return;
+  }
+  if (!route.startsWith('/api/') || /^\/api\/(auth(?:\/|$)|admin(?:\/|$)|me(?:\/|$)|settings$|health$)/.test(route)
+      || (req.method==='GET' && route==='/api/family-invitations/:token')) return;
+  const u = await member(req);
+  const requested = req.headers['x-family-group'] || (u.is_admin ? req.cookies.fam_group : undefined);
+  const group = u.is_admin ? Number(requested || u.family_group_id) : u.family_group_id;
+  if (!group || !Number.isSafeInteger(group) || (!u.is_admin && requested && Number(requested)!==group))
+    throw new HttpError(403,'מען דארף דיר צוטיילן צו א משפחה. רעד מיט דעם אדמין.');
+  if (!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group])) throw new HttpError(403,'משפחה נישט געטראפן');
+  familyContext.getStore()!.id = group;
+  const check = async (table: string, id: unknown) => {
+    if (id===null || id===undefined || id==='') return;
+    const row=await q1(`SELECT 1 FROM ${table} WHERE id::text=$1 AND ${familySql()}`,[String(id)]);
+    if (!row) throw new HttpError(404,'נישט געטראפן');
+  };
+  const params=req.params as any;
+  const table=route.startsWith('/api/chat/message/')?'messages':({people:'people',yahrzeits:'yahrzeits',lists:'learn_lists',simchas:'simchas',directory:'directory',files:'files'} as Record<string,string>)[route.split('/')[2]];
+  if(table && params?.id) await check(table,params.id);
+  const b:any=req.body || {};
+  for(const key of ['father_id','mother_id','spouse_id','parent_id','person_id','husband_person_id','wife_person_id']) await check('people',b[key]);
+  for(const key of ['yahrzeit_id','legacy_yahrzeit_id']) await check('yahrzeits',b[key]);
+  await check('files',b.file_id); await check('messages',b.reply_to);
+  if(Array.isArray(b.family_ids)) for(const id of b.family_ids) await check('families',id);
+});
+
 async function newSession(reply: FastifyReply, userId: number) {
   const t = tok();
   await q(`INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3||' days')::interval)`, [sha(t), userId, String(config.sessionDays)]);
   reply.setCookie(COOKIE, t, { path: '/', httpOnly: true, sameSite: 'lax', secure: config.cookieSecure, maxAge: config.sessionDays * 86400 });
 }
-const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, sides: u.sides, status: u.status, is_admin: u.is_admin });
+const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, sides: u.sides, family_group_id: u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin });
 
 // ---------------- settings ----------------
 const getSettings = () => q1('SELECT family_yi,family_en,side_a_yi,side_a_en,side_a_family_yi,side_a_family_en,side_b_yi,side_b_en,side_b_family_yi,side_b_family_en FROM settings WHERE id=1');
@@ -121,9 +170,9 @@ app.get('/api/health', async () => { await q('SELECT 1'); return { ok: true, boo
 const authLimit = { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } };
 async function findInvitation(token: unknown) {
   if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(token)) throw bad('דער אינוויטעישן לינק איז נישט גוט');
-  const invitation = await q1(`SELECT i.sides,i.created_by FROM family_invitations i JOIN users u ON u.id=i.created_by
+  const invitation = await q1(`SELECT i.sides,i.created_by,i.family_group_id FROM family_invitations i JOIN users u ON u.id=i.created_by
     WHERE i.token_hash=$1 AND i.expires_at>now() AND u.status='active'
-    AND (u.is_admin OR i.sides <@ u.sides)`, [sha(token)]);
+    AND EXISTS(SELECT 1 FROM family_groups g WHERE g.id=i.family_group_id AND NOT g.is_quarantine) AND (u.is_admin OR ((u.is_family_admin OR i.sides <@ u.sides) AND i.family_group_id=u.family_group_id))`, [sha(token)]);
   if (!invitation) throw new HttpError(404, 'דער אינוויטעישן לינק איז אויסגעלאפן. בעט א נייעם לינק.');
   return invitation;
 }
@@ -138,7 +187,7 @@ app.post('/api/family-invitations', { config: { rateLimit: { max: 20, timeWindow
 });
 app.get('/api/family-invitations/:token', authLimit, async req => {
   const invitation = await findInvitation((req.params as any).token);
-  return { sides: invitation.sides };
+  return { sides: invitation.sides, family_name:(await q1('SELECT name FROM family_groups WHERE id=$1',[invitation.family_group_id]))?.name };
 });
 app.post('/api/auth/forgot-password', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
   const phone = normPhone((req.body as any)?.phone);
@@ -170,20 +219,29 @@ app.post('/api/auth/forgot-password', { config: { rateLimit: { max: 5, timeWindo
   return { ok: true };
 });
 app.post('/api/auth/signup', authLimit, async (req, reply) => {
-  const b: any = req.body || {};
-  const name = str(b.name, 80), phone = normPhone(b.phone), email = str(b.email, 120) || null;
-  const invitation = b.invitation_token ? await findInvitation(b.invitation_token) : null;
-  const sides = invitation ? invitation.sides : Array.isArray(b.sides) ? [...new Set(b.sides.filter((s: any) => s === 'a' || s === 'b'))] as string[] : [];
-  if (!name) throw bad('שרייב דיין נאמען');
-  if (!phone) throw bad('שרייב א ריכטיגן טעלעפאן נומער');
-  if (!sides.length) throw bad('קלייב אויס פון וועלכע סייד דו ביסט');
-  const p = pwProblem(b.password); if (p) throw bad(p);
-  if (await q1('SELECT 1 FROM users WHERE phone=$1', [phone])) throw new HttpError(409, 'דער טעלעפאן נומער איז שוין רעדזשיסטרירט. לאג אין.');
-  const isQa = !!config.qaPhonePrefix && phone.startsWith(config.qaPhonePrefix);
-  const u = await q1(`INSERT INTO users(name,phone,email,password_hash,sides,is_qa,note,invited_by,status,approved_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $9='active' THEN now() ELSE NULL END) RETURNING *`,
-    [name, phone, email, await hashPw(b.password), sides, isQa, str(b.note, 300), invitation?.created_by || null, invitation ? 'active' : 'pending']);
-  await newSession(reply, u.id);
-  return { user: publicUser(u) };
+  const b:any=req.body||{}, name=str(b.name,80),phone=normPhone(b.phone),email=str(b.email,120)||null;
+  if(!name)throw bad('שרייב דיין נאמען'); if(!phone)throw bad('שרייב א ריכטיגן טעלעפאן נומער');
+  const problem=pwProblem(b.password);if(problem)throw bad(problem);
+  const invitation=b.invitation_token?await findInvitation(b.invitation_token):null;
+  const newFamily=invitation?'':str(b.create_family,120);
+  if(!invitation&&!newFamily)throw new HttpError(403,'נוץ א משפחה אינוויטעישן אדער מאך דיין אייגענע משפחה');
+  const password=await hashPw(b.password);
+  const u=await tx(async c=>{
+    // Revalidate an invite inside the account creation transaction and lock its inviter.
+    let group=invitation?.family_group_id, sides=invitation?.sides;
+    if(invitation) {
+      const creator=(await c.query('SELECT * FROM users WHERE id=$1 FOR SHARE',[invitation.created_by])).rows[0];
+      const valid=(await c.query('SELECT 1 FROM family_invitations WHERE token_hash=$1 AND expires_at>now()',[sha(b.invitation_token)])).rows.length;
+      if(!valid||creator?.status!=='active'||(!creator.is_admin&&(creator.family_group_id!==group||sides.some((side:string)=>!creator.sides.includes(side)&&!creator.is_family_admin))))throw new HttpError(403,'דער אינוויטעישן איז שוין נישט גוט');
+    } else {
+      group=(await c.query('INSERT INTO family_groups(name) VALUES($1) RETURNING id',[newFamily])).rows[0].id;
+      sides=['a','b'];
+    }
+    return (await c.query(`INSERT INTO users(name,phone,email,password_hash,sides,is_qa,note,invited_by,status,approved_at,family_group_id,is_family_admin)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,'active',now(),$9,$10) RETURNING *`,
+      [name,phone,email,password,sides,!!config.qaPhonePrefix&&phone.startsWith(config.qaPhonePrefix),str(b.note,300),invitation?.created_by||null,group,!invitation])).rows[0];
+  });
+  await newSession(reply,u.id);return {user:publicUser(u)};
 });
 app.post('/api/auth/login', authLimit, async (req, reply) => {
   const b: any = req.body || {};
@@ -191,6 +249,7 @@ app.post('/api/auth/login', authLimit, async (req, reply) => {
   const u = phone ? await q1('SELECT * FROM users WHERE phone=$1', [phone]) : null;
   const ok = u?.password_hash ? await verify(u.password_hash, String(b.password || '')).catch(() => false) : false;
   if (!u || !ok) throw new HttpError(401, 'טעלעפאן אדער פאסווארט איז נישט ריכטיג');
+  if (!u.is_admin && !(await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[u.family_group_id]))) throw new HttpError(403,'דיין אקאונט דארף א משפחה צוטיילונג פונעם אדמין');
   if (u.status === 'rejected') throw new HttpError(403, 'דער אקאונט איז נישט אפרובירט געווארן');
   await newSession(reply, u.id);
   return { user: publicUser(u) };
@@ -198,12 +257,14 @@ app.post('/api/auth/login', authLimit, async (req, reply) => {
 app.post('/api/auth/logout', async (req, reply) => {
   const t = req.cookies[COOKIE];
   if (t) await q('DELETE FROM sessions WHERE token_hash=$1', [sha(t)]);
-  reply.clearCookie(COOKIE, { path: '/' });
+  reply.clearCookie(COOKIE, { path: '/' }); reply.clearCookie('fam_group',{path:'/'});
   return { ok: true };
 });
 app.get('/api/me', async (req) => {
   const u = await loadUser(req);
-  return { user: u ? publicUser(u) : null, settings: await getSettings(), email_enabled: emailReady() };
+  const groupId=u?.is_admin?Number(req.cookies.fam_group||u.family_group_id):u?.family_group_id;
+  const group=groupId?await q1('SELECT id,name FROM family_groups WHERE id=$1 AND NOT is_quarantine',[groupId]):null;
+  return { user: u ? {...publicUser(u),family_name:group?.name || null,selected_family_group_id:group?.id || null} : null, settings: {...await getSettings(),...(group?{family_yi:group.name,side_a_family_yi:'',side_b_family_yi:''}:{})}, email_enabled: emailReady() };
 });
 app.get('/api/auth/token/:t', authLimit, async (req) => {
   const r = await q1(`SELECT u.name FROM password_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND p.used_at IS NULL AND p.expires_at>now()`, [sha((req.params as any).t)]);
@@ -331,16 +392,20 @@ async function ownerId() {
 
 // ---------------- admin ----------------
 app.get('/api/admin/users', async (req) => {
-  await admin(req);
+  const manager=await admin(req);
   const owner = await q1('SELECT phone FROM users WHERE id=$1', [await ownerId()]);
-  return { owner_phone: owner?.phone || '', users: await q(`SELECT id,name,phone,email,sides,status,is_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password,
-    (SELECT requested_at FROM password_reset_requests r WHERE r.user_id=users.id AND r.resolved_at IS NULL) reset_requested_at FROM users
-    ORDER BY (status='pending') DESC, status, name`) };
+  return { owner_phone: manager.is_admin ? owner?.phone || '' : '', users: await q(`SELECT id,name,phone,email,sides,family_group_id,status,is_admin,is_family_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password,
+    (SELECT requested_at FROM password_reset_requests r WHERE r.user_id=users.id AND r.resolved_at IS NULL) reset_requested_at FROM users WHERE ($1::boolean OR (family_group_id=$2 AND NOT is_admin))
+    ORDER BY (status='pending') DESC, status, name`,[manager.is_admin,manager.family_group_id]) };
 });
 app.patch('/api/admin/users/:id', async (req) => {
   const me = await admin(req);
+  return tx(async c=>{
+  const q=async(sql:string,params:unknown[]=[]) => (await c.query(sql,params)).rows;
+  const q1=async(sql:string,params:unknown[]=[]) => (await q(sql,params))[0];
   const id = Number((req.params as any).id), b: any = req.body || {};
-  const u = await q1('SELECT * FROM users WHERE id=$1', [id]); if (!u) throw new HttpError(404, 'נישט געטראפן');
+  if(b.is_admin!==undefined&&!me.is_admin)throw new HttpError(403,'נאר פאר דעם הויפט אדמין');
+  const u = await q1('SELECT * FROM users WHERE id=$1 AND ($2::boolean OR (family_group_id=$3 AND NOT is_admin)) FOR UPDATE', [id,me.is_admin,me.family_group_id]); if (!u) throw new HttpError(404, 'נישט געטראפן');
   const owner = u.id === await ownerId();
   if (owner && id !== me.id && (b.status !== undefined || b.is_admin === false)) throw new HttpError(403, 'מען קען נישט טוישן דעם הויפט אדמין');
   if (b.status !== undefined) {
@@ -355,11 +420,17 @@ app.patch('/api/admin/users/:id', async (req) => {
     await q('UPDATE users SET sides=$1 WHERE id=$2', [s, id]);
   }
   if (b.is_admin !== undefined) {
+    if(!me.is_admin)throw new HttpError(403,'נאר פאר דעם הויפט אדמין');
     if (id === me.id && !b.is_admin) throw bad('דו קענסט נישט אוועקנעמען דיין אייגענעם אדמין');
     await q('UPDATE users SET is_admin=$1 WHERE id=$2', [!!b.is_admin, id]);
   }
+  if(b.is_family_admin!==undefined) {
+    if(id===me.id&&!b.is_family_admin&&!me.is_admin)throw bad('מען קען נישט אוועקנעמען דיין אייגענעם אדמין');
+    await q('UPDATE users SET is_family_admin=$1 WHERE id=$2',[!!b.is_family_admin,id]);
+  }
   if (b.name !== undefined) { const n = str(b.name, 80); if (n) await q('UPDATE users SET name=$1 WHERE id=$2', [n, id]); }
   return { ok: true };
+  });
 });
 app.delete('/api/admin/users/:id', async (req) => {
   const me = await admin(req);
@@ -371,11 +442,11 @@ app.delete('/api/admin/users/:id', async (req) => {
   return { ok: true };
 });
 app.post('/api/admin/users/:id/reset-link', async (req) => {
-  await admin(req);
+  const me=await admin(req);
   const id = Number((req.params as any).id);
   const t = tok(24);
   await tx(async c => {
-    if (!(await c.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [id])).rows.length) throw new HttpError(404, 'נישט געטראפן');
+    if (!(await c.query('SELECT id FROM users WHERE id=$1 AND ($2::boolean OR (family_group_id=$3 AND NOT is_admin)) FOR UPDATE', [id,me.is_admin,me.family_group_id])).rows.length) throw new HttpError(404, 'נישט געטראפן');
     await c.query(`UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL`, [id]);
     await c.query(`INSERT INTO password_tokens(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')`, [sha(t), id]);
     await c.query('UPDATE password_reset_requests SET resolved_at=now() WHERE user_id=$1', [id]);
@@ -392,14 +463,83 @@ app.put('/api/admin/settings', async (req) => {
   return { settings: await getSettings() };
 });
 
+// Explicit administrator assignment. Genealogical names never grant access.
+const assignmentTables = ['people','yahrzeits','learn_lists','directory','simchas','files','messages','families'] as const;
+app.get('/api/admin/family-groups', async req => {
+  const manager=await admin(req);
+  return {groups:await q('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND ($1::boolean OR id=$2) ORDER BY name',[manager.is_admin,manager.family_group_id])};
+});
+app.patch('/api/admin/family-groups/:id', async req => {
+  const manager=await admin(req),id=Number((req.params as any).id),name=str((req.body as any)?.name,120);
+  if(!name)throw bad('שרייב א משפחה נאמען');
+  const group=await q1('UPDATE family_groups SET name=$1 WHERE id=$2 AND NOT is_quarantine AND ($3::boolean OR id=$4) RETURNING id,name',[name,id,manager.is_admin,manager.family_group_id]);
+  if(!group)throw new HttpError(404,'נישט געטראפן'); return {group};
+});
+app.post('/api/admin/select-family-group', async (req,reply) => {
+  await admin(req);const group=Number((req.body as any)?.family_group_id);
+  if(!Number.isSafeInteger(group)||!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group]))throw bad('קלייב אויס א משפחה');
+  reply.setCookie('fam_group',String(group),{path:'/',httpOnly:true,sameSite:'lax',secure:config.cookieSecure});
+  return {ok:true};
+});
+app.post('/api/admin/family-groups', async req => {
+  await admin(req); const name=str((req.body as any)?.name,120);
+  if(!name) throw bad('שרייב א משפחה נאמען');
+  return {group:await q1('INSERT INTO family_groups(name) VALUES($1) RETURNING id,name',[name])};
+});
+app.put('/api/admin/users/:id/family-group', async req => {
+  const a=await admin(req),id=Number((req.params as any).id),group=Number((req.body as any)?.family_group_id);
+  if(!Number.isSafeInteger(group)||!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group])) throw bad('קלייב אויס א משפחה');
+  await tx(async c=>{
+    const old=(await c.query('SELECT family_group_id FROM users WHERE id=$1 FOR UPDATE',[id])).rows[0];
+    if(!old) throw new HttpError(404,'נישט געטראפן');
+    await c.query('UPDATE users SET family_group_id=$1,is_family_admin=CASE WHEN family_group_id=$1 THEN is_family_admin ELSE false END WHERE id=$2',[group,id]);
+    if(old.family_group_id!==group) {
+      await c.query('DELETE FROM sessions WHERE user_id=$1',[id]);
+      await c.query('DELETE FROM chat_presence WHERE user_id=$1',[id]);
+    }
+    await c.query('INSERT INTO family_assignment_audit(admin_id,family_group_id,assignments) VALUES($1,$2,$3)',[a.id,group,JSON.stringify({user_id:id,previous_group:old.family_group_id})]);
+  });
+  return {ok:true};
+});
+// Legacy content remains hidden until an administrator reviews its explicit assignment.
+app.get('/api/admin/unassigned-records', async req => {
+  await admin(req); const records: Record<string,unknown[]>={};
+  for(const table of assignmentTables) {
+    const label=({people:'name',yahrzeits:'name',learn_lists:'niftar',directory:"concat_ws(' ',husband,wife)",simchas:'whose',files:'filename',messages:'left(body,100)',families:'name'} as const)[table];
+    records[table]=await q(`SELECT id,${label} label FROM ${table} WHERE family_group_id IS NULL ORDER BY id LIMIT 500`);
+  }
+  return {records};
+});
+app.post('/api/admin/assign-records', async req => {
+  const a=await admin(req),b:any=req.body||{},group=Number(b.family_group_id);
+  if(!Number.isSafeInteger(group)||!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine',[group]))throw bad('קלייב אויס א משפחה');
+  if(!b.records || typeof b.records!=='object' || Object.keys(b.records).some(t=>!assignmentTables.includes(t as any)))throw bad('קלייב אויס רעקארדס');
+  await tx(async c=>{
+    await c.query('SELECT pg_advisory_xact_lock(68427301)');
+    for(const table of assignmentTables) {
+      const ids=b.records[table]||[];
+      if(!Array.isArray(ids)||ids.length>500||ids.some((id:any)=>!['string','number'].includes(typeof id)))throw bad('קלייב אויס רעקארדס');
+      const unique=[...new Set(ids.map(String))];
+      const result=await c.query(`UPDATE ${table} SET family_group_id=$1 WHERE id::text=ANY($2::text[]) AND family_group_id IS NULL RETURNING id`,[group,unique]);
+      if(result.rows.length!==unique.length)throw new HttpError(409,'א רעקארד איז שוין צוגעטיילט. ריפרעש און פרוביר נאכאמאל.');
+    }
+    // Labels must not refer to a different family (or still-unassigned labels).
+    if((await c.query(`SELECT 1 FROM person_families pf JOIN people p ON p.id=pf.person_id JOIN families f ON f.id=pf.family_id
+      WHERE p.family_group_id IS NOT NULL AND p.family_group_id IS DISTINCT FROM f.family_group_id LIMIT 1`)).rows.length)
+      throw bad('קלייב אויך אויס די פארבונדענע משפחה נעמען פאר דער זעלבער משפחה');
+    await c.query('INSERT INTO family_assignment_audit(admin_id,family_group_id,assignments) VALUES($1,$2,$3)',[a.id,group,JSON.stringify(b.records)]);
+  });
+  return {ok:true};
+});
+
 // ---------------- yahrzeits ----------------
 function yzOut(r: any) {
   const n = nextYahrzeit(r.hday, r.hmonth, r.death_year);
   return { ...r, hebrew: `${gem(r.hday)} ${MONTH_YI[r.hmonth] || r.hmonth}`, next: n };
 }
 async function listYahrzeits(u: User) {
-  const rows = await q(`SELECT y.*,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,p.kever_address,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
-    LEFT JOIN yahrzeit_reminders r ON r.yahrzeit_id=y.id AND r.user_id=$1 LEFT JOIN users cu ON cu.id=y.created_by
+  const rows = await q(`SELECT y.*,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,p.kever_address,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id AND f.family_group_id=y.family_group_id),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
+    LEFT JOIN yahrzeit_reminders r ON r.yahrzeit_id=y.id AND r.user_id=$1 LEFT JOIN users cu ON cu.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND cu.id=y.created_by
     WHERE y.archived_at IS NULL AND ${sideSql('y.side', 2)}`, [u.id, mySides(u)]);
   return rows.map(yzOut).sort((a, b) => (a.next?.days ?? 9999) - (b.next?.days ?? 9999));
 }
@@ -425,7 +565,7 @@ app.delete('/api/yahrzeits/:id', async (req) => {
   const r = await q1('SELECT created_by,person_id FROM yahrzeits WHERE id=$1', [id]);
   if (!r) throw new HttpError(404, 'נישט געטראפן');
   if (r.person_id) throw bad('עדיט דעם פטירה דאטום אין פעמילי טרי');
-  if (!u.is_admin && r.created_by !== u.id) throw new HttpError(403, 'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
+  if (!managesFamily(u) && r.created_by !== u.id) throw new HttpError(403, 'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
   await q('DELETE FROM yahrzeits WHERE id=$1', [id]);
   return { ok: true };
 });
@@ -437,10 +577,10 @@ app.post('/api/yahrzeits/:id/remind', async (req) => {
 });
 
 // ---------------- family tree: canonical person records ----------------
-const personSelect = `SELECT p.*, coalesce((SELECT json_agg(json_build_object('id',fam.id,'name',fam.name) ORDER BY fam.name) FROM person_families pf JOIN families fam ON fam.id=pf.family_id WHERE pf.person_id=p.id),'[]') families, f.name father_name, f.title father_title, m.name mother_name, m.title mother_title,
+const personSelect = `SELECT p.*, coalesce((SELECT json_agg(json_build_object('id',fam.id,'name',fam.name) ORDER BY fam.name) FROM person_families pf JOIN families fam ON fam.id=pf.family_id WHERE pf.person_id=p.id AND fam.family_group_id=p.family_group_id),'[]') families, f.name father_name, f.title father_title, m.name mother_name, m.title mother_title,
   sp.name spouse_name, sp.title spouse_title FROM people p
-  LEFT JOIN people f ON f.id=p.father_id LEFT JOIN people m ON m.id=p.mother_id
-  LEFT JOIN people sp ON sp.id=p.spouse_id`;
+  LEFT JOIN people f ON f.id=p.father_id AND f.family_group_id=p.family_group_id LEFT JOIN people m ON m.id=p.mother_id AND m.family_group_id=p.family_group_id
+  LEFT JOIN people sp ON sp.id=p.spouse_id AND sp.family_group_id=p.family_group_id`;
 app.get('/api/people', async (req) => {
   const u = await member(req);
   return { people: await q(`${personSelect} WHERE ${sideSql('p.side',1)} ORDER BY p.id`, [mySides(u)]) };
@@ -454,10 +594,10 @@ async function savePerson(u: User, b: any, id?: number) {
     // Serialize graph changes so two simultaneous saves cannot introduce ancestry cycles.
     await c.query("SELECT pg_advisory_xact_lock(68427301)");
     const old = id ? (await c.query('SELECT * FROM people WHERE id=$1 FOR UPDATE',[id])).rows[0] : null;
-    if (id && (!old || !canSee(u,old.side))) throw new HttpError(404,'נישט געטראפן');
+    if (id && (!old || !canSee(u,old.side) || old.family_group_id!==familyContext.getStore()?.id)) throw new HttpError(404,'נישט געטראפן');
     const legacy=b.legacy_yahrzeit_id ? (await c.query('SELECT * FROM yahrzeits WHERE id=$1 FOR UPDATE',[Number(b.legacy_yahrzeit_id)])).rows[0] : null;
-    if(b.legacy_yahrzeit_id && (!legacy || legacy.archived_at || (legacy.person_id && legacy.person_id!==id) || !canSee(u,legacy.side))) throw bad('דער אלטער יארצייט איז נישט פאר דעם מענטש');
-    if(legacy&&!u.is_admin&&legacy.created_by!==u.id)throw new HttpError(403,'נאר דער באשעפער אדער אדמין קען פארבינדן דעם אלטן רעקארד');
+    if(b.legacy_yahrzeit_id && (!legacy || legacy.archived_at || (legacy.person_id && legacy.person_id!==id) || !canSee(u,legacy.side) || legacy.family_group_id!==familyContext.getStore()?.id)) throw bad('דער אלטער יארצייט איז נישט פאר דעם מענטש');
+    if(legacy&&!managesFamily(u)&&legacy.created_by!==u.id)throw new HttpError(403,'נאר דער באשעפער אדער אדמין קען פארבינדן דעם אלטן רעקארד');
     b = {...(old || {}),...b};
     const name = str(b.name,120); if (!name) throw bad('שרייב א נאמען');
     const side = okSide(u,b.side);
@@ -487,7 +627,7 @@ async function savePerson(u: User, b: any, id?: number) {
     for (const ref of refs) {
       const r=(await c.query('SELECT * FROM people WHERE id=$1',[ref])).rows[0];
       // A linked person must be visible to every viewer of this person, not just the editor.
-      if (!r || !canSee(u,r.side) || (r.side!=='both' && r.side!==side)) throw bad('דער פארבינדונג דארף זיין אויף דער זעלבער סייד');
+      if (!r || !canSee(u,r.side) || r.family_group_id!==familyContext.getStore()?.id || (r.side!=='both' && r.side!==side)) throw bad('דער פארבינדונג דארף זיין אויף דער זעלבער סייד');
       if (ref===spouse && r.side!==side) throw bad('מאן און ווייב לינקס דארפן זיין אויף דער זעלבער סייד');
       if (ref===spouse && r.spouse_id && r.spouse_id!==id) throw bad('דער מענטש האט שוין א מאן/ווייב לינק');
     }
@@ -511,11 +651,11 @@ async function savePerson(u: User, b: any, id?: number) {
     const familyIds:number[]=[...new Set<number>(requestedFamilies.map(Number))];
     const newFamily=str(b.new_family,80);
     if(newFamily) {
-      const family=(await c.query(`INSERT INTO families(name,created_by) VALUES($1,$2) ON CONFLICT(lower(name)) DO UPDATE SET name=families.name RETURNING id`,[newFamily,u.id])).rows[0];
+      const family=(await c.query(`INSERT INTO families(name,created_by) VALUES($1,$2) ON CONFLICT(family_group_id,lower(name)) DO UPDATE SET name=families.name RETURNING id`,[newFamily,u.id])).rows[0];
       if(!familyIds.includes(family.id)) familyIds.push(family.id);
     }
     if(familyIds.length) {
-      const found=(await c.query('SELECT id FROM families WHERE id=ANY($1::int[])',[familyIds])).rows;
+      const found=(await c.query(`SELECT id FROM families WHERE id=ANY($1::int[]) AND ${familySql()}`,[familyIds])).rows;
       if(found.length!==familyIds.length) throw bad('א משפחה איז נישט געפונען');
     }
     const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year,lineage];
@@ -556,8 +696,8 @@ app.delete('/api/people/:id', async req => {
   return tx(async c=>{
     await c.query('SELECT pg_advisory_xact_lock(68427301)');
     const r=(await c.query('SELECT * FROM people WHERE id=$1',[id])).rows[0];
-    if (!r || !canSee(u,r.side)) throw new HttpError(404,'נישט געטראפן');
-    if (!u.is_admin && r.created_by!==u.id) throw new HttpError(403,'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
+    if (!r || !canSee(u,r.side) || r.family_group_id!==familyContext.getStore()?.id) throw new HttpError(404,'נישט געטראפן');
+    if (!managesFamily(u) && r.created_by!==u.id) throw new HttpError(403,'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
     const linked=(await c.query(`SELECT 1 FROM people WHERE parent_id=$1 OR father_id=$1 OR mother_id=$1 OR spouse_id=$1
       UNION SELECT 1 FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows.length;
     if (linked) throw bad('דער מענטש איז פארבונדן מיט משפחה. נעם קודם אוועק די לינקס.');
@@ -574,24 +714,24 @@ const learningTitleSql = (param: number) => `coalesce(
   (SELECT concat_ws(' ',y.name,nullif(y.father_name,'')) FROM yahrzeits y WHERE y.id=l.yahrzeit_id AND y.person_id IS NULL AND ${sideSql('y.side',param)}),l.niftar)`;
 app.get('/api/lists', async (req) => {
   const u = await member(req);
-  const rows = await q(`SELECT l.*, ${learningTitleSql(1)} niftar, (SELECT coalesce(json_agg(json_build_object('id',fam.id,'name',fam.name)),'[]') FROM families fam JOIN person_families pf ON pf.family_id=fam.id JOIN yahrzeits y ON y.person_id=pf.person_id WHERE y.id=l.yahrzeit_id) families, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
+  const rows = await q(`SELECT l.*, ${learningTitleSql(1)} niftar, (SELECT coalesce(json_agg(json_build_object('id',fam.id,'name',fam.name)),'[]') FROM families fam JOIN person_families pf ON pf.family_id=fam.id JOIN yahrzeits y ON y.person_id=pf.person_id WHERE y.id=l.yahrzeit_id AND fam.family_group_id=l.family_group_id) families, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
       count(*) FILTER (WHERE i.done)::int done,
       count(*) FILTER (WHERE EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NOT NULL) AND EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL))::int partial,
       count(*) FILTER (WHERE i.taken_by=$2 OR EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by=$2))::int mine
-    FROM learn_lists l LEFT JOIN learn_items i ON i.list_id=l.id LEFT JOIN users cu ON cu.id=l.created_by
+    FROM learn_lists l LEFT JOIN learn_items i ON i.list_id=l.id LEFT JOIN users cu ON cu.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND cu.id=l.created_by
     WHERE ${sideSql('l.side', 1)} GROUP BY l.id, cu.name ORDER BY (l.target_date IS NULL OR l.target_date < CURRENT_DATE), l.target_date, l.id DESC`, [mySides(u), u.id]);
   return { lists: rows.map((r) => ({ ...r, days: r.target_date ? daysUntil(r.target_date) : null })), masechtos: MASECHTOS };
 });
 async function visibleList(u: User, id: number) {
-  const l = await q1(`SELECT l.*,${learningTitleSql(2)} niftar FROM learn_lists l WHERE l.id=$1`, [id,mySides(u)]);
+  const l = await q1(`SELECT l.*,${learningTitleSql(2)} niftar FROM learn_lists l WHERE l.id=$1 AND ${familySql('l')}`, [id,mySides(u)]);
   if (!l || !canSee(u, l.side)) throw new HttpError(404, 'נישט געטראפן');
   return l;
 }
 app.get('/api/lists/:id', async (req) => {
   const u = await member(req); const l = await visibleList(u, Number((req.params as any).id));
-  const items = await q(`SELECT i.idx,i.taken_by,i.done,tu.name taken_name FROM learn_items i LEFT JOIN users tu ON tu.id=i.taken_by WHERE list_id=$1 ORDER BY idx`, [l.id]);
+  const items = await q(`SELECT i.idx,i.taken_by,i.done,tu.name taken_name FROM learn_items i LEFT JOIN users tu ON tu.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND tu.id=i.taken_by WHERE list_id=$1 ORDER BY idx`, [l.id]);
   const counts = await q(`SELECT idx,count(*)::int total,count(taken_by)::int taken,count(*) FILTER(WHERE done)::int done FROM learn_portions WHERE list_id=$1 GROUP BY idx`,[l.id]);
-  const help = await q(`SELECT h.*,u.name requested_name,v.name helper_name FROM learn_help_requests h JOIN users u ON u.id=h.requested_by LEFT JOIN users v ON v.id=h.helper_id WHERE h.list_id=$1 AND h.resolved_at IS NULL ORDER BY h.created_at`,[l.id]);
+  const help = await q(`SELECT h.*,u.name requested_name,v.name helper_name FROM learn_help_requests h LEFT JOIN users u ON u.id=h.requested_by AND u.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int LEFT JOIN users v ON v.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND v.id=h.helper_id WHERE h.list_id=$1 AND h.resolved_at IS NULL ORDER BY h.created_at`,[l.id]);
   return { list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items: items.map(i=>({...i,parts:counts.find(c=>c.idx===i.idx)||null})), help, masechtos: MASECHTOS };
 });
 app.post('/api/lists', async (req) => {
@@ -616,7 +756,7 @@ app.post('/api/lists', async (req) => {
 });
 app.delete('/api/lists/:id', async (req) => {
   const u = await member(req); const l = await visibleList(u, Number((req.params as any).id));
-  if (!u.is_admin && l.created_by !== u.id) throw new HttpError(403, 'נאר דער וואס האט עס געמאכט אדער דער אדמין');
+  if (!managesFamily(u) && l.created_by !== u.id) throw new HttpError(403, 'נאר דער וואס האט עס געמאכט אדער דער אדמין');
   await q('DELETE FROM learn_lists WHERE id=$1', [l.id]);
   return { ok: true };
 });
@@ -634,9 +774,9 @@ app.get('/api/lists/:id/items/:idx/parts',async req=>{
   const u=await member(req), l=await visibleList(u,Number((req.params as any).id)),idx=Number((req.params as any).idx);
   learningScope(l.kind,idx,{});
   if(l.kind!=='mishnayos') throw bad('נאר פאר משניות');
-  const root=await q1('SELECT i.*,u.name taken_name FROM learn_items i LEFT JOIN users u ON u.id=i.taken_by WHERE list_id=$1 AND idx=$2',[l.id,idx]);
+  const root=await q1(`SELECT i.*,u.name taken_name FROM learn_items i LEFT JOIN users u ON u.id=i.taken_by AND u.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int WHERE list_id=$1 AND idx=$2`,[l.id,idx]);
   if(!root) throw new HttpError(404,'נישט געטראפן');
-  const saved=await q('SELECT p.*,u.name taken_name FROM learn_portions p LEFT JOIN users u ON u.id=p.taken_by WHERE list_id=$1 AND idx=$2 ORDER BY chapter,mishnah',[l.id,idx]);
+  const saved=await q(`SELECT p.*,u.name taken_name FROM learn_portions p LEFT JOIN users u ON u.id=p.taken_by AND u.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int WHERE list_id=$1 AND idx=$2 ORDER BY chapter,mishnah`,[l.id,idx]);
   const items=saved.length?saved:MASECHTOS[idx].chapters.flatMap((count,c)=>Array.from({length:count},(_,m)=>({chapter:c+1,mishnah:m+1,taken_by:root.taken_by,taken_name:root.taken_name,done:root.done})));
   return {items};
 });
@@ -659,7 +799,7 @@ app.post('/api/lists/:id/items/:idx', async req => {
       rows=(await c.query('SELECT taken_by,done FROM learn_portions WHERE list_id=$1 AND idx=$2 AND ($3::int=0 OR chapter=$3) AND ($4::int=0 OR mishnah=$4)',[l.id,idx,chapter,mishnah])).rows;
     } else rows=[root];
     if(act==='take' && rows.some(r=>r.taken_by && r.taken_by!==u.id)) throw new HttpError(409,'א חלק איז שוין גענומען. עפן די פרקים און קלייב א פרייען חלק.');
-    if(act!=='take' && rows.some(r=>r.taken_by!==u.id) && !(act==='give'&&u.is_admin)) throw new HttpError(403,'דו קענסט נאר טוישן דיין אייגענעם חלק');
+    if(act!=='take' && rows.some(r=>r.taken_by!==u.id) && !(act==='give'&&managesFamily(u))) throw new HttpError(403,'דו קענסט נאר טוישן דיין אייגענעם חלק');
     const table=l.kind==='mishnayos'?'learn_portions':'learn_items';
     const condition=l.kind==='mishnayos'?' AND ($3::int=0 OR chapter=$3) AND ($4::int=0 OR mishnah=$4)':'';
     const params:any[]=l.kind==='mishnayos'?[l.id,idx,chapter,mishnah]:[l.id,idx];
@@ -688,7 +828,7 @@ app.post('/api/lists/:id/help/:helpId',async req=>{
     const r=await q1('UPDATE learn_help_requests SET helper_id=$1 WHERE id=$2 AND resolved_at IS NULL AND (helper_id IS NULL OR helper_id=$1) RETURNING id',[u.id,id]);
     if(!r)throw new HttpError(409,'איינער האט שוין אנגענומען צו העלפן');
   } else if(act==='resolve') {
-    if(h.requested_by!==u.id&&!u.is_admin) throw new HttpError(403,'נאר דער בעטער אדער אדמין');
+    if(h.requested_by!==u.id&&!managesFamily(u)) throw new HttpError(403,'נאר דער בעטער אדער אדמין');
     await q('UPDATE learn_help_requests SET resolved_at=now() WHERE id=$1',[id]);
   } else throw bad('קלייב אויס אן אקציע');
   return {ok:true};
@@ -708,8 +848,8 @@ app.get('/api/simchas', async (req) => {
       count(*) FILTER (WHERE r.answer='no')::int no_count,
       max(r.answer) FILTER (WHERE r.user_id=$2) my_answer, max(r.people) FILTER (WHERE r.user_id=$2) my_people,
       coalesce(json_agg(json_build_object('name',ru.name,'answer',r.answer,'people',r.people) ORDER BY ru.name) FILTER (WHERE r.user_id IS NOT NULL),'[]') rsvps
-    FROM simchas s LEFT JOIN files f ON f.id=s.file_id LEFT JOIN users cu ON cu.id=s.created_by
-    LEFT JOIN rsvps r ON r.simcha_id=s.id LEFT JOIN users ru ON ru.id=r.user_id
+    FROM simchas s LEFT JOIN files f ON f.id=s.file_id LEFT JOIN users cu ON cu.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND cu.id=s.created_by
+    LEFT JOIN rsvps r ON r.simcha_id=s.id LEFT JOIN users ru ON ru.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND ru.id=r.user_id
     WHERE ${sideSql('s.audience', 1)} AND ${past ? 's.gdate < $3' : 's.gdate >= $3'}
     GROUP BY s.id, f.filename, f.mime, cu.name ORDER BY s.gdate ${past ? 'DESC' : 'ASC'}, s.id LIMIT 200`, [mySides(u), u.id, todayYmd()]);
   return { simchas: rows.map((s) => ({ ...s, hebrew: s.hdate_text || hebrewForYmd(s.gdate), days: daysUntil(s.gdate) })) };
@@ -724,7 +864,7 @@ app.post('/api/simchas', async (req) => {
   const u = await member(req);
   return { simcha: await q1(`INSERT INTO simchas(kind,whose,gdate,time_text,hdate_text,hall,address,audience,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [...simBody(u, req.body), u.id]) };
 });
-const mayEditSim = (u: User, s: any) => u.is_admin || s.created_by === u.id;
+const mayEditSim = (u: User, s: any) => managesFamily(u) || s.created_by === u.id;
 app.put('/api/simchas/:id', async (req) => {
   const u = await member(req); const s = await simchaFor(u, Number((req.params as any).id));
   if (!mayEditSim(u, s)) throw new HttpError(403, 'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
@@ -812,7 +952,7 @@ app.get('/api/files/:id', async (req, reply) => {
 const extOf = (m: string) => ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'application/pdf': '.pdf', 'image/heic': '.heic' } as any)[m] || '';
 
 // ---------------- cousins directory ----------------
-const dirSelect = `SELECT d.*, ou.name owner_name FROM directory d LEFT JOIN users ou ON ou.id=d.owner_id`;
+const dirSelect = `SELECT d.*, ou.name owner_name FROM directory d LEFT JOIN users ou ON ou.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND ou.id=d.owner_id`;
 async function listDir(u: User) {
   const rows=await q(`${dirSelect} WHERE ${sideSql('d.side',1)} ORDER BY d.id`,[mySides(u)]);
   const people=await q(`${personSelect} WHERE ${sideSql('p.side',1)}`,[mySides(u)]);
@@ -827,12 +967,12 @@ async function listDir(u: User) {
   });
 }
 app.get('/api/directory', async (req) => { const u = await member(req); return { families: await listDir(u) }; });
-const mayEditDir = (u: User, d: any) => u.is_admin || d.owner_id === u.id || d.created_by === u.id;
+const mayEditDir = (u: User, d: any) => managesFamily(u) || d.owner_id === u.id || d.created_by === u.id;
 async function saveDirectory(u:User,b:any,id?:number) {
   return tx(async c=>{
     await c.query('SELECT pg_advisory_xact_lock(68427301)');
     const old=id?(await c.query('SELECT * FROM directory WHERE id=$1 FOR UPDATE',[id])).rows[0]:null;
-    if (id && (!old || !canSee(u,old.side))) throw new HttpError(404,'נישט געטראפן');
+    if (id && (!old || !canSee(u,old.side) || old.family_group_id!==familyContext.getStore()?.id)) throw new HttpError(404,'נישט געטראפן');
     if (old && !mayEditDir(u,old)) throw new HttpError(403,'דו קענסט עדיטן נאר דיין אייגענע משפחה');
     const addressKeys=['address_line1','address_line2','city','state','postal_code','country'];
     const structuredAddress=addressKeys.some(key=>b[key]!==undefined);
@@ -843,7 +983,7 @@ async function saveDirectory(u:User,b:any,id?:number) {
     const linked=new Map<number,any>();
     for(const person of [hp,wp].filter(Boolean)) {
       const p=(await c.query('SELECT * FROM people WHERE id=$1',[person])).rows[0];
-      if(!p || !canSee(u,p.side) || (p.side!=='both' && p.side!==side)) throw bad('דער מענטש דארף זיין אויף דער זעלבער סייד');
+      if(!p || !canSee(u,p.side) || p.family_group_id!==familyContext.getStore()?.id || (p.side!=='both' && p.side!==side)) throw bad('דער מענטש דארף זיין אויף דער זעלבער סייד');
       linked.set(p.id,p);
     }
     const husband=hp?linked.get(hp).name:str(b.husband,120),wife=wp?linked.get(wp).name:str(b.wife,120);
@@ -882,7 +1022,7 @@ app.get('/api/directory.csv', async (req, reply) => {
 // ---------------- chat ----------------
 const roomsFor = (u: User) => ['all', ...mySides(u)];
 async function chatPeers(u: User) {
-  return q(`SELECT id,name FROM users WHERE status='active' AND (id=$1 OR is_admin OR sides && $2::text[]) ORDER BY name`,[u.id,mySides(u)]);
+  return q(`SELECT id,name FROM users WHERE ${familySql()} AND status='active' AND (id=$1 OR is_admin OR sides && $2::text[]) ORDER BY name`,[u.id,mySides(u)]);
 }
 async function chatRoom(u: User, room: string) {
   if(roomsFor(u).includes(room)) return;
@@ -896,27 +1036,27 @@ async function membersOfRoom(u: User,room: string) {
   await chatRoom(u,room);
   const dm=room.startsWith('dm:')?room.slice(3).split(':').map(Number):null;
   return q(`SELECT u.id,u.name,p.seen_at>now()-interval '75 seconds' online,p.active_at>now()-interval '45 seconds' active
-    FROM users u LEFT JOIN chat_presence p ON p.user_id=u.id AND p.room=$3
-    WHERE u.status='active' AND ($1::int[] IS NULL OR u.id=ANY($1))
+    FROM users u LEFT JOIN chat_presence p ON p.user_id=u.id AND p.room=$3 AND p.family_group_id=u.family_group_id
+    WHERE ${familySql('u')} AND u.status='active' AND ($1::int[] IS NULL OR u.id=ANY($1))
       AND ($2::text='all' OR $1::int[] IS NOT NULL OR u.is_admin OR $2=ANY(u.sides)) ORDER BY u.name`,[dm,room,room]);
 }
 app.get('/api/chat-members',async req=>({members:await chatPeers(await member(req))}));
 const messageSelect=`SELECT m.id,m.body,m.created_at,m.user_id,m.reply_to,u.name,f.filename,f.mime,f.size,m.file_id,
   r.body reply_body,ru.name reply_name,
-  coalesce((SELECT json_agg(json_build_object('id',mu.id,'name',mu.name)) FROM message_mentions mm JOIN users mu ON mu.id=mm.user_id WHERE mm.message_id=m.id),'[]') mentions
-  FROM messages m JOIN users u ON u.id=m.user_id LEFT JOIN files f ON f.id=m.file_id
-  LEFT JOIN messages r ON r.id=m.reply_to AND r.room=m.room LEFT JOIN users ru ON ru.id=r.user_id`;
+  coalesce((SELECT json_agg(json_build_object('id',mu.id,'name',mu.name)) FROM message_mentions mm JOIN users mu ON mu.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND mu.id=mm.user_id WHERE mm.message_id=m.id),'[]') mentions
+  FROM messages m LEFT JOIN users u ON u.id=m.user_id AND u.family_group_id=m.family_group_id LEFT JOIN files f ON f.id=m.file_id
+  LEFT JOIN messages r ON r.id=m.reply_to AND r.room=m.room LEFT JOIN users ru ON ru.family_group_id=nullif(current_setting('familye.family_group_id',true),'')::int AND ru.id=r.user_id`;
 app.get('/api/chat/:room',async req=>{
   const u=await member(req),room=String((req.params as any).room);await chatRoom(u,room);
   const after=Number((req.query as any).after)||0;
-  const rows=after?await q(`${messageSelect} WHERE m.room=$1 AND m.id>$2 ORDER BY m.id LIMIT 200`,[room,after])
-    :(await q(`${messageSelect} WHERE m.room=$1 ORDER BY m.id DESC LIMIT 100`,[room])).reverse();
+  const rows=after?await q(`${messageSelect} WHERE ${familySql('m')} AND m.room=$1 AND m.id>$2 ORDER BY m.id LIMIT 200`,[room,after])
+    :(await q(`${messageSelect} WHERE ${familySql('m')} AND m.room=$1 ORDER BY m.id DESC LIMIT 100`,[room])).reverse();
   return {messages:rows,members:await membersOfRoom(u,room)};
 });
 app.post('/api/chat/:room/presence',async req=>{
   const u=await member(req),room=String((req.params as any).room);await chatRoom(u,room);
   await q(`INSERT INTO chat_presence(user_id,room,active_at) VALUES($1,$2,CASE WHEN $3 THEN now() ELSE '-infinity'::timestamptz END)
-    ON CONFLICT(user_id) DO UPDATE SET room=$2,seen_at=now(),active_at=CASE WHEN $3 THEN now() WHEN chat_presence.room=$2 THEN chat_presence.active_at ELSE '-infinity'::timestamptz END`,[u.id,room,!!(req.body as any)?.active]);
+    ON CONFLICT(user_id) DO UPDATE SET family_group_id=excluded.family_group_id,room=$2,seen_at=now(),active_at=CASE WHEN $3 THEN now() WHEN chat_presence.room=$2 THEN chat_presence.active_at ELSE '-infinity'::timestamptz END`,[u.id,room,!!(req.body as any)?.active]);
   return {ok:true};
 });
 app.post('/api/chat/:room/attachment',async req=>{
@@ -949,14 +1089,14 @@ app.post('/api/chat/:room',{config:{rateLimit:{max:30,timeWindow:'1 minute'}}},a
 app.delete('/api/chat/message/:id',async req=>{
   const u=await member(req),id=Number((req.params as any).id),m=await q1('SELECT user_id,room FROM messages WHERE id=$1',[id]);
   if(!m)throw new HttpError(404,'נישט געטראפן');await chatRoom(u,m.room);
-  if(m.user_id!==u.id&&!u.is_admin)throw new HttpError(403,'נאר דיינע');
+  if(m.user_id!==u.id&&!managesFamily(u))throw new HttpError(403,'נאר דיינע');
   await q('DELETE FROM messages WHERE id=$1',[id]);return {ok:true};
 });
 app.get('/api/chat-summary',async req=>{
   const u=await member(req),peers=await chatPeers(u);
   const dm=peers.filter(p=>p.id!==u.id).map(p=>'dm:'+Math.min(u.id,p.id)+':'+Math.max(u.id,p.id));
-  return {rooms:await q(`SELECT r room,(SELECT max(id) FROM messages WHERE room=r) last_id,
-    (SELECT count(*)::int FROM message_mentions mm JOIN messages m ON m.id=mm.message_id WHERE m.room=r AND mm.user_id=$2) mentions
+  return {rooms:await q(`SELECT r room,(SELECT max(id) FROM messages WHERE ${familySql()} AND room=r) last_id,
+    (SELECT count(*)::int FROM message_mentions mm JOIN messages m ON m.id=mm.message_id WHERE ${familySql('m')} AND m.room=r AND mm.user_id=$2) mentions
     FROM unnest($1::text[]) r`,[[...roomsFor(u),...dm],u.id])};
 });
 
@@ -966,10 +1106,10 @@ app.get('/api/home', async (req) => {
   const yz = (await listYahrzeits(u)).filter((y) => y.next).slice(0, 3);
   const sims = (await q(`SELECT s.id,s.kind,s.whose,s.gdate,s.time_text,s.hdate_text,s.hall,s.address,s.audience FROM simchas s WHERE ${sideSql('s.audience', 1)} AND s.gdate >= $2 ORDER BY s.gdate LIMIT 4`, [mySides(u), todayYmd()]))
     .map((s) => ({ ...s, hebrew: s.hdate_text || hebrewForYmd(s.gdate), days: daysUntil(s.gdate) }));
-  const msgs = await q(`SELECT m.id,m.room,m.body,m.created_at,u.name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.room = ANY($1::text[]) ORDER BY m.id DESC LIMIT 5`, [roomsFor(u)]);
+  const msgs = await q(`SELECT m.id,m.room,m.body,m.created_at,u.name FROM messages m LEFT JOIN users u ON u.id=m.user_id AND u.family_group_id=m.family_group_id WHERE ${familySql('m')} AND m.room = ANY($1::text[]) ORDER BY m.id DESC LIMIT 5`, [roomsFor(u)]);
   const lists = await q(`SELECT l.id,l.kind,${learningTitleSql(1)} niftar,l.target_date,count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
     WHERE ${sideSql('l.side', 1)} AND (l.target_date IS NULL OR l.target_date >= $2) GROUP BY l.id ORDER BY l.target_date NULLS LAST LIMIT 4`, [mySides(u), todayYmd()]);
-  const counts = await q1(`SELECT (SELECT count(*) FROM users WHERE status='active')::int members, (SELECT count(*) FROM users WHERE status='pending')::int pending`);
+  const counts = await q1(`SELECT (SELECT count(*) FROM users WHERE ${familySql()} AND status='active')::int members, (SELECT count(*) FROM users WHERE ${familySql()} AND status='pending')::int pending`);
   return { yahrzeits: yz, simchas: sims, messages: msgs, lists, members: counts.members, pending: u.is_admin ? counts.pending : 0, today: hebrewForYmd(todayYmd()) };
 });
 
