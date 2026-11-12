@@ -11,6 +11,7 @@ import { createReadStream, existsSync, mkdirSync, statSync, unlinkSync } from 'n
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash, verify } from '@node-rs/argon2';
+import type { PoolClient } from 'pg';
 import { config } from './config.js';
 import { nameKey, sameParent } from './person-matches.js';
 import { familyContext, familySql, personSql, personGroupsSql } from './family-scope.js';
@@ -164,13 +165,14 @@ app.addHook('preHandler', async req => {
     if(!manager.is_admin) {
       if(!await q1('SELECT 1 FROM family_groups WHERE id=$1 AND NOT is_quarantine AND archived_at IS NULL',[manager.family_group_id])) throw new HttpError(403,word("errors.10"));
       const groupEdit=req.method==='PATCH'&&route==='/api/admin/family-groups/:id';
+      const treeParents=route==='/api/admin/users/:id/tree-parents' && ['GET','PUT'].includes(req.method);
       if(groupEdit&&Number((req.params as any).id)!==manager.family_group_id)throw new HttpError(404,word("errors.11"));
-      const permitted=groupEdit||(req.method==='GET' && ['/api/admin/users','/api/admin/family-groups'].includes(route)) ||
+      const permitted=groupEdit||treeParents||(req.method==='GET' && ['/api/admin/users','/api/admin/family-groups'].includes(route)) ||
         (req.method==='PATCH' && route==='/api/admin/users/:id') ||
         (req.method==='POST' && route==='/api/admin/users/:id/reset-link');
       if(!permitted) throw new HttpError(403,word("errors.12"));
       const target=(req.params as any)?.id;
-      if(target && !groupEdit && !await q1('SELECT 1 FROM users WHERE id=$1 AND family_group_id=$2 AND NOT is_admin',[target,manager.family_group_id])) throw new HttpError(404,word("errors.11"));
+      if(target && !groupEdit && !treeParents && !await q1('SELECT 1 FROM users WHERE id=$1 AND family_group_id=$2 AND NOT is_admin',[target,manager.family_group_id])) throw new HttpError(404,word("errors.11"));
     }
     return;
   }
@@ -497,7 +499,7 @@ async function memberTreeProfileTarget(req: FastifyRequest) {
   if(!Number.isSafeInteger(id)||id<1)throw bad(word("errors.member_tree_profile_target.01"));
   return {actor,id};
 }
-const memberProfileSelect=`SELECT u.id,u.name,u.person_id,u.sides,u.family_group_id,u.is_family_admin,u.is_admin,
+const memberProfileSelect=`SELECT u.id,u.name,u.person_id,u.sides,u.family_group_id,u.family_group_ids,u.is_family_admin,u.is_admin,
   ARRAY(SELECT g.id FROM family_groups g WHERE g.id=ANY(u.family_group_ids) AND NOT g.is_quarantine AND g.archived_at IS NULL) groups
   FROM users u WHERE u.id=$1`;
 const memberProfileParams = (u: any) => [u.groups,u.is_admin?u.groups:u.is_family_admin?[u.family_group_id]:[],u.sides];
@@ -526,6 +528,120 @@ app.put('/api/admin/users/:id/tree-profile',async req=>{
     await c.query('INSERT INTO family_assignment_audit(admin_id,family_group_id,assignments) VALUES($1,$2,$3)',
       [actor.id,user.family_group_id,JSON.stringify({kind:'member_tree_profile',member_id:id,previous_person_id:user.person_id,person_id:person})]);
     return {ok:true};
+  });
+});
+type MemberParentChoice = {
+  id: number; name: string; title: string; known_as: string; life_status: string; niftar: boolean;
+  side: string; family_group_id: number | null; groups: number[]; linkable: boolean;
+  father_id: number | null; mother_id: number | null; parent_id: number | null;
+  spouse_id: number | null; second_spouse_id: number | null;
+};
+async function memberParentChoices(c: PoolClient, actor: User, id: number, forUpdate = false) {
+  if (!Number.isInteger(id) || id < 1 || id > 2147483647) throw bad(word("errors.member_tree_profile_target.01"));
+  const user = (await c.query(memberProfileSelect + (forUpdate ? ' FOR UPDATE OF u' : ''), [id])).rows[0];
+  if (!user || (!actor.is_admin && (user.is_admin || user.family_group_id !== actor.family_group_id)))
+    throw new HttpError(404, word("errors.11"));
+  if (!actor.is_admin && user.family_group_ids.length > 1) throw new HttpError(403, word("errors.40"));
+  if (!user.groups.length) throw bad(word("errors.member_parents.family"));
+  const { rows: people } = await c.query<MemberParentChoice>(`
+    SELECT p.id,p.name,p.title,p.known_as,p.life_status,p.niftar,p.side,p.family_group_id,
+      p.father_id,p.mother_id,p.parent_id,p.spouse_id,p.second_spouse_id,
+      ARRAY(SELECT g.id FROM unnest($1::int[]) g(id) WHERE ${personSql('p','ARRAY[g.id]')}
+        AND (p.side='both' OR p.side=ANY($3::text[]) OR g.id=ANY($2::int[]))) groups,
+      NOT EXISTS(SELECT 1 FROM users u WHERE u.person_id=p.id AND u.id<>$4)
+        AND ($5::boolean OR (p.family_group_id=$6 AND NOT EXISTS(
+          SELECT 1 FROM person_family_access a WHERE a.person_id=p.id AND a.family_group_id<>$6))) linkable
+    FROM people p WHERE ${memberProfileSql('p')} ORDER BY p.name,p.id`,
+    [...memberProfileParams(user), id, actor.is_admin, actor.family_group_id]);
+  return { user, people: new Map(people.map(p => [p.id, p])) };
+}
+app.get('/api/admin/users/:id/tree-parents', async req => {
+  const actor = await admin(req), id = Number((req.params as any).id);
+  return tx(async c => {
+    const { user, people } = await memberParentChoices(c, actor, id);
+    if (user.person_id && !people.get(user.person_id)?.linkable)
+      throw bad(word("errors.member_parents.profile"));
+    const { rows: groups } = await c.query('SELECT id,name FROM family_groups WHERE id=ANY($1::int[]) ORDER BY name', [user.groups]);
+    const visibleId = (value: number | null) => value && people.has(value) ? value : null;
+    return { name: user.name, person_id: user.person_id, family_group_id: user.family_group_id, groups,
+      people: [...people.values()].map(p => ({
+        id: p.id, name: p.name, title: p.title, known_as: p.known_as, life_status: p.life_status, niftar: p.niftar, side: p.side,
+        groups: p.groups, linkable: p.linkable, father_id: visibleId(p.father_id), mother_id: visibleId(p.mother_id),
+        parent_id: visibleId(p.parent_id), spouse_id: visibleId(p.spouse_id), second_spouse_id: visibleId(p.second_spouse_id),
+        has_father: !!p.father_id, has_mother: !!p.mother_id, has_legacy_parent: !!p.parent_id,
+      })) };
+  });
+});
+app.put('/api/admin/users/:id/tree-parents', async req => {
+  const actor = await admin(req), id = Number((req.params as any).id);
+  const body = req.body as {
+    person_id?: number | null; expected_person_id?: number | null; family_group_id?: number;
+    father_id?: number; mother_id?: number;
+  } | undefined;
+  if (body?.person_id === undefined) throw bad(word("errors.37"));
+  const selectedPerson = personId(body.person_id), selectedFamily = personId(body.family_group_id);
+  const expectedPerson = body.expected_person_id === undefined ? undefined : personId(body.expected_person_id);
+  const father = personId(body.father_id), mother = personId(body.mother_id);
+  return tx(async c => {
+    await c.query('SELECT pg_advisory_xact_lock(68427301)');
+    const { user, people } = await memberParentChoices(c, actor, id, true);
+    if (selectedPerson !== user.person_id &&
+        (user.person_id || (expectedPerson !== undefined && expectedPerson !== user.person_id)))
+      throw new HttpError(409, word("errors.member_parents.changed"));
+    const child = selectedPerson === null ? null : people.get(selectedPerson);
+    if (selectedPerson !== null && !child?.linkable) throw bad(word("errors.member_parents.profile"));
+    if ((child?.father_id && father && father !== child.father_id) ||
+        (child?.mother_id && mother && mother !== child.mother_id))
+      throw new HttpError(409, word("errors.member_parents.changed"));
+    const group = child ? child.groups.find(g => g === child.family_group_id) ?? child.groups[0] : selectedFamily;
+    if (group === null || (!child && !user.groups.includes(group))) throw bad(word("errors.member_parents.family"));
+
+    const nextFather = child?.father_id ?? father, nextMother = child?.mother_id ?? mother;
+    if (!nextFather && !nextMother && !child?.parent_id) throw bad(word("errors.member_parents.required"));
+    if (nextFather && nextFather === nextMother) throw bad(word("errors.save_person.18"));
+    const newFather = child?.father_id ? null : father, newMother = child?.mother_id ? null : mother;
+    const accessGroups = child?.groups ?? [group];
+    const parentSides = new Set<string>();
+    for (const parentId of [newFather, newMother]) {
+      if (!parentId) continue;
+      if (child && [child.id, child.spouse_id, child.second_spouse_id].includes(parentId))
+        throw bad(word("errors.save_person.18"));
+      const parent = people.get(parentId);
+      if (!parent || !parent.groups.some(g => accessGroups.includes(g)))
+        throw bad(word("errors.member_parents.scope"));
+      if (parent.side !== 'both') parentSides.add(parent.side);
+    }
+    const [parentSide] = parentSides;
+    if (parentSides.size > 1 || (child && parentSide && parentSide !== child.side))
+      throw bad(word("errors.save_person.23"));
+
+    const parentChanged = !!(newFather || newMother);
+    let person: number;
+    if (child) {
+      person = child.id;
+      if (parentChanged) {
+        await assertNoAncestorCycle(c, child.id, [nextFather, nextMother, child.parent_id]);
+        await c.query('UPDATE people SET father_id=$1,mother_id=$2 WHERE id=$3', [nextFather, nextMother, child.id]);
+      }
+    } else {
+      const name = str(user.name, 120);
+      const { rows: existing } = await c.query(`SELECT name FROM people p WHERE ${personSql('p','ARRAY[$1::int]')}`, [group]);
+      if (existing.some(p => nameKey(p.name) === nameKey(name)))
+        throw new HttpError(409, word("errors.member_parents.duplicate"));
+      const side = parentSide ?? (user.sides.length === 1 ? user.sides[0] : 'both');
+      const { rows } = await c.query<{ id: number }>(`INSERT INTO people(name,side,life_status,created_by,family_group_id,father_id,mother_id)
+        VALUES($1,$2,'living',$3,$4,$5,$6) RETURNING id`, [name, side, actor.id, group, nextFather, nextMother]);
+      person = rows[0].id;
+    }
+    if (parentChanged) await syncTreeParentDetails(c, person, newFather, newMother);
+    if (!user.person_id) await c.query('UPDATE users SET person_id=$1 WHERE id=$2', [person, id]);
+    if (!user.person_id || parentChanged) {
+      await c.query('INSERT INTO family_assignment_audit(admin_id,family_group_id,assignments) VALUES($1,$2,$3)',
+        [actor.id, group, JSON.stringify({ kind: 'member_tree_parents', member_id: id, person_id: person,
+          previous_person_id: user.person_id, previous_father_id: child?.father_id ?? null,
+          previous_mother_id: child?.mother_id ?? null, father_id: nextFather, mother_id: nextMother })]);
+    }
+    return { ok: true, person_id: person };
   });
 });
 app.post('/api/admin/users/:id/act-as', async(req,reply)=>{
@@ -827,6 +943,21 @@ const personId = (v: any): number | null => {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v); if (!Number.isSafeInteger(n) || n < 1) throw bad(word("errors.37")); return n;
 };
+async function assertNoAncestorCycle(c: PoolClient, id: number, parentIds: (number | null)[]) {
+  const { rowCount } = await c.query(`WITH RECURSIVE ancestors(id) AS (
+    SELECT unnest($1::int[]) UNION
+    SELECT x.parent FROM ancestors a JOIN people p ON p.id=a.id
+    CROSS JOIN LATERAL unnest(ARRAY[p.father_id,p.mother_id,p.parent_id]) x(parent) WHERE x.parent IS NOT NULL
+  ) SELECT 1 FROM ancestors WHERE id=$2`, [parentIds.filter(Boolean), id]);
+  if (rowCount) throw bad(word("errors.save_person.26"));
+}
+async function syncTreeParentDetails(c: PoolClient, id: number, father: number | null, mother: number | null) {
+  if (father) await c.query("UPDATE people SET lineage_term='בן' WHERE id=$1 AND lineage_term=''", [father]);
+  if (mother) await c.query("UPDATE people SET lineage_term='בת' WHERE id=$1 AND lineage_term=''", [mother]);
+  // A father's name also appears on the linked memorials of his children.
+  await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'')
+    FROM people p WHERE y.person_id=p.id AND (p.id=ANY($1::int[]) OR p.father_id=$2)`, [[id,father,mother].filter(Boolean), id]);
+}
 function personVersionHash(person: { known_as?: string } | null) {
   // Pending reviews saved before the caption column existed still match an empty caption.
   if (person?.known_as === '') {
@@ -959,12 +1090,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if (partners.includes(Number(ref)) && ![r.spouse_id,r.second_spouse_id].includes(id) && r.spouse_id && r.second_spouse_id) throw bad(word("errors.save_person.25"));
     }
     if (id) {
-      const cycle=(await c.query(`WITH RECURSIVE ancestors(id) AS (
-        SELECT unnest($1::int[]) UNION
-        SELECT x.parent FROM ancestors a JOIN people p ON p.id=a.id
-        CROSS JOIN LATERAL unnest(ARRAY[p.father_id,p.mother_id,p.parent_id]) x(parent) WHERE x.parent IS NOT NULL
-      ) SELECT 1 FROM ancestors WHERE id=$2`,[[father,mother,legacyParent].filter(Boolean),id])).rows.length;
-      if (cycle) throw bad(word("errors.save_person.26"));
+      await assertNoAncestorCycle(c, id, [father,mother,legacyParent]);
       // Do not move a referenced person behind a narrower visibility boundary.
       const incoming=(await c.query(`SELECT side FROM people WHERE father_id=$1 OR mother_id=$1 OR spouse_id=$1 OR second_spouse_id=$1 OR parent_id=$1
         UNION SELECT side FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows;
@@ -1008,8 +1134,6 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     }
     await c.query(`DELETE FROM person_families pf USING families f WHERE pf.family_id=f.id AND pf.person_id=$1 AND f.family_group_id=ANY(${personGroupsSql()})`,[row.id]);
     if(familyIds.length) await c.query('INSERT INTO person_families(person_id,family_id) SELECT $1,unnest($2::int[])',[row.id,familyIds]);
-    if(father) await c.query("UPDATE people SET lineage_term='בן' WHERE id=$1 AND lineage_term=''",[father]);
-    if(mother) await c.query("UPDATE people SET lineage_term='בת' WHERE id=$1 AND lineage_term=''",[mother]);
     // A complete known date makes one shared yahrzeit; unknown dates remain unknown.
     // Inherit the canonical person's owner, not the editor's currently selected family.
     if (status==='deceased' && day && month) {
@@ -1030,8 +1154,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
         await c.query('UPDATE yahrzeits SET canonical_id=$1,archived_at=now() WHERE id=$2',[canonical.id,legacy.id]);
       }
     }
-    // Keep a linked yahrzeit name in sync when its person's father is renamed too.
-    await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=ANY($1::int[]) OR p.father_id=$2)`,[[row.id,father,mother].filter(Boolean),row.id]);
+    await syncTreeParentDetails(c, row.id, father, mother);
     if(confirmationId)await c.query('UPDATE person_reviews SET result_id=$1 WHERE id=$2',[row.id,confirmationId]);
     if(reviewId) {
       await c.query("UPDATE person_reviews SET status='approved',result_id=$1,reviewed_by=$2,reviewed_at=now() WHERE id=$3",[row.id,u.id,reviewId]);
