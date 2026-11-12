@@ -403,9 +403,15 @@ async function listForm(yzId) {
 }
 
 // simchas
-V.sim = async () => {
+V.sim = async (id) => {
+  const group = Number(location.hash.split('/')[2]);
+  if (id && group && group !== ME.selected_family_group_id) {
+    await api('/me/family-group', {method:'POST',body:{family_group_id:group}});
+    await loadMe();
+  }
   const past = STATE.simPast;
-  const { simchas } = await api('/simchas' + (past ? '?past=1' : '')); STATE.sims = simchas;
+  const { simchas } = await api('/simchas' + (id ? '?id='+encodeURIComponent(id) : past ? '?past=1' : '')); STATE.sims = simchas;
+  if (id) return `<h1>🎉 אינוויטעישן</h1><p><a href="#sim">אלע שמחות</a></p>${simchas.length ? simchas.map(simCard).join('') : empty('🎉','די אינוויטעישן איז נישט פאראן אדער דו האסט נישט קיין צוטריט.')}`;
   return `<h1>🎉 שמחות</h1><div class="cap">אינוויטעישנס פאר די משפחה. דריק "איך קום" און זאג וויפיל מענטשן.</div>
   <div class="btns" style="margin-bottom:12px"><button class="btn" data-act="editsim" data-id="0">+ נייע שמחה / אינוויטעישן</button><div class="seg" style="margin:0"><button class="${past ? '' : 'on'}" data-act="simpast" data-v="0">וואס קומט</button><button class="${past ? 'on' : ''}" data-act="simpast" data-v="1">פארביי</button></div></div>
   ${simchas.length ? `<div class="simgrid">${simchas.map(simCard).join('')}</div>` : empty('🎉', past ? 'נאך נישט קיין פארביי שמחות.' : 'נאך קיין שמחות. לייג צו די ערשטע!')}`;
@@ -428,7 +434,14 @@ function simCard(x) {
   <span class="stepper"><button data-act="ppl" data-id="${x.id}" data-d="-1">−</button><span id="ppl${x.id}">${people}</span><button data-act="ppl" data-id="${x.id}" data-d="1">+</button></span><span class="muted">מענטשן</span>
   <button class="btn s ${x.my_answer === 'no' ? 'r' : 'l'}" data-act="rsvp" data-id="${x.id}" data-v="no">✗ קען נישט</button></div>
   <div class="muted" style="margin-top:8px"><a href="#" data-act="who" data-id="${x.id}">${x.yes_count} קומען (${x.yes_people} מענטשן) · ${x.no_count} נישט</a></div></div>
-  <div class="btns" style="margin-top:10px"><button class="btn s l" data-act="mazeltov" data-id="${x.id}">🎉 שיק א מזל טוב</button>${mine ? `<button class="btn s l" data-act="editsim" data-id="${x.id}">✏️ עדיט</button>` : ''}</div></div>`;
+  <div class="btns" style="margin-top:10px"><button class="btn s l" data-act="sharesim" data-id="${x.id}">📲 טייל אינוויטעישן</button><button class="btn s l" data-act="mazeltov" data-id="${x.id}">🎉 שיק א מזל טוב</button>${mine ? `<button class="btn s l" data-act="editsim" data-id="${x.id}">✏️ עדיט</button>` : ''}</div></div>`;
+}
+function shareSim(x) {
+  const link = `${location.origin}/#sim/${x.id}/${ME.selected_family_group_id}`;
+  const subject = `${x.kind} · ${x.whose}`;
+  const message = [subject, gdate(x.gdate), x.time_text, x.hall, x.address, link].filter(Boolean).join('\n');
+  const body = encodeURIComponent(message);
+  modal(`<h2>📲 טייל אינוויטעישן</h2><p>דער לינק עפנט די שמחה. מען דארף זיין איינגעלאגט און האבן צוטריט צו דער משפחה.</p><textarea id="rl" readonly rows="7" aria-label="Invitation message">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">וואטסעפ</a><a class="btn l" href="mailto:?subject=${encodeURIComponent(subject)}&body=${body}">אימעיל</a><a class="btn l" href="sms:?body=${body}">SMS</a><button class="btn l" data-act="copy">קאפי מעסעדזש און לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
 }
 function simForm(id) {
   const x = (STATE.sims || []).find((s) => s.id === id) || { audience: 'all', whose: ME.name, kind: SIMKINDS[0] };
@@ -446,7 +459,7 @@ function simForm(id) {
   ${field('נאטיץ', `<input id="sn" value="${esc(x.note || '')}">`)}
   ${id ? '' : field('אינוויטעישן (בילד אדער PDF)', '<input type="file" id="sf" accept="image/*,application/pdf">')}<div id="ip"></div>
   ${field('שיק צו', `<select id="ss">${sideOptions(x.audience, true, 'אלע קאזינס')}</select>`)}
-  <div class="err" id="ferr"></div><div class="btns"><button class="btn" id="simsave">${id ? 'סעיוו' : 'שיק אינוויטעישן'}</button><button type="button" class="btn l" data-act="close">קענסל</button>
+  <div class="err" id="ferr"></div><div class="btns"><button class="btn" id="simsave">${id ? 'סעיוו' : 'סעיוו און טייל אינוויטעישן'}</button><button type="button" class="btn l" data-act="close">קענסל</button>
   ${id ? `${x.file_id ? `<button type="button" class="btn l" data-act="delinv" data-id="${id}">אוועק אינוויטעישן</button>` : ''}<button type="button" class="btn r" style="margin-right:auto" data-act="delsim" data-id="${id}">🗑</button>` : ''}</div></form>`);
 }
 function showInv(id) {
@@ -642,7 +655,7 @@ async function go() {
   if (h === 'emailverified') { stopPoll(); clearChrome(); $('m').innerHTML = `<div class="login"><h1>✓ אימעיל באשטעטיגט</h1><p>דו קענסט יעצט באקומען א פאסווארט לינק אויף דיין אימעיל.</p><a class="btn" href="${ME ? '#me' : '#home'}">${ME ? 'מיין אקאונט' : 'לאג אין'}</a></div>`; return; }
   if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); const token = STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(token)).then((r) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = 'שלום ' + r.name + '!'; $('setpwsubmit').disabled = false; }).catch((e) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = ''; $('ferr').textContent = e.message; }); return; }
   if (h === 'forgotpw') { stopPoll(); clearChrome(); $('m').innerHTML = V.forgotpw(); return; }
-  if (!ME) { stopPoll(); clearChrome(); $('m').innerHTML = V.login(); return; }
+  if (!ME) { if (/^sim\/\d+\/\d+$/.test(h)) STATE.simNext='#'+h; stopPoll(); clearChrome(); $('m').innerHTML = V.login(); return; }
   if (ME.status !== 'active') { stopPoll(); clearChrome(); $('m').innerHTML = V.pending(); return; }
   if(ME.is_admin&&!ME.selected_family_group_id&&!['admin','me'].includes(h)){location.hash='#admin';return;}
   const [v, arg] = h.split('/'); const view = V[v] && !['login', 'pending', 'setpw'].includes(v) ? v : 'home';
@@ -683,6 +696,7 @@ const ACT = {
     const names={people:'מענטשן',yahrzeits:'יארצייטן',learn_lists:'לערנען',directory:'אדרעסן',simchas:'שמחות',files:'פיילס',messages:'מעסעדזשעס',families:'משפחה נעמען'};
     modal(`<h2>צוטיילן אלטע רעקארדס</h2>${records.people.length?`<form data-form="recoverypreview" class="card"><h3>שטעל צוריק דעם אריגינעלן בוים</h3><p>פארבינד יעדן אלטן משפחה נאמען מיט דער ריכטיגער משפחה. דערנאך זעסטו א קלארן איבערבליק איידער מען סעיווט.</p>${records.families.map(f=>field(esc(f.label),`<select required data-recovery-label="${f.id}"><option value="">— קלייב א משפחה —</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)).join('')}<div class="err"></div><button class="btn">ווייז די צוטיילונג</button></form>`:''}<p>די רעקארדס זענען פארבארגן ביז מען טיילט זיי צו. קלייב בלויז רעקארדס פון איין משפחה, מיט זייערע פארבינדונגען. קיין רעקארד ווערט נישט אויסגעמעקט.</p><form data-form="assignrecords">${field('משפחה',`<select id="assigngroup" required><option value="">—</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)}${Object.entries(records).map(([table,rows])=>`<details><summary>${names[table]} (${rows.length}${rows.length===500?'+':''})</summary>${rows.map(r=>`<label style="display:block"><input type="checkbox" name="assignrecord" data-table="${table}" value="${esc(r.id)}"> #${esc(r.id)} ${esc(r.label)}${table==='people'?`<small style="display:block;padding-inline-start:28px;font-weight:normal">${[['טאטע',r.father_name,r.father_id],['מאמע',r.mother_name,r.mother_id],['פארבונדן צו',r.parent_name,r.parent_id],['זיווג ראשון',r.spouse_name,r.spouse_id],['זיווג שני',r.second_spouse_name,r.second_spouse_id]].filter(x=>x[2]).map(x=>`${esc(x[0])}: ${esc(x[1]||'—')} (#${esc(x[2])})`).join(' · ')}${r.families?.length?'<br>משפחה נעמען: '+r.families.map(f=>esc(f.name)+' (#'+esc(f.id)+')').join(', '):''}</small>`:''}</label>`).join('')}</details>`).join('')}<div class="err"></div><button class="btn">באשטעטיג צוטיילונג</button></form>`,true);
   },
+  sharesim: el=>shareSim(STATE.sims.find(x=>x.id===Number(el.dataset.id))),
   viewperson: el=>personProfile(Number(el.dataset.id)),
   sharelearn: async ()=>{
     const l=STATE.list.l,lists=(await api('/lists')).lists;
@@ -786,7 +800,7 @@ const FORMS = {
     modal(`<h2>🌳 אינוויטעישן גרייט</h2><p><b>${esc(names)}</b></p><p class="muted">גוט פאר ${r.days} טעג. מיט דעם לינק קען מען גלייך אריין, אן ווארטן אויף אפרוביישן.</p><input id="rl" readonly class="ltr" aria-label="Invitation link" value="${esc(r.link)}"><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
   },
   forgotpw: async () => { await api('/auth/forgot-password', { method: 'POST', body: { phone: val('resetphone') } }); STATE.resetRequested = true; go(); },
-  login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast('ברוך הבא! ✓'); location.hash = STATE.joinNext || '#home'; go(); },
+  login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast('ברוך הבא! ✓'); location.hash = STATE.simNext || STATE.joinNext || '#home'; STATE.simNext=null; go(); },
   signup: async () => { const r = await api('/auth/signup', { method: 'POST', body: { name: val('fn'), phone: val('fp'), password: $('fw').value, sides: STATE.pickSides || [], invitation_token: STATE.joinToken || undefined, create_family:STATE.joinToken?undefined:val('newfamilyname'), note: val('fnote') } }); ME = r.user; await loadMe(); location.hash = STATE.joinNext || '#home'; go(); },
   setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); go(); },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
@@ -808,7 +822,7 @@ const FORMS = {
     $('simsave').disabled = true;
     try { const r = await api(id ? '/simchas/' + id : '/simchas', { method: id ? 'PUT' : 'POST', body: b });
       if (file) { const fd = new FormData(); fd.append('file', file); try { await api(`/simchas/${r.simcha.id}/invite`, { method: 'POST', body: fd }); } catch (e) { toast('⚠️ די שמחה איז געסעיווט, אבער די אינוויטעישן נישט: ' + e.message); closeModal(); return refresh(); } }
-      closeModal(); toast(id ? '✓ געסעיווט' : '✓ אינוויטעישן געשיקט צו ' + sideName(b.audience)); STATE.simPast = false; if (curView() === 'sim') refresh(); else location.hash = '#sim'; }
+      closeModal(); toast('✓ געסעיווט'); STATE.simPast = false; if (curView() === 'sim') await refresh(); else location.hash = '#sim'; if (!id) shareSim(r.simcha); }
     finally { if ($('simsave')) $('simsave').disabled = false; } },
   chat: async ()=>{
     const room=STATE.room,e=$('ci'),text=e.value.trim(),file=$('cf').files[0];if(!text&&!file)return;
