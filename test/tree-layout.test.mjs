@@ -106,3 +106,13 @@ test('fit uses inner dimensions with room for pixel rounding and does not invent
   assert.equal(layout.stageWidth,1358);assert.equal(layout.stageHeight,736);
   assert.ok(Number.isInteger(layout.stageWidth));assert.ok(Number.isInteger(layout.stageHeight));
 });
+
+
+test('children from two marriages retain both actual parents and one card per person',()=>{
+ const people=[{id:1,spouse_id:2,second_spouse_id:3},{id:2,spouse_id:1},{id:3,spouse_id:1},{id:4,father_id:1,mother_id:2},{id:5,father_id:1,mother_id:3}];
+ const {units,edges,generationConflicts}=familyUnits(people);
+ assert.deepEqual(units.flatMap(u=>u.members.map(p=>p.id)).sort(),[1,2,3,4,5]);
+ assert.equal(units.find(u=>u.members.some(p=>p.id===1)).members.length,3);
+ assert.deepEqual(edges,[{parentId:1,childId:4},{parentId:2,childId:4},{parentId:1,childId:5},{parentId:3,childId:5}]);
+ assert.equal(generationConflicts.length,0);
+});

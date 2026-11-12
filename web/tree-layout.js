@@ -4,9 +4,17 @@ export function familyUnits(people) {
   const units = [], byPerson = new Map();
   for (const person of people) {
     if (byPerson.has(person.id)) continue;
-    const spouse = byId.get(person.spouse_id);
-    const members = spouse && spouse.id !== person.id && spouse.spouse_id === person.id
-      ? [person, spouse].sort((a, b) => a.id - b.id) : [person];
+    // One canonical card per person, including remarriage chains.
+    const members = [], seen = new Set(), queue = [person];
+    for (let i=0;i<queue.length;i++) {
+      const current=queue[i];if(seen.has(current.id))continue;
+      seen.add(current.id);members.push(current);
+      for(const partnerId of [current.spouse_id,current.second_spouse_id]) {
+        const partner=byId.get(partnerId);
+        if(partner && partner.id!==current.id && [partner.spouse_id,partner.second_spouse_id].includes(current.id) && !seen.has(partner.id))queue.push(partner);
+      }
+    }
+    members.sort((a,b)=>a.id-b.id);
     const unit = { id: person.id, members, parents: new Set(), level: 0 };
     units.push(unit);
     for (const member of members) byPerson.set(member.id, unit);

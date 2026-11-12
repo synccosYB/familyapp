@@ -148,7 +148,7 @@ app.addHook('preHandler', async req => {
   const table=route.startsWith('/api/chat/message/')?'messages':({people:'people',yahrzeits:'yahrzeits',lists:'learn_lists',simchas:'simchas',directory:'directory',files:'files','person-reviews':'person_reviews'} as Record<string,string>)[route.split('/')[2]];
   if(table && params?.id) await check(table,params.id);
   const b:any=req.body || {};
-  for(const key of ['father_id','mother_id','spouse_id','parent_id','person_id','husband_person_id','wife_person_id','existing_person_id']) await check('people',b[key]);
+  for(const key of ['father_id','mother_id','spouse_id','second_spouse_id','parent_id','person_id','husband_person_id','wife_person_id','existing_person_id']) await check('people',b[key]);
   for(const key of ['yahrzeit_id','legacy_yahrzeit_id']) await check('yahrzeits',b[key]);
   await check('files',b.file_id); await check('messages',b.reply_to);
   if(Array.isArray(b.family_ids)) for(const id of b.family_ids) await check('families',id);
@@ -580,9 +580,10 @@ app.post('/api/yahrzeits/:id/remind', async (req) => {
 
 // ---------------- family tree: canonical person records ----------------
 const personSelect = `SELECT p.*, coalesce((SELECT json_agg(json_build_object('id',fam.id,'name',fam.name) ORDER BY fam.name) FROM person_families pf JOIN families fam ON fam.id=pf.family_id WHERE pf.person_id=p.id AND fam.family_group_id=p.family_group_id),'[]') families, f.name father_name, f.title father_title, m.name mother_name, m.title mother_title,
-  sp.name spouse_name, sp.title spouse_title FROM people p
+  sp.name spouse_name, sp.title spouse_title, sp2.name second_spouse_name, sp2.title second_spouse_title FROM people p
   LEFT JOIN people f ON f.id=p.father_id AND f.family_group_id=p.family_group_id LEFT JOIN people m ON m.id=p.mother_id AND m.family_group_id=p.family_group_id
-  LEFT JOIN people sp ON sp.id=p.spouse_id AND sp.family_group_id=p.family_group_id`;
+  LEFT JOIN people sp ON sp.id=p.spouse_id AND sp.family_group_id=p.family_group_id
+  LEFT JOIN people sp2 ON sp2.id=p.second_spouse_id AND sp2.family_group_id=p.family_group_id`;
 app.get('/api/people', async (req) => {
   const u = await member(req);
   return { people: await q(`${personSelect} WHERE ${sideSql('p.side',1)} ORDER BY p.id`, [mySides(u)]) };
@@ -638,7 +639,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now()) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason])).rows[0].id;
     }
     // Inline relatives and their links commit together, so a failed form leaves no orphan people.
-    for (const key of ['father_id','mother_id','spouse_id']) {
+    for (const key of ['father_id','mother_id','spouse_id','second_spouse_id']) {
       const draft = b.new_relatives?.[key];
       if (!draft) continue;
       if (b[key]) throw bad('קלייב אן עקזיסטירנדיקן מענטש אדער לייג צו א נייעם');
@@ -650,7 +651,9 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
         VALUES($1,$2,$3,'unknown',$4,$5) RETURNING *`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id])).rows[0];
       visible.push(relative);b[key] = relative.id;
     }
-    const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id);
+    const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id), secondSpouse = personId(b.second_spouse_id);
+    const partners=[spouse,secondSpouse].filter((v):v is number=>v!==null);
+    if(new Set(partners).size!==partners.length || partners.some(v=>v===id || [father,mother,personId(b.parent_id)].includes(v)))throw bad('די זיווג לינקס זענען נישט ריכטיג');
     const legacyParent = b.parent_id !== undefined ? personId(b.parent_id) : old?.parent_id || null;
     if ((father && father===mother) || (spouse && [father,mother,legacyParent].includes(spouse)) || [father,mother,spouse,legacyParent].some(v=>v && v===id)) throw bad('די משפחה לינקס זענען נישט ריכטיג');
     const status = b.life_status ?? (b.niftar ? 'deceased' : old?.life_status || 'unknown');
@@ -661,13 +664,13 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     const year = b.death_year === '' || b.death_year == null ? null : Number(b.death_year);
     if ((day !== null && (!Number.isInteger(day)||day<1||day>30)) || (month && !(MONTH_CODES as readonly string[]).includes(month)) || (year!==null && (!Number.isInteger(year)||year<=5000||year>=6000))) throw bad('דער אידישער דאטום איז נישט ריכטיג');
     if (status!=='deceased' && (day||month||year)) throw bad('א פטירה דאטום איז נאר פאר א נפטר');
-    const refs = [...new Set([father,mother,spouse,legacyParent].filter(Boolean))];
+    const refs = [...new Set([father,mother,...partners,legacyParent].filter(Boolean))];
     for (const ref of refs) {
       const r=(await c.query('SELECT * FROM people WHERE id=$1',[ref])).rows[0];
       // A linked person must be visible to every viewer of this person, not just the editor.
       if (!r || !canSee(u,r.side) || r.family_group_id!==familyContext.getStore()?.id || (r.side!=='both' && r.side!==side)) throw bad('דער פארבינדונג דארף זיין אויף דער זעלבער סייד');
-      if (ref===spouse && r.side!==side) throw bad('מאן און ווייב לינקס דארפן זיין אויף דער זעלבער סייד');
-      if (ref===spouse && r.spouse_id && r.spouse_id!==id) throw bad('דער מענטש האט שוין א מאן/ווייב לינק');
+      if (partners.includes(Number(ref)) && r.side!==side) throw bad('מאן און ווייב לינקס דארפן זיין אויף דער זעלבער סייד');
+      if (partners.includes(Number(ref)) && ![r.spouse_id,r.second_spouse_id].includes(id) && r.spouse_id && r.second_spouse_id) throw bad('ביי דעם מענטש זענען שוין ביידע זיווגים אויסגעפילט');
     }
     if (id) {
       const cycle=(await c.query(`WITH RECURSIVE ancestors(id) AS (
@@ -677,7 +680,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       ) SELECT 1 FROM ancestors WHERE id=$2`,[[father,mother,legacyParent].filter(Boolean),id])).rows.length;
       if (cycle) throw bad('א מענטש קען נישט זיין זיין אייגענער אייניקל');
       // Do not move a referenced person behind a narrower visibility boundary.
-      const incoming=(await c.query(`SELECT side FROM people WHERE father_id=$1 OR mother_id=$1 OR spouse_id=$1 OR parent_id=$1
+      const incoming=(await c.query(`SELECT side FROM people WHERE father_id=$1 OR mother_id=$1 OR spouse_id=$1 OR second_spouse_id=$1 OR parent_id=$1
         UNION SELECT side FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows;
       if (incoming.some(r=>side!=='both' && r.side!==side)) throw bad('די סייד דארף שטימען מיט די פארבינדונגען');
     }
@@ -697,13 +700,22 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if(found.length!==familyIds.length) throw bad('א משפחה איז נישט געפונען');
     }
     const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year,lineage];
-    if (old?.spouse_id && old.spouse_id!==spouse) await c.query('UPDATE people SET spouse_id=NULL WHERE id=$1 AND spouse_id=$2',[old.spouse_id,id]);
-    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15 WHERE id=$16 RETURNING *`,[...vals,id])).rows[0]
+    for(const previous of [old?.spouse_id,old?.second_spouse_id].filter(Boolean)) if(!partners.includes(previous)) {
+      await c.query('UPDATE people SET spouse_id=CASE WHEN spouse_id=$1 THEN NULL ELSE spouse_id END, second_spouse_id=CASE WHEN second_spouse_id=$1 THEN NULL ELSE second_spouse_id END WHERE id=$2',[id,previous]);
+    }
+    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15,second_spouse_id=$17 WHERE id=$16 RETURNING *`,[...vals,id,secondSpouse])).rows[0]
       : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[...vals,u.id])).rows[0];
     row.kever=str(b.kever ?? old?.kever,200);
     row.kever_address=str(b.kever_address ?? old?.kever_address,500);
     await c.query('UPDATE people SET kever=$1,kever_address=$3 WHERE id=$2',[row.kever,row.id,row.kever_address]);
-    if (spouse) await c.query('UPDATE people SET spouse_id=$1 WHERE id=$2',[row.id,spouse]);
+    await c.query('UPDATE people SET second_spouse_id=$1 WHERE id=$2',[secondSpouse,row.id]);row.second_spouse_id=secondSpouse;
+    for(const partner of partners) {
+      const other=(await c.query('SELECT spouse_id,second_spouse_id FROM people WHERE id=$1',[partner])).rows[0];
+      if(![other.spouse_id,other.second_spouse_id].includes(row.id)) {
+        const slot=other.spouse_id?'second_spouse_id':'spouse_id';
+        await c.query(`UPDATE people SET ${slot}=$1 WHERE id=$2`,[row.id,partner]);
+      }
+    }
     await c.query('DELETE FROM person_families WHERE person_id=$1',[row.id]);
     if(familyIds.length) await c.query('INSERT INTO person_families(person_id,family_id) SELECT $1,unnest($2::int[])',[row.id,familyIds]);
     if(father) await c.query("UPDATE people SET lineage_term='בן' WHERE id=$1 AND lineage_term=''",[father]);
@@ -742,7 +754,7 @@ app.delete('/api/people/:id', async req => {
     const r=(await c.query('SELECT * FROM people WHERE id=$1',[id])).rows[0];
     if (!r || !canSee(u,r.side) || r.family_group_id!==familyContext.getStore()?.id) throw new HttpError(404,'נישט געטראפן');
     if (!managesFamily(u) && r.created_by!==u.id) throw new HttpError(403,'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
-    const linked=(await c.query(`SELECT 1 FROM people WHERE parent_id=$1 OR father_id=$1 OR mother_id=$1 OR spouse_id=$1
+    const linked=(await c.query(`SELECT 1 FROM people WHERE parent_id=$1 OR father_id=$1 OR mother_id=$1 OR spouse_id=$1 OR second_spouse_id=$1
       UNION SELECT 1 FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows.length;
     if (linked) throw bad('דער מענטש איז פארבונדן מיט משפחה. נעם קודם אוועק די לינקס.');
     await c.query('DELETE FROM people WHERE id=$1',[id]); return {ok:true};

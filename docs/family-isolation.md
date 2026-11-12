@@ -93,3 +93,11 @@ simultaneous submissions idempotent. Audit/review records and candidate lists ar
 restricted to the current access family and the member's existing side visibility.
 Members see only their own reviews; family admins see reviews in their family.
 Existing duplicates are not automatically merged or removed.
+
+
+## First and second marriages
+Migration 018 preserves existing spouse links as the first recorded marriage and adds a second entry. The order is per person: his second marriage may be her first. Editors/admins can correct either profile's order. Both entries reuse canonical person IDs; inline new spouses pass the duplicate gate. Reciprocal links are updated atomically, without overwriting an occupied marriage slot. This release supports two recorded marriages per person.
+
+Children keep their explicit father_id and mother_id. Adding, removing or reordering a spouse never reassigns existing children. Profiles list children with both parents; tree cards and table show both marriage labels. The tree groups reciprocal marriage links but renders each person once and retains individual parent-child edges. Cross-family spouse links are rejected by API checks and a composite foreign key.
+
+Validation: 20 tests pass, including real PostgreSQL tests for both marriages, independent spouse order, admin corrections, unchanged children, duplicate prevention and family isolation. Browser visual QA and production deployment have not been performed.

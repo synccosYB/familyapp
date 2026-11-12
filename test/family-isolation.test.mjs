@@ -115,6 +115,31 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const editQueued=ok(await req('/people/'+editCandidate.id,{...submitted,request_key:randomBytes(16).toString('hex')},m.cookie,'PUT'));
   ok(await req('/people/'+editCandidate.id,{note:'A newer correction'},a.cookie,'PUT'));
   assert.equal((await req('/person-reviews/'+editQueued.pending_review+'/resolve',{action:'approve'},a.cookie)).status,409);
+  // Two marriages retain one father, separate mothers, and reciprocal links.
+  const wife1=ok(await req('/people',{name:'First wife',side:'a'},a.cookie)).person;
+  const wife2=ok(await req('/people',{name:'Second wife',side:'a'},a.cookie)).person;
+  const husband=ok(await req('/people',{name:'Shared father',side:'a',spouse_id:wife1.id,second_spouse_id:wife2.id},a.cookie)).person;
+  const kid1=ok(await req('/people',{name:'First marriage child',side:'a',father_id:husband.id,mother_id:wife1.id},a.cookie)).person;
+  const kid2=ok(await req('/people',{name:'Second marriage child',side:'a',father_id:husband.id,mother_id:wife2.id},a.cookie)).person;
+  let family=ok(await req('/people',undefined,a.cookie)).people;
+  assert.equal(family.find(p=>p.id===wife2.id).spouse_id,husband.id,'his second marriage can be her first');
+  assert.equal(family.find(p=>p.id===husband.id).second_spouse_name,'Second wife');
+  assert.equal((await req('/people/'+husband.id,{second_spouse_id:pb.id},a.cookie,'PUT')).status,404);
+  assert.equal((await req('/people/'+husband.id,{second_spouse_id:wife1.id},a.cookie,'PUT')).status,400);
+  assert.equal((await req('/people',{name:'Third partner blocked',side:'a',spouse_id:husband.id},a.cookie)).status,400);
+  const inlineSecond=await req('/people',{name:'Inline second duplicate',side:'a',new_relatives:{second_spouse_id:{name:'Second wife'}}},a.cookie);
+  assert.equal(inlineSecond.status,409);assert.equal(inlineSecond.body.details.field,'second_spouse_id');
+  // Admin can correct order without changing the children or duplicating anyone.
+  ok(await req('/people/'+husband.id,{spouse_id:wife2.id,second_spouse_id:wife1.id},a.cookie,'PUT'));
+  family=ok(await req('/people',undefined,a.cookie)).people;
+  assert.equal(family.find(p=>p.id===kid1.id).mother_id,wife1.id);
+  assert.equal(family.find(p=>p.id===kid2.id).mother_id,wife2.id);
+  assert.equal(family.filter(p=>p.name==='Shared father').length,1);
+  ok(await req('/people/'+husband.id,{second_spouse_id:null},a.cookie,'PUT'));
+  family=ok(await req('/people',undefined,a.cookie)).people;
+  assert.equal(family.find(p=>p.id===wife1.id).spouse_id,null);
+  assert.equal(family.find(p=>p.id===kid1.id).mother_id,wife1.id);
+  await assert.rejects(db.query(`UPDATE ${schema}.people SET second_spouse_id=$1 WHERE id=$2`,[pb.id,husband.id]),/foreign key/);
   // Family ownership can correct its own name but cannot rename another group.
   ok(await req('/admin/family-groups/'+ga,{name:'Bochner-Biderman corrected'},a.cookie,'PATCH'));
   assert.equal((await req('/admin/family-groups/'+gb,{name:'Hijacked'},a.cookie,'PATCH')).status,404);
