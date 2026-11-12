@@ -74,3 +74,22 @@ assignment, privilege escalation attempts, forged family headers/body IDs, list 
 home filtering, direct read/write attacks, chat/DM/attachment isolation, concurrent
 request context, legacy assignment, main-admin corrections, reassignment and
 revocation. Existing workflow integration tests use an explicitly assigned family.
+
+## Duplicate-person gate (follow-up change)
+
+The person form searches the people the member can already see, showing parents and
+spouse and offering an existing record. The server normalizes name spacing,
+punctuation and combining marks; it does not infer transliterations or merge records.
+An exact normalized name match requires an explicit different-person confirmation
+and explanation. A name match with the same recorded parent queues a review instead
+of creating/updating a person. Family/main admins can approve a distinct person,
+select an existing person (discarding the proposed changes), or reject. Stale edit
+reviews cannot overwrite subsequent corrections.
+
+Inline new relatives are checked too; when the name exists, select it or create a
+confirmed different person separately. This avoids creating orphan relatives during
+failed saves. Request keys and the existing transaction lock make retries and
+simultaneous submissions idempotent. Audit/review records and candidate lists are
+restricted to the current access family and the member's existing side visibility.
+Members see only their own reviews; family admins see reviews in their family.
+Existing duplicates are not automatically merged or removed.

@@ -17,7 +17,7 @@ async function api(path, opts = {}) {
   else if (opts.body !== undefined) { o.body = JSON.stringify(opts.body); o.headers['content-type'] = 'application/json'; }
   const r = await fetch('/api' + path, o);
   let j = {}; try { j = await r.json(); } catch { /* */ }
-  if (!r.ok) { const e = new Error(j.error || 'פעלער ' + r.status); e.status = r.status; throw e; }
+  if (!r.ok) { const e = new Error(j.error || 'פעלער ' + r.status); e.status = r.status; e.details=j.details; throw e; }
   return j;
 }
 const fail = (e) => { if (e && e.status === 401) { ME = null; go(); } toast('⚠️ ' + (e.message || e)); };
@@ -273,12 +273,30 @@ async function personProfile(id) {
     ${p.kever?`<p><b>בית החיים / מקום קבורה:</b> ${esc(p.kever)}</p>`:''}${p.kever_address?`<p dir="auto">📍 ${esc(p.kever_address)}</p><div class="btns">${navBtns(p.kever_address)}</div>`:''}${p.note?`<p>${esc(p.note)}</p>`:''}
     <div class="btns"><button class="btn" data-act="editp" data-id="${p.id}">✏️ עדיט פראפיל</button><button class="btn l" data-act="close">צומאכן</button></div>`);
 }
+const personNameKey=value=>String(value||'').normalize('NFKD').replace(/\p{M}/gu,'').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]/gu,'');
+function matchCards(matches,field='person') {
+  return matches.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="muted">${p.father_name?'טאטע: '+esc(p.father_name)+' · ':''}${p.mother_name?'מאמע: '+esc(p.mother_name)+' · ':''}${p.spouse_name?'מאן/ווייב: '+esc(p.spouse_name):''}</div><button type="button" class="btn s" data-act="reuseperson" data-id="${p.id}" data-field="${field}">נוץ דעם עקזיסטירנדיקן מענטש</button></div>`).join('');
+}
+function renderPersonMatches(field='person',forced) {
+  const form=document.querySelector('[data-form="person"]');if(!form)return;
+  const query=personNameKey(val(field==='person'?'pn':'new_'+field+'_name'));
+  const matches=forced||(query.length<2?[]:(STATE.people||[]).filter(p=>p.id!==Number(form.dataset.id)&&personNameKey(p.name).includes(query)).slice(0,12));
+  const target=$(field==='person'?'personmatches':'matches_'+field);if(target)target.innerHTML=matches.length?'<p>ביסטו שוין דא? קלייב אן עקזיסטירנדיקן מענטש כדי נישט צו מאכן א דאפלטן רעקארד.</p>'+matchCards(matches,field):'';
+}
+V.personreviews=async()=>{
+  const {reviews}=await api('/person-reviews');
+  return `<h1>מענטשן איבערזיכט</h1><p>נוץ דעם עקזיסטירנדיקן מענטש, אדער אפרוביר א באזונדערן מענטש. קיינער ווערט נישט אויטאמאטיש צוזאמענגעשטעלט. ביים אויסקלייבן אן עקזיסטירנדיקן מענטש ווערן די פארגעשלאגענע ענדערונגען נישט אנגעווענדט.</p>${reviews.map(r=>`<section class="card"><h2>${esc(r.payload.name||'עדיט מענטש')}</h2><p>${esc(r.reason)}</p><p>פארגעשלאגענע פארבינדונגען: טאטע: ${esc(r.proposal.father||'נישט באקאנט')} · מאמע: ${esc(r.proposal.mother||'נישט באקאנט')} · מאן/ווייב: ${esc(r.proposal.spouse||'נישט באקאנט')}</p><p>סטאטוס: ${esc(({pending:'ווארט אויף אדמין',approved:'אפרובירט',confirmed:'באשטעטיגט אלס אנדערער מענטש',existing:'עקזיסטירנדיקער מענטש אויסגעקליבן',rejected:'אפגעזאגט'})[r.status])}</p>${r.result_id?`<button class="btn s" data-act="editp" data-id="${r.result_id}">עפן מענטש</button>`:''}${r.status==='pending'&&isManager()?`<div>${r.matches.map(p=>`<p>${esc(p.name)} · ${esc(p.father_name||'')} · ${esc(p.mother_name||'')} · ${esc(p.spouse_name||'')} <button class="btn s" data-act="reviewperson" data-id="${r.id}" data-v="existing" data-person="${p.id}">נוץ דעם</button></p>`).join('')}</div><button class="btn" data-act="reviewperson" data-id="${r.id}" data-v="approve">אפרוביר אלס צווייטער מענטש</button><button class="btn r" data-act="reviewperson" data-id="${r.id}" data-v="reject">אפזאגן</button>`:''}</section>`).join('')||'<p>נאך קיין בקשות</p>'}`;
+};
 async function personForm(id, parentId, defaults={}) {
   const {people:P}=await api('/people'); STATE.people=P;
   const p = {...(P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null}),...defaults};
-  const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">— נישט באקאנט / קיין לינק —</option><option value="new">+ לייג צו א נייעם מענטש</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">ווערט צוגעלייגט און פארבונדן ווען דו סעיווסט.</p>${field('טיטל', `<input id="new_${key}_title" dir="auto">`)}${field('נאמען', `<input id="new_${key}_name" dir="auto">`)}</div>`);
+  const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">— נישט באקאנט / קיין לינק —</option><option value="new">+ לייג צו א נייעם מענטש</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">ווערט צוגעלייגט און פארבונדן ווען דו סעיווסט.</p>${field('טיטל', `<input id="new_${key}_title" dir="auto">`)}${field('נאמען', `<input id="new_${key}_name" dir="auto">`)}<div id="matches_${key}" aria-live="polite"></div></div>`);
   modal(`<h2 style="margin-top:0">${id ? '✏️ ' + esc(p.name) : '+ מענטש אין פעמילי טרי'}</h2><form data-form="person" data-id="${id}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?'<p class="muted">סעיוון וועט פארבינדן דעם אלטן יארצייט צו דעם פראפיל. די אלטע אינפארמאציע בלייבט געהאלטן.</p>':''}
   <div class="grid g2"><div>${field('טיטל',`<input id="ptitle" value="${esc(p.title)}" placeholder="הרב / מרת">`)}</div><div>${field('נאמען',`<input id="pn" value="${esc(p.name)}">`)}</div></div>
+  <div id="personmatches" aria-live="polite"></div>
+  <label><input id="pdistinct" type="checkbox"> דאס איז א צווייטער מענטש</label>
+  ${field('פארוואס איז דאס א צווייטער מענטש? (אויב עס איז דא דער זעלבער נאמען)', '<textarea id="pdistinctreason" maxlength="500"></textarea>')}
+  <p class="muted">דער זעלבער נאמען מיט דעם זעלבן טאטע אדער מאמע דארף אדמין איבערזיכט.</p>
   ${choice('father_id','טאטע')}${choice('mother_id','מאמע')}${choice('spouse_id','מאן / ווייב')}
   ${p.parent_id ? choice('parent_id','פריערדיגער עלטערן לינק (נאכנישט באשטימט טאטע / מאמע)') : '<input type="hidden" id="pparent_id" value="">'}
   ${p.spouse && !p.spouse_id ? `<p class="muted">פריערדיגער מאן / ווייב נאמען: ${esc(p.spouse)}. קלייב דעם מענטש אויבן צו פארבינדן.</p>` : ''}
@@ -297,6 +315,7 @@ async function personForm(id, parentId, defaults={}) {
   ${field('נאטיץ',`<input id="pno" value="${esc(p.note)}">`)}
   <div class="err" id="ferr"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button>
   ${id ? `<button type="button" class="btn l" data-act="addchild" data-id="${id}">+ קינד</button><button type="button" class="btn r" data-act="delp" data-id="${id}">🗑</button>` : ''}</div></form>`);
+  renderPersonMatches();
 }
 
 // learning
@@ -545,7 +564,7 @@ V.admin = async () => {
   const { users, owner_phone } = await api('/admin/users'); STATE.users = users; PENDING = users.filter((u) => u.status === 'pending').length;
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
   const sidesBox = (u) => ['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
-  return `<h1>🛡️ אדמין</h1><div class="cap">אפרובירן נייע קאזינס, טוישן סייד, מאכן אנדערע אדמין.</div>
+  return `<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>🛡️ אדמין</h1><div class="cap">אפרובירן נייע קאזינס, טוישן סייד, מאכן אנדערע אדמין.</div>
   ${ME.is_admin?`<section class="card"><h2>משפחה צוטריט</h2>${field('משפחה וואס דו קוקסט יעצט',`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`)}<form data-form="newgroup">${field('מאך א נייע משפחה','<input id="groupname" maxlength="120" required>')}<button class="btn">מאך משפחה</button></form><button class="btn l" data-act="unassigned">צוטיילן אלטע רעקארדס</button></section>`:''}
   <form class="card" data-form="renamegroup">${field('עדיט משפחה נאמען',`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="דער ריכטיגער משפחה נאמען" required>`)}<button class="btn">סעיוו משפחה נאמען</button><div class="err"></div></form>
   <h2>🔑 פאסווארט בקשות (${resets.length})</h2><p class="muted">באשטעטיג ווער דער מענטש איז איידער דו שיקסט א לינק. דער לינק איז איינמאליג און גוט פאר איין שעה.</p>
@@ -565,7 +584,7 @@ V.admin = async () => {
   <div>${field('סייד ב (אידיש)', `<input id="st_side_b_yi" value="${esc(S.side_b_yi)}">`)}${field('משפחה נאמען', `<input id="st_side_b_family_yi" value="${esc(S.side_b_family_yi)}">`)}${field('Side B (English)', `<input id="st_side_b_en" class="ltr" value="${esc(S.side_b_en)}">`)}${field('Family name (English)', `<input id="st_side_b_family_en" class="ltr" value="${esc(S.side_b_family_en)}">`)}</div></div>
   <div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>`:''}`;
 };
-V.me = async () => `<h1>👤 מיין אקאונט</h1><div class="cap">${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ' · אדמין' : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
+V.me = async () => `<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>👤 מיין אקאונט</h1><div class="cap">${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ' · אדמין' : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
   <form data-form="me" class="card" style="margin-bottom:14px">${field('נאמען', `<input id="mn" value="${esc(ME.name)}">`)}${field('אימעיל (נישט מוז)', `<input id="mem" type="email" class="ltr" value="${esc(ME.email || '')}">`)}<div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>
   <section class="card" style="margin-bottom:14px"><h2>אימעיל פאר פאסווארט הילף</h2>${ME.email_verified ? '<p role="status">✓ דיין אימעיל איז באשטעטיגט. דו קענסט באקומען א פאסווארט לינק אויף אימעיל.</p>' : !EMAIL_READY ? '<p class="muted">אימעיל איז נאך נישט פארבונדן. דער אדמין קען דערווייל העלפן מיט א פאסווארט לינק.</p>' : !ME.email ? '<p class="muted">סעיוו קודם דיין אימעיל אדרעס אויבן, און באשטעטיג עס דא.</p>' : `<p class="muted">באשטעטיג דיין געסעיווטן אימעיל: <span dir="ltr">${esc(ME.email)}</span></p><form data-form="emailverifyrequest">${field('פאסווארט פאר אימעיל באשטעטיגונג', '<input id="emailverifypw" type="password" autocomplete="current-password" required>')}<div class="err" role="alert"></div><div id="emailverifystatus" role="status"></div><button class="btn">שיק א באשטעטיגונג אימעיל</button></form>`}</section>
   <form data-form="myphone" class="card" style="margin-bottom:14px"><h2>טויש טעלעפאן נומער</h2><p class="muted">דאס איז דער נומער צו לאג אין. פאר אן אויסלענדישן נומער, לייג צו דעם לאנד קאוד.</p>${field('טעלעפאן נומער', `<input id="mphone" type="tel" class="ltr" autocomplete="tel" value="+${esc(ME.phone)}" required>`)}${field('יעצטיגע פאסווארט', '<input id="mphonepw" type="password" autocomplete="current-password" required>')}<div class="err" id="phoneerr"></div><button class="btn">סעיוו טעלעפאן נומער</button></form>
@@ -616,6 +635,16 @@ async function loadMe() { const r = await api('/me'); ME = r.user; EMAIL_READY =
 
 // ---------- actions ----------
 const ACT = {
+  reuseperson:async el=>{
+    const field=el.dataset.field,id=Number(el.dataset.id);
+    if(field==='person')return personForm(id);
+    const select=$('p'+field);if(![...select.options].some(o=>o.value===String(id)))select.add(new Option(el.closest('.card').querySelector('b').textContent,String(id)));
+    select.value=String(id);$('new_'+field).hidden=true;
+  },
+  reviewperson:async el=>{
+    if(!confirm(el.dataset.v==='approve'?'אפרובירן אלס א באזונדערן מענטש?':'באשטעטיגן די החלטה?'))return;
+    await api('/person-reviews/'+el.dataset.id+'/resolve',{method:'POST',body:{action:el.dataset.v,existing_person_id:el.dataset.person?Number(el.dataset.person):undefined}});refresh();
+  },
   familyadmin:async el=>{await api('/admin/users/'+el.dataset.id,{method:'PATCH',body:{is_family_admin:el.dataset.v==='1'}});refresh();},
   unassigned:async()=>{
     const {records}=await api('/admin/unassigned-records');
@@ -722,7 +751,11 @@ const FORMS = {
     for (const key of ['father_id','mother_id','spouse_id']) if (b[key] === 'new') {
       b.new_relatives[key] = { name: val('new_' + key + '_name'), title: val('new_' + key + '_title') }; b[key] = null;
     }
-    await api(id ? '/people/' + id : '/people', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ ' + b.name + ' געסעיווט'); refresh(); },
+    b.confirm_distinct=$('pdistinct').checked;b.distinct_reason=val('pdistinctreason');
+    const fingerprint=JSON.stringify(b);if(f._saveFingerprint!==fingerprint){f._saveKey=crypto.randomUUID();f._saveFingerprint=fingerprint;}b.request_key=f._saveKey;
+    let result;try{result=await api(id ? '/people/' + id : '/people', { method: id ? 'PUT' : 'POST', body: b });}
+    catch(e){if(e.details?.code==='person_matches')renderPersonMatches(e.details.field,e.details.matches);throw e;}
+    closeModal();if(result.pending_review){toast('געשיקט צום אדמין — נאך נישט צוגעלייגט');location.hash='#personreviews';}else{toast('✓ ' + b.name + ' געסעיווט');refresh();} },
   list: async () => { const r = await api('/lists', { method: 'POST', body: { kind: val('lk'), yahrzeit_id: val('lyz') || null, niftar: val('ln'), target_date: val('ld'), side: val('ls') } }); closeModal(); toast('✓ ליסט געמאכט'); location.hash = '#learn/' + r.list.id; },
   sim: async (f) => { const id = Number(f.dataset.id); const kind = val('sk') === 'אנדערע' ? (val('sko') || 'שמחה') : val('sk');
     const b = { kind, whose: val('sw'), gdate: val('sd'), time_text: val('stt'), hdate_text: val('sh'), hall: val('sp'), address: val('sa'), note: val('sn'), audience: val('ss') };
@@ -757,6 +790,7 @@ document.addEventListener('click', async (ev) => {
 });
 document.addEventListener('change', async (ev) => { const el = ev.target.closest('[data-change]'); if (!el || el.dataset.change==='familyfilter') return; try { await CHANGE[el.dataset.change](el); } catch (e) { fail(e); } });
 document.addEventListener('input', (ev) => {
+  if(ev.target.id==='pn'){if($('pdistinct'))$('pdistinct').checked=false;return renderPersonMatches();}const relative=/^new_(father_id|mother_id|spouse_id)_name$/.exec(ev.target.id);if(relative)return renderPersonMatches(relative[1]);
   const el = ev.target;if(el.id==='ci'){STATE.chatActivity=Date.now();mentionChoices();return;} if (el.dataset.input !== 'q') return; STATE.q = el.value;
   const Q = STATE.q.trim(); const L = (STATE.dir || []).filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
   $('dirlist').innerHTML = dirCards(L); $('qn').textContent = L.length + ' משפחות';
