@@ -538,6 +538,16 @@ app.get('/api/admin/unassigned-records', async req => {
     const label=({people:'name',yahrzeits:'name',learn_lists:'niftar',directory:"concat_ws(' ',husband,wife)",simchas:'whose',files:'filename',messages:'left(body,100)',families:'name'} as const)[table];
     records[table]=await q(`SELECT id,${label} label FROM ${table} WHERE family_group_id IS NULL ORDER BY id LIMIT 500`);
   }
+  // Recovery needs the original graph, not a list of ambiguous names. This route
+  // is global-admin-only in preHandler; never expose unassigned data to members.
+  const people=await q(`SELECT p.id,p.father_id,p.mother_id,p.parent_id,p.spouse_id,p.second_spouse_id,
+    fa.name father_name,mo.name mother_name,pa.name parent_name,sp.name spouse_name,ss.name second_spouse_name,
+    coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name)) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=p.id),'[]') families
+    FROM people p LEFT JOIN people fa ON fa.id=p.father_id LEFT JOIN people mo ON mo.id=p.mother_id
+    LEFT JOIN people pa ON pa.id=p.parent_id LEFT JOIN people sp ON sp.id=p.spouse_id LEFT JOIN people ss ON ss.id=p.second_spouse_id
+    WHERE p.family_group_id IS NULL ORDER BY p.id LIMIT 500`);
+  const details=new Map(people.map(p=>[p.id,p]));
+  records.people=records.people.map((r:any)=>({...r,...details.get(r.id)}));
   return {records};
 });
 app.post('/api/admin/assign-records', async req => {

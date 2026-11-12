@@ -75,6 +75,9 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   // Legacy records remain hidden; explicit assignment is atomic and checked for cross-family edges.
   const legacy=(await db.query(`INSERT INTO ${schema}.people(name,side) VALUES('Legacy hidden','a') RETURNING id`)).rows[0];
   assert.ok(!JSON.stringify(ok(await req('/people',undefined,a.cookie))).includes('Legacy hidden'));
+  const recovery=ok(await req('/admin/unassigned-records',undefined,root.cookie)).records.people.find(p=>p.id===legacy.id);
+  assert.equal(recovery.label,'Legacy hidden');assert.equal(recovery.father_id,null);assert.deepEqual(recovery.families,[]);
+
   ok(await req('/admin/assign-records',{family_group_id:ga,records:{people:[legacy.id]}},root.cookie));
   assert.ok(JSON.stringify(ok(await req('/people',undefined,a.cookie))).includes('Legacy hidden'));
   assert.equal((await req('/admin/assign-records',{family_group_id:gb,records:{people:[legacy.id]}},root.cookie)).status,409);
