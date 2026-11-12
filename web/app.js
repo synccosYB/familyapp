@@ -96,7 +96,7 @@ V.login = () => {
    ${field('וועמענס קינד/אייניקל ביסטו? (כדי דער אדמין זאל וויסן)', '<input id="fnote" placeholder="למשל: א זון פון משה באכנער">')}` : ''}
   <div class="err" id="ferr"></div>
   <button class="btn" style="width:100%">${mode === 'signup' ? 'מאך אן אקאונט' : 'לאג אין'}</button>
-  ${mode === 'login' ? '<div class="muted" style="margin-top:12px"><button type="button" class="btn l" data-act="forgotpw">פארגעסן דאס פאסווארט?</button></div>' : '<div class="muted" style="margin-top:12px">נאכן רעדזשיסטרירן מוז דער אדמין דיך אפרובירן.</div>'}
+  ${mode === 'login' ? '<div class="muted" style="margin-top:12px"><button type="button" class="btn l" data-act="forgotpw">פארגעסן דאס פאסווארט?</button></div>' : `<div class="muted" style="margin-top:12px">${STATE.joinSides ? 'מיט דיין אינוויטעישן קענסטו גלייך אריין.' : 'נאכן רעדזשיסטרירן מוז דער אדמין דיך אפרובירן.'}</div>`}
   </form></div>`;
 };
 V.pending = () => `<div class="login"><div style="font-size:54px">⏳</div><h1>שלום ${esc(ME.name.split(' ')[0])}!</h1>
@@ -131,7 +131,7 @@ V.home = async () => {
   <div style="margin-top:18px"><button class="btn l" data-act="familyinvite">📲 אינווייט א קאזין</button></div>`;
 };
 function familyInviteForm() {
-  modal(`<h2>📲 אינווייט א קאזין</h2><p class="muted">קלייב אויס איין סייד אדער ביידע. דער קאזין וועט ווארטן אויף אדמין אפרוביישן.</p>
+  modal(`<h2>📲 אינווייט א קאזין</h2><p class="muted">קלייב אויס איין סייד אדער ביידע. דער קאזין קען גלייך אריינלאגן מיט דעם לינק.</p>
     <form data-form="familyinvite">${field('צו וועלכע משפחה סייד?', `<select id="inviteSide">${sideOptions(STATE.side === 'all' ? (both() ? 'both' : mySides()[0]) : STATE.side)}</select>`)}
     <div class="err" role="alert"></div><div class="btns"><button class="btn">מאך א לינק</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>`);
 }
@@ -258,6 +258,7 @@ async function personForm(id, parentId) {
   <div>${field('חודש פון פטירה',`<select id="pmonth"><option value="">— נישט באקאנט —</option>${HMONTHS.map(([k,t])=>`<option value="${k}" ${p.death_hmonth===k?'selected':''}>${t}</option>`).join('')}</select>`)}</div></div>
   ${field('יאר פון פטירה',`<input id="pyear" type="number" min="5001" max="5999" value="${esc(p.death_year||'')}">`)}
   <p class="muted">א באקאנטער טאג און חודש לייגן אויטאמאטיש צו דעם יארצייט.</p></details>
+  ${field('בית החיים / מקום קבורה',`<input id="pkever" value="${esc(p.kever)}" placeholder="למשל: הר הזיתים, חלקה / שורה / מספר קבר">`)}
   ${field('נאטיץ',`<input id="pno" value="${esc(p.note)}">`)}
   <div class="err" id="ferr"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button>
   ${id ? `<button type="button" class="btn l" data-act="addchild" data-id="${id}">+ קינד</button><button type="button" class="btn r" data-act="delp" data-id="${id}">🗑</button>` : ''}</div></form>`);
@@ -571,7 +572,7 @@ const FORMS = {
     const r = await api('/family-invitations', { method: 'POST', body: { sides: side === 'both' ? ['a', 'b'] : [side] } });
     const names = r.sides.map(c => sideLong(c)).join(' + ');
     const message = `${S.family_yi}: דו ביסט איינגעלאדנט צו ${names}. מאך אן אקאונט דא: ${r.link}`;
-    modal(`<h2>🌳 אינוויטעישן גרייט</h2><p><b>${esc(names)}</b></p><p class="muted">גוט פאר ${r.days} טעג. נייע קאזינס דארפן אדמין אפרוביישן.</p><input id="rl" readonly class="ltr" aria-label="Invitation link" value="${esc(r.link)}"><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+    modal(`<h2>🌳 אינוויטעישן גרייט</h2><p><b>${esc(names)}</b></p><p class="muted">גוט פאר ${r.days} טעג. מיט דעם לינק קען מען גלייך אריין, אן ווארטן אויף אפרוביישן.</p><input id="rl" readonly class="ltr" aria-label="Invitation link" value="${esc(r.link)}"><div class="btns"><a class="btn g" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
   },
   forgotpw: async () => { await api('/auth/forgot-password', { method: 'POST', body: { phone: val('resetphone') } }); STATE.resetRequested = true; go(); },
   login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast('ברוך הבא! ✓'); location.hash = '#home'; go(); },
@@ -579,7 +580,7 @@ const FORMS = {
   setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); go(); },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
-  person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno')};
+  person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno'),kever:val('pkever')};
     b.new_relatives = {};
     for (const key of ['father_id','mother_id','spouse_id']) if (b[key] === 'new') {
       b.new_relatives[key] = { name: val('new_' + key + '_name'), title: val('new_' + key + '_title') }; b[key] = null;

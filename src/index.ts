@@ -180,8 +180,8 @@ app.post('/api/auth/signup', authLimit, async (req, reply) => {
   const p = pwProblem(b.password); if (p) throw bad(p);
   if (await q1('SELECT 1 FROM users WHERE phone=$1', [phone])) throw new HttpError(409, 'דער טעלעפאן נומער איז שוין רעדזשיסטרירט. לאג אין.');
   const isQa = !!config.qaPhonePrefix && phone.startsWith(config.qaPhonePrefix);
-  const u = await q1(`INSERT INTO users(name,phone,email,password_hash,sides,is_qa,note,invited_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [name, phone, email, await hashPw(b.password), sides, isQa, str(b.note, 300), invitation?.created_by || null]);
+  const u = await q1(`INSERT INTO users(name,phone,email,password_hash,sides,is_qa,note,invited_by,status,approved_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $9='active' THEN now() ELSE NULL END) RETURNING *`,
+    [name, phone, email, await hashPw(b.password), sides, isQa, str(b.note, 300), invitation?.created_by || null, invitation ? 'active' : 'pending']);
   await newSession(reply, u.id);
   return { user: publicUser(u) };
 });
@@ -522,6 +522,8 @@ async function savePerson(u: User, b: any, id?: number) {
     if (old?.spouse_id && old.spouse_id!==spouse) await c.query('UPDATE people SET spouse_id=NULL WHERE id=$1 AND spouse_id=$2',[old.spouse_id,id]);
     const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15 WHERE id=$16 RETURNING *`,[...vals,id])).rows[0]
       : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[...vals,u.id])).rows[0];
+    row.kever=str(b.kever ?? old?.kever,200);
+    await c.query('UPDATE people SET kever=$1 WHERE id=$2',[row.kever,row.id]);
     if (spouse) await c.query('UPDATE people SET spouse_id=$1 WHERE id=$2',[row.id,spouse]);
     await c.query('DELETE FROM person_families WHERE person_id=$1',[row.id]);
     if(familyIds.length) await c.query('INSERT INTO person_families(person_id,family_id) SELECT $1,unnest($2::int[])',[row.id,familyIds]);
@@ -529,8 +531,8 @@ async function savePerson(u: User, b: any, id?: number) {
     if(mother) await c.query("UPDATE people SET lineage_term='בת' WHERE id=$1 AND lineage_term=''",[mother]);
     // A complete known date makes one shared yahrzeit; unknown dates remain unknown.
     if (status==='deceased' && day && month) {
-      await c.query(`INSERT INTO yahrzeits(name,side,hday,hmonth,death_year,person_id,created_by)
-        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(person_id) DO UPDATE SET name=excluded.name,side=excluded.side,hday=excluded.hday,hmonth=excluded.hmonth,death_year=excluded.death_year`,[[row.title,row.name].filter(Boolean).join(' '),side,day,month,year,row.id,u.id]);
+      await c.query(`INSERT INTO yahrzeits(name,side,hday,hmonth,death_year,person_id,created_by,kever)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(person_id) DO UPDATE SET name=excluded.name,side=excluded.side,hday=excluded.hday,hmonth=excluded.hmonth,death_year=excluded.death_year,kever=excluded.kever`,[[row.title,row.name].filter(Boolean).join(' '),side,day,month,year,row.id,u.id,row.kever]);
     } else await c.query('DELETE FROM yahrzeits WHERE person_id=$1',[row.id]);
     // Keep a linked yahrzeit name in sync when its person's father is renamed too.
     await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=ANY($1::int[]) OR p.father_id=$2)`,[[row.id,father,mother].filter(Boolean),row.id]);

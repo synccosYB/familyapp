@@ -50,9 +50,9 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
     const newcomer=await inviteRequest('/auth/signup',{name:'Invited cousin '+sides.join(''),phone:'84555502'+(sides.length===2?'03':sides[0]==='a'?'01':'02'),password:'invited-password',sides:['a','b'],invitation_token:token});
     assert.equal(newcomer.status,200,JSON.stringify(newcomer.body));
     assert.deepEqual(newcomer.body.user.sides,sides,'ignore client attempts to add another side');
-    assert.equal(newcomer.body.user.status,'pending');
-    assert.equal((await inviteRequest('/people',undefined,newcomer.cookie)).status,403);
-    assert.equal((await inviteRequest('/family-invitations',{sides},newcomer.cookie)).status,403);
+    assert.equal(newcomer.body.user.status,'active');
+    assert.equal((await inviteRequest('/people',undefined,newcomer.cookie)).status,200);
+    assert.equal((await inviteRequest('/family-invitations',{sides},newcomer.cookie)).status,200);
     const db=new pg.Pool({connectionString:conn.toString()});
     try {
       const row=(await db.query('SELECT invited_by FROM users WHERE id=$1',[newcomer.body.user.id])).rows[0];
