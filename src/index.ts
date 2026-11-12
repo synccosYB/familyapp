@@ -712,6 +712,14 @@ const personId = (v: any): number | null => {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v); if (!Number.isSafeInteger(n) || n < 1) throw bad('קלייב אויס א מענטש'); return n;
 };
+function personVersionHash(person: { known_as?: string } | null) {
+  // Pending reviews saved before the caption column existed still match an empty caption.
+  if (person?.known_as === '') {
+    const { known_as, ...fields } = person;
+    return sha(JSON.stringify(fields));
+  }
+  return sha(JSON.stringify(person));
+}
 async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
   return tx(async c => {
     // Serialize graph changes so two simultaneous saves cannot introduce ancestry cycles.
@@ -739,7 +747,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       return response;
     };
     const old = id ? (await c.query('SELECT * FROM people WHERE id=$1 FOR UPDATE',[id])).rows[0] : null;
-    if(review?.person_id && sha(JSON.stringify(old))!==review.previous_hash)throw new HttpError(409,'דער מענטש איז געענדערט זינט דער בקשה. עדיט דעם יעצטיגן רעקארד.');
+    if(review?.person_id && personVersionHash(old)!==review.previous_hash)throw new HttpError(409,'דער מענטש איז געענדערט זינט דער בקשה. עדיט דעם יעצטיגן רעקארד.');
     if (id && (!old || !canSee(u,old.side) || !(await c.query(`SELECT 1 FROM people WHERE id=$1 AND ${personSql()}`,[id])).rows.length)) throw new HttpError(404,'נישט געטראפן');
     if(old && !u.is_admin && (await c.query('SELECT 1 FROM person_family_access WHERE person_id=$1 AND family_group_id<>$2',[id,old.family_group_id])).rows.length)throw new HttpError(403,'א געמיינזאמער מענטש דארף ווערן געענדערט דורך דעם הויפט אדמין');
     const legacy=b.legacy_yahrzeit_id ? (await c.query('SELECT * FROM yahrzeits WHERE id=$1 FOR UPDATE',[Number(b.legacy_yahrzeit_id)])).rows[0] : null;
@@ -789,11 +797,11 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if(b.confirm_distinct!==true || reason.length<5)throw new HttpError(409,'דער נאמען עקזיסטירט שוין. קלייב דעם מענטש, אדער באשטעטיג אז דאס איז א צווייטער מענטש און ערקלער פארוואס.',{code:'person_matches',field:'person',matches:candidates.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
       if(!key)throw bad('די באשטעטיגונג דארף א סעיוו קוד');
       if(candidates.some(p=>sameParent(p,b))) {
-        const pending=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,family_group_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason,owner])).rows[0];
+        const pending=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,family_group_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?personVersionHash(old):null,reason,owner])).rows[0];
         return finish({pending_review:pending.id,...(owner!==viewedGroup?{review_family_group_id:owner}:{})});
       }
       // Keep the explicit same-name exception for later audit; no automatic merge.
-      confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at,family_group_id) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now(),$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?sha(JSON.stringify(old)):null,reason,owner])).rows[0].id;
+      confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at,family_group_id) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now(),$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?personVersionHash(old):null,reason,owner])).rows[0].id;
     }
     const relativeGroup=accessGroups.has(viewedGroup)?viewedGroup:owner;
     // Inline relatives and their links commit together, so a failed form leaves no orphan people.
@@ -805,8 +813,8 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if (!relativeName) throw bad('שרייב דעם נאמען פונעם נייעם מענטש');
       const existing=matches(relativeName);
       if(existing.length)throw new HttpError(409,'דער קרוב עקזיסטירט אפשר שוין. קלייב אים פון דער ליסטע. אויב דאס איז א צווייטער מענטש, לייג אים צו באזונדער מיט אן ערקלערונג.',{code:'person_matches',field:key,matches:existing.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
-      const relative = (await c.query(`INSERT INTO people(name,title,side,life_status,lineage_term,created_by,family_group_id)
-        VALUES($1,$2,$3,'unknown',$4,$5,$6) RETURNING *`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id,relativeGroup])).rows[0];
+      const relative = (await c.query(`INSERT INTO people(name,title,side,life_status,lineage_term,created_by,family_group_id,known_as)
+        VALUES($1,$2,$3,'unknown',$4,$5,$6,$7) RETURNING *`, [relativeName,str(draft.title,80),side,key==='father_id'?'בן':key==='mother_id'?'בת':'',u.id,relativeGroup,str(draft.known_as,160)])).rows[0];
       visible.push(relative);b[key] = relative.id;
     }
     const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id), secondSpouse = personId(b.second_spouse_id);
@@ -849,12 +857,12 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       const family=(await c.query(`INSERT INTO families(name,created_by,family_group_id) VALUES($1,$2,$3) ON CONFLICT(family_group_id,lower(name)) DO UPDATE SET name=families.name RETURNING id`,[newFamily,u.id,relativeGroup])).rows[0];
       if(!familyIds.includes(family.id)) familyIds.push(family.id);
     }
-    const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year,lineage];
+    const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year,lineage,str(b.known_as,160)];
     for(const previous of [old?.spouse_id,old?.second_spouse_id].filter(Boolean)) if(!partners.includes(previous)) {
       await c.query('UPDATE people SET spouse_id=CASE WHEN spouse_id=$1 THEN NULL ELSE spouse_id END, second_spouse_id=CASE WHEN second_spouse_id=$1 THEN NULL ELSE second_spouse_id END WHERE id=$2',[id,previous]);
     }
-    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15,second_spouse_id=$17,family_group_id=$18 WHERE id=$16 RETURNING *`,[...vals,id,secondSpouse,owner])).rows[0]
-      : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,created_by,family_group_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,[...vals,u.id,owner])).rows[0];
+    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15,known_as=$16,second_spouse_id=$18,family_group_id=$19 WHERE id=$17 RETURNING *`,[...vals,id,secondSpouse,owner])).rows[0]
+      : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,known_as,created_by,family_group_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,[...vals,u.id,owner])).rows[0];
     if(assignAccess) {
       const groups=[...accessGroups];
       if(old) {
