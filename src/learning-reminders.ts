@@ -1,10 +1,22 @@
 import { config } from './config.js';
 import { pool } from './db.js';
 import { emailReady, normalizeEmail } from './email.js';
+import { learningTitleSql } from './learning-dedications.js';
+import { learningText } from './learning-text.js';
 import { MASECHTOS } from './masechtos.js';
 
 export interface LearningUnit { idx: number; chapter: number; mishnah: number }
-export interface LearningMail { title: string; lines: string[]; target: string | null; days: number | null; remaining: number; link: string; sender?: string; settingsLink?: string }
+export interface LearningMail {
+  title: string;
+  lines: string[];
+  texts?: string[];
+  target: string | null;
+  days: number | null;
+  remaining: number;
+  link: string;
+  sender?: string;
+  settingsLink?: string;
+}
 const escape = (s: string) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 export function reminderClock(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone, year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23' }).formatToParts(now);
@@ -18,19 +30,43 @@ export function dailyLearning(kind: string, units: LearningUnit[], target: strin
   const count = days === null ? units.length : Math.ceil(units.length/days);
   const selected = [...units].sort((a,b)=>a.idx-b.idx || a.chapter-b.chapter || a.mishnah-b.mishnah).slice(0,count);
   const lines = selected.map(u => kind === 'tehillim' ? `תהילים — קאפיטל ${u.idx}` : `${MASECHTOS[u.idx].name} — פרק ${u.chapter}, משנה ${u.mishnah}`);
-  return { lines, days, remaining: units.length };
+  return { lines, selected, days, remaining: units.length };
 }
+
+function readingContent(lines: string[], texts: string[]) {
+  const plain = lines.map((line, index) => `${line}\n${texts[index]}`);
+  const sections: string[] = [];
+  let bytes = 0;
+  for (const [index, text] of texts.entries()) {
+    const section = `<section><h3>${escape(lines[index])}</h3><p dir="rtl" lang="he" style="font-size:18px;line-height:1.75">${escape(text).replaceAll('\n','<br>')}</p></section>`;
+    bytes += Buffer.byteLength(section);
+    // Leave room for the rest of the message and keep each passage whole.
+    if (bytes > 64 * 1024) break;
+    sections.push(section);
+  }
+  const attached = sections.length < texts.length;
+  const notice = 'דער גאנצער טעקסט פון היינטיגן לימוד איז אויך אינעם בייגעלייגטן פייל.';
+  return {
+    text: (attached ? [notice,...plain.slice(0,sections.length)] : plain).join('\n\n'),
+    html: (attached ? `<p>${notice}</p>` : '') + sections.join(''),
+    attachments: attached ? [{filename:'daily-learning.txt',content:Buffer.from('\uFEFF'+plain.join('\n\n')).toString('base64')}] : undefined
+  };
+}
+
 export async function sendLearningEmail(to: string, mail: LearningMail, key: string, send: typeof fetch = fetch) {
   if (!emailReady()) throw new Error('Email is not configured');
   const subject = 'דיין טעגליכער לימוד — '+mail.title;
   const note = mail.target ? `ביז ${mail.target} · נאך ${mail.days} טעג (מיט היינט)` : 'קיין ענד דאטום איז נישט באשטימט. דאס זענען אלע דיינע איבעריגע חלקים.';
   const settings = mail.settingsLink || config.publicUrl+'/#me';
+  // Existing pending deliveries keep their original request body for the same Resend key.
+  const reading = mail.texts ? readingContent(mail.lines, mail.texts) : null;
   const response = await send('https://api.resend.com/emails', {
     method:'POST',signal:AbortSignal.timeout(8000),
     headers:{Authorization:`Bearer ${config.resendApiKey}`,'Content-Type':'application/json','Idempotency-Key':key},
     body:JSON.stringify({from:mail.sender || config.resendFromEmail,to:[to],subject,
-      text:`${mail.title}\n${note}\n\nהיינט לערנען:\n${mail.lines.join('\n')}\n\nעפן דיין ליסט און צייכן אפ וואס דו האסט געענדיגט: ${mail.link}\nאויסלעשן טעגליכע אימעילס: ${settings}`,
-      html:`<!doctype html><html lang="yi" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f4f6f5;color:#19362d"><main style="max-width:540px;margin:24px auto;padding:24px;background:white;border-radius:16px"><p>אונזער משפחה</p><h1 style="font-size:24px">${escape(mail.title)}</h1><p>${escape(note)}</p><h2>היינט לערנען</h2><ul>${mail.lines.map(l=>`<li>${escape(l)}</li>`).join('')}</ul><p>צייכן אפ אין דער ליסט וואס דו האסט געענדיגט, כדי דער קומענדיגער פלאן זאל זיין ריכטיג.</p><p><a href="${escape(mail.link)}">עפן מיין ליסט</a></p><p><a href="${escape(settings)}">אימעיל איינשטעלונגען / אויסלעשן</a></p></main></body></html>`})
+      text:`${mail.title}\n${note}\n\nהיינט לערנען:\n${reading?.text ?? mail.lines.join('\n')}\n\nעפן דיין ליסט און צייכן אפ וואס דו האסט געענדיגט: ${mail.link}\nאויסלעשן טעגליכע אימעילס: ${settings}`,
+      html:`<!doctype html><html lang="yi" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f4f6f5;color:#19362d"><main style="max-width:540px;margin:24px auto;padding:24px;background:white;border-radius:16px"><p>אונזער משפחה</p><h1 style="font-size:24px">${escape(mail.title)}</h1><p>${escape(note)}</p><h2>היינט לערנען</h2>${reading?.html ?? `<ul>${mail.lines.map(l=>`<li>${escape(l)}</li>`).join('')}</ul>`}<p>צייכן אפ אין דער ליסט וואס דו האסט געענדיגט, כדי דער קומענדיגער פלאן זאל זיין ריכטיג.</p><p><a href="${escape(mail.link)}">עפן מיין ליסט</a></p><p><a href="${escape(settings)}">אימעיל איינשטעלונגען / אויסלעשן</a></p></main></body></html>`,
+      attachments:reading?.attachments})
   });
   if (!response.ok) throw new Error(`Email provider returned ${response.status}`);
   const result = await response.json() as {id?:string};
@@ -56,12 +92,14 @@ export async function runLearningReminders(log: {error:(o:object,m:string)=>void
   try {
     locked = (await c.query('SELECT pg_try_advisory_lock(19761112,21) locked')).rows[0].locked;
     if (!locked) return;
-    const rows = (await c.query(`SELECT l.id,l.kind,l.niftar,l.target_date,l.family_group_id,u.id user_id,u.email FROM learn_lists l
+    const recipientSides = "CASE WHEN u.is_admin OR (u.is_family_admin AND u.family_group_id=l.family_group_id) THEN ARRAY['a','b'] ELSE u.sides END";
+    const rows = (await c.query(`SELECT l.id,l.kind,${learningTitleSql(recipientSides)} niftar,l.target_date,l.family_group_id,u.id user_id,u.email FROM learn_lists l
       JOIN users u ON l.family_group_id=ANY(u.family_group_ids)
       JOIN family_groups g ON g.id=l.family_group_id AND NOT g.is_quarantine AND g.archived_at IS NULL
       WHERE u.status='active' AND u.email_verified_at IS NOT NULL AND u.learning_email_reminders
       AND (u.is_admin OR (u.is_family_admin AND u.family_group_id=l.family_group_id) OR l.side='both' OR l.side=ANY(u.sides))
       AND (l.target_date IS NULL OR l.target_date >= $1::date)
+      AND NOT EXISTS (SELECT 1 FROM learning_email_deliveries d WHERE d.user_id=u.id AND d.list_id=l.id AND d.local_date=$1 AND d.sent_at IS NOT NULL)
       AND EXISTS(SELECT 1 FROM learn_items i WHERE i.list_id=l.id AND
         ((i.taken_by=u.id AND NOT i.done AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx))
         OR EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=i.list_id AND p.idx=i.idx AND p.taken_by=u.id AND NOT p.done)))`,[clock.date])).rows;
@@ -70,7 +108,8 @@ export async function runLearningReminders(log: {error:(o:object,m:string)=>void
         const email = normalizeEmail(row.email); if (!email) continue;
         const units = await remainingLearning((sql,params)=>c.query(sql,params),row.id,row.user_id,row.kind);
         const plan = dailyLearning(row.kind,units,row.target_date,clock.date); if (!plan) continue;
-        const mail:LearningMail = {...plan,title:`${row.kind==='tehillim'?'תהילים':'משניות'} — לעילוי נשמת ${row.niftar}`,target:row.target_date,link:`${config.publicUrl}/#learn/${row.id}/${row.family_group_id}`,sender:config.resendFromEmail,settingsLink:config.publicUrl+'/#me'};
+        const {selected,...summary} = plan;
+        const mail:LearningMail = {...summary,texts:selected.map(unit=>learningText(row.kind,unit)),title:`${row.kind==='tehillim'?'תהילים':'משניות'} — לעילוי נשמת ${row.niftar}`,target:row.target_date,link:`${config.publicUrl}/#learn/${row.id}/${row.family_group_id}`,sender:config.resendFromEmail,settingsLink:config.publicUrl+'/#me'};
         // Commit the immutable request before sending. Retry with the same provider key after a crash.
         await c.query(`INSERT INTO learning_email_deliveries(user_id,list_id,local_date,recipient,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,[row.user_id,row.id,clock.date,email,JSON.stringify(mail)]);
         const delivery = (await c.query(`SELECT * FROM learning_email_deliveries WHERE user_id=$1 AND list_id=$2 AND local_date=$3 AND sent_at IS NULL

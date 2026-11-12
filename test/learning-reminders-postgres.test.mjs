@@ -28,9 +28,13 @@ test('daily worker persists delivery, retries idempotently and enforces membersh
   const send=async(url,options)=>{calls++;keys.push(options.headers['Idempotency-Key']);payload=JSON.parse(options.body);return fail?new Response('{}',{status:503}):Response.json({id:'sent'});};
   await runLearningReminders(log,new Date('2026-11-12T13:00:00Z'),send);assert.equal(calls,0,'before 9 AM');
   await runLearningReminders(log,now,send);assert.equal(calls,1);assert.equal(errors.length,1);
+  const initialPayload=payload;
   fail=false;await runLearningReminders(log,now,send);assert.equal(calls,2);assert.equal(keys[0],keys[1]);
+  assert.deepEqual(payload,initialPayload,'retry sends the same full text');
   await runLearningReminders(log,now,send);assert.equal(calls,2,'no duplicate after success');
   assert.match(payload.text,/קאפיטל 4/);assert.doesNotMatch(payload.text,/קאפיטל 5/);
+  assert.match(payload.text.replace(/\p{M}/gu,''),/אשרי־האיש אשר ׀ לא הלך/);
+  assert.match(payload.html,/lang="he"/);
   assert.equal((await pool.query('SELECT provider_id FROM learning_email_deliveries')).rows[0].provider_id,'sent');
   const next=new Date('2026-11-13T15:00:00Z');
   for(const change of ["learning_email_reminders=false","learning_email_reminders=true,email_verified_at=NULL","email_verified_at=now(),status='rejected'","status='active',sides='{b}'",`sides='{a}',family_group_id=${other},family_group_ids=ARRAY[${other}]`]) {

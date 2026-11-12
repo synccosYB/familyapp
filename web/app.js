@@ -416,15 +416,30 @@ function openPortion(chapter,mishnah) {
     <form data-form="portionhelp" style="margin-top:18px"><h3>🙋 בעט הילף</h3>${field('וואס פאר הילף דארפסטו?', '<textarea id="helpnote" maxlength="500" placeholder="למשל: איך דארף א חברותא אדער הילף צו פארשטיין"></textarea>')}<div class="err" role="alert"></div><button class="btn l">בעט הילף פון דער משפחה</button></form><button class="btn l" style="margin-top:12px" data-act="backmasechta">צוריק צו די פרקים</button>`);
 }
 async function listForm(yzId) {
-  let yzs = STATE.yzs; if (!yzs) yzs = STATE.yzs = (await api('/yahrzeits')).yahrzeits;
+  const {yahrzeits: yzs} = await api('/yahrzeits');
   modal(`<h2 style="margin-top:0">+ נייע ליסט</h2><form data-form="list">
   ${field('וואס', `<select id="lk"><option value="tehillim">📜 תהילים (150 קאפיטלעך)</option><option value="mishnayos">📚 משניות (אלע 63 מסכתות)</option></select>`)}
-  ${field('פאר וועלכן יארצייט', `<select id="lyz"><option value="">— אנדערע (שרייב אונטן) —</option>${yzs.map((y) => `<option value="${y.id}" ${y.id === yzId ? 'selected' : ''}>${esc(y.name)} ${esc(y.father_name)} · ${esc(y.hebrew)}</option>`).join('')}</select>`)}
-  ${field('לעילוי נשמת (אויב נישט אויבן)', '<input id="ln" placeholder="ר׳ … בן ר׳ … ז״ל">')}
-  ${field('ביז ווען (ליידיג = ביזן יארצייט)', '<input id="ld" type="date">')}
-  ${field('פאר וועמען', `<select id="ls">${sideOptions('', true)}</select>`)}
+  ${yzs.length ? `<fieldset class="dedication-picker"><legend>יארצייטן</legend>
+    <p class="muted">קלייב איין יארצייט אדער מער פאר דער זעלבער ליסט.</p>
+    <div class="dedication-options">${yzs.map(y=>`<label>
+      <input type="checkbox" name="yahrzeit" value="${y.id}" data-change="listdedications" ${y.id===yzId?'checked':''}>
+      <span>${esc(y.name)} ${esc(y.father_name)}<small>${esc(y.hebrew)}</small></span></label>`).join('')}</div>
+    <p class="muted" id="dedication-count" role="status"></p></fieldset>` : ''}
+  <div id="custom-dedication">${field('לעילוי נשמת', '<input id="ln" placeholder="ר׳ … בן ר׳ … ז״ל">')}</div>
+  ${field('ביז ווען', '<input id="ld" type="date" aria-describedby="dedication-deadline">')}
+  <p class="muted" id="dedication-deadline"></p>
+  ${field('פאר וועמען', `<select id="ls">${sideOptions(yzs.find(y=>y.id===yzId)?.side, true)}</select>`)}
   <div class="err" id="ferr"></div><div class="btns"><button class="btn">מאך די ליסט</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>`);
-  if (yzId) { const y = yzs.find((x) => x.id === yzId); if (y) $('ls').value = y.side === 'both' && !both() ? mySides()[0] : y.side; }
+  updateListDedications();
+}
+function updateListDedications() {
+  const count = document.querySelectorAll('[data-form=list] [name=yahrzeit]:checked').length;
+  $('custom-dedication').hidden = count > 0;
+  $('ln').required = count === 0;
+  $('ln').disabled = count > 0;
+  if ($('dedication-count')) $('dedication-count').textContent = `${count} יארצייטן אויסגעקליבן`;
+  $('dedication-deadline').textContent = count > 1 ? 'ליידיג = ביז דעם ערשטן פון די אויסגעקליבענע יארצייטן.'
+    : count === 1 ? 'ליידיג = ביז דעם אויסגעקליבענעם יארצייט.' : 'ליידיג = קיין ענד דאטום.';
 }
 
 // simchas
@@ -671,7 +686,7 @@ V.admin = async () => {
 V.me = async () => ME.acting?`<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>👤 מיין אקאונט</h1><section class="card"><strong>${esc(ME.name)}</strong><p dir="auto">${esc(ME.email||'')}</p></section>`:`<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>👤 מיין אקאונט</h1><div class="cap">${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ' · אדמין' : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
   <form data-form="me" class="card" style="margin-bottom:14px">${field('נאמען', `<input id="mn" value="${esc(ME.name)}">`)}${field('אימעיל (נישט מוז)', `<input id="mem" type="email" class="ltr" value="${esc(ME.email || '')}">`)}<div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>
   <section class="card" style="margin-bottom:14px"><h2>אימעיל פאר פאסווארט הילף</h2>${ME.email_verified ? '<p role="status">✓ דיין אימעיל איז באשטעטיגט. דו קענסט באקומען א פאסווארט לינק אויף אימעיל.</p>' : !EMAIL_READY ? '<p class="muted">אימעיל איז נאך נישט פארבונדן. דער אדמין קען דערווייל העלפן מיט א פאסווארט לינק.</p>' : !ME.email ? '<p class="muted">סעיוו קודם דיין אימעיל אדרעס אויבן, און באשטעטיג עס דא.</p>' : `<p class="muted">באשטעטיג דיין געסעיווטן אימעיל: <span dir="ltr">${esc(ME.email)}</span></p><form data-form="emailverifyrequest">${field('פאסווארט פאר אימעיל באשטעטיגונג', '<input id="emailverifypw" type="password" autocomplete="current-password" required>')}<div class="err" role="alert"></div><div id="emailverifystatus" role="status"></div><button class="btn">שיק א באשטעטיגונג אימעיל</button></form>`}</section>
-  <section class="card" style="margin-bottom:14px"><h2>📖 טעגליכע לימוד דערמאנונגען</h2><p>באקום יעדן טאג אן אימעיל מיט דיינע חלקים משניות אדער תהילים, צעטיילט לויט די איבעריגע טעג ביז דעם ענד דאטום. געענדיגטע חלקים ווערן נישט געשיקט. אן א דאטום ווערט געשיקט א ליסטע פון אלע איבעריגע חלקים.</p><p class="muted">מען שיקט אינדערפרי לויט דער משפחה צייטזאנע. צייכן אפ דיינע געענדיגטע חלקים אין דער ליסט.</p><button class="btn" data-act="learningreminders" ${!ME.learning_email_reminders && (!EMAIL_READY || !ME.email_verified) ? 'disabled' : ''}>${ME.learning_email_reminders ? 'אויסלעשן טעגליכע אימעילס' : 'איינשאלטן טעגליכע אימעילס'}</button><p role="status">${ME.learning_email_reminders ? '✓ טעגליכע אימעילס זענען איינגעשאלטן' : 'טעגליכע אימעילס זענען אויסגעלאשן'}${!ME.email_verified ? ' · באשטעטיג קודם דיין אימעיל אויבן' : ''}</p></section>
+  <section class="card" style="margin-bottom:14px"><h2>📖 טעגליכע לימוד דערמאנונגען</h2><p>באקום יעדן טאג אן אימעיל מיט'ן טעקסט פון דיינע חלקים משניות אדער תהילים. מען טיילט די חלקים לויט די טעג ביזן ענד דאטום. אן א דאטום שיקט מען אלע איבעריגע חלקים.</p><p class="muted">מען שיקט אינדערפרי לויט דער משפחה צייטזאנע. צייכן אפ וואס דו האסט געענדיגט אין דער ליסט.</p><button class="btn" data-act="learningreminders" ${!ME.learning_email_reminders && (!EMAIL_READY || !ME.email_verified) ? 'disabled' : ''}>${ME.learning_email_reminders ? 'אויסלעשן טעגליכע אימעילס' : 'איינשאלטן טעגליכע אימעילס'}</button><p role="status">${ME.learning_email_reminders ? '✓ טעגליכע אימעילס זענען איינגעשאלטן' : 'טעגליכע אימעילס זענען אויסגעלאשן'}${!ME.email_verified ? ' · באשטעטיג קודם דיין אימעיל אויבן' : ''}</p></section>
   <form data-form="myphone" class="card" style="margin-bottom:14px"><h2>טויש טעלעפאן נומער</h2><p class="muted">דאס איז דער נומער צו לאג אין. פאר אן אויסלענדישן נומער, לייג צו דעם לאנד קאוד.</p>${field('טעלעפאן נומער', `<input id="mphone" type="tel" class="ltr" autocomplete="tel" value="+${esc(ME.phone)}" required>`)}${field('יעצטיגע פאסווארט', '<input id="mphonepw" type="password" autocomplete="current-password" required>')}<div class="err" id="phoneerr"></div><button class="btn">סעיוו טעלעפאן נומער</button></form>
   <form data-form="mypw" class="card">${field('אלטע פאסווארט', '<input id="mo" type="password" autocomplete="current-password">')}${field('נייע פאסווארט', '<input id="mp" type="password" autocomplete="new-password" placeholder="כאטש 6 אותיות">')}<div class="err" id="ferr2"></div><button class="btn">טויש פאסווארט</button></form>
   <div class="muted" style="margin-top:12px">צו טוישן דיין סייד, רעד מיט דעם אדמין.</div><button class="btn l" style="margin-top:14px" data-act="logout">↩ לאג אאוט</button>`;
@@ -779,8 +794,10 @@ const ACT = {
   },
   sharelearn: async ()=>{
     const l=STATE.list.l,lists=(await api('/lists')).lists;
-    const related=lists.filter(x=>x.id===l.id||(l.yahrzeit_id?x.yahrzeit_id===l.yahrzeit_id:x.niftar===l.niftar));
-    const selected=[...new Map(related.map(x=>[x.kind,x])).values()].slice(0,2);
+    const sameDedications = (a,b) => a.yahrzeit_ids.length === b.yahrzeit_ids.length &&
+      (a.yahrzeit_ids.length ? a.yahrzeit_ids.every(id=>b.yahrzeit_ids.includes(id)) : a.niftar===b.niftar);
+    const related=lists.find(x=>x.kind!==l.kind && x.side===l.side && sameDedications(x,l));
+    const selected=related?[l,related]:[l];
     const sides=l.side==='both'?mySides():[l.side];
     const invite=await api('/family-invitations',{method:'POST',body:{sides}});
     const links=selected.map(x=>`${x.kind==='mishnayos'?'📚 משניות':'📜 תהילים'}: ${invite.link}&list=${x.id}`);
@@ -852,6 +869,7 @@ const ACT = {
 };
 const CHANGE = {
   emailscope: el=>emailSim(Number(el.dataset.id),el.value),
+  listdedications:updateListDedications,
   cousinfamily:()=>{
     STATE.cousinFamilies=[...document.querySelectorAll('input[name="cousin-family"]:checked')].map(el=>Number(el.value));
     return refresh();
@@ -907,7 +925,11 @@ const FORMS = {
       }
       toast('געשיקט צום אדמין — נאך נישט צוגעלייגט');location.hash='#personreviews';
     }else{toast('✓ ' + b.name + ' געסעיווט');refresh();} },
-  list: async () => { const r = await api('/lists', { method: 'POST', body: { kind: val('lk'), yahrzeit_id: val('lyz') || null, niftar: val('ln'), target_date: val('ld'), side: val('ls') } }); closeModal(); toast('✓ ליסט געמאכט'); location.hash = '#learn/' + r.list.id; },
+  list: async f => {
+    const yahrzeit_ids = [...f.querySelectorAll('[name=yahrzeit]:checked')].map(box=>Number(box.value));
+    const r = await api('/lists', {method:'POST',body:{kind:val('lk'),yahrzeit_ids,niftar:yahrzeit_ids.length?'':val('ln'),target_date:val('ld'),side:val('ls')}});
+    closeModal();toast('✓ ליסט געמאכט');location.hash='#learn/'+r.list.id;
+  },
   cousinprofile:async f=>{
     await api(`/admin/users/${f.dataset.id}/tree-profile`,{method:'PUT',body:{person_id:Number(val('cousinperson'))||null}});
     closeModal();toast('✓ געסעיווט');return refresh();
