@@ -57,3 +57,18 @@ No code change. Deploy the same code a second time under a new name with its own
 2. Put `SETUP_TOKEN_SHA256=<sha256 of a fresh random token>` in `deploy/admin.env`.
 3. Publish it as its own box site (e.g. slug `familye-parnes`); it gets its own `~/familye-data`.
 4. Send the admin `https://<site>/#setpw=<token>` once. Names can be changed later in Admin → family names.
+
+## Reproducible builds
+
+```sh
+npm ci
+npm run check
+npm test
+node --check web/app.js
+```
+
+`npm test` builds the TypeScript entry points and runs the unit/build checks. Set `TEST_DATABASE_URL` to a PostgreSQL test database to also run the API integration test. It creates a fresh temporary schema, bootstraps an administrator, exercises approval, family-side access, tree cycles, competing learning claims, completion, RSVP and session persistence, then removes only that schema. Without a test database that integration test is explicitly skipped. Browser acceptance remains separate; `test/e2e-ui.cjs` requires its own Playwright environment and test accounts.
+
+GitHub Actions runs these checks with PostgreSQL 15, builds the Docker image, and saves the compiled `familye-build` artifact. `dist/` is generated and ignored by Git. The existing box startup script now installs the build dependencies and compiles the current checkout before bootstrap; a compile failure stops startup.
+
+Alternatively, build the container with `docker build -t familye .`. Supply the existing configuration variables (`DATABASE_URL`, `PUBLIC_URL`, `COOKIE_SECURE`, `ADMIN_NAME`, `ADMIN_PHONE`, `SETUP_TOKEN_SHA256`) through your host, and mount a persistent writable volume at `/data` for uploads and backups. The container listens on 8080 and checks `/api/health`; use an HTTPS reverse proxy. It runs bootstrap on startup and includes PostgreSQL 15 backup tools. Container creation does not itself deploy the app or connect SMS.

@@ -71,10 +71,10 @@ fi
 
 DEPS="$HOME/familye-deps"; mkdir -p "$DEPS"
 LOCK_SHA=$(sha256sum "$APP_DIR/package-lock.json" | cut -d' ' -f1)
-if [ "$(cat "$DEPS/.lock-sha" 2>/dev/null)" != "$LOCK_SHA" ] || [ ! -d "$DEPS/node_modules" ]; then
+if [ "$(cat "$DEPS/.lock-sha" 2>/dev/null)" != "$LOCK_SHA" ] || [ ! -x "$DEPS/node_modules/.bin/tsc" ]; then
   log "npm ci"
   cp "$APP_DIR/package.json" "$APP_DIR/package-lock.json" "$DEPS/"
-  (cd "$DEPS" && npm ci --omit=dev --no-audit --no-fund >>"$FAMILYE_DATA/boot.log" 2>&1) || { log "npm ci failed"; tail -20 "$FAMILYE_DATA/boot.log"; exit 1; }
+  (cd "$DEPS" && npm ci --include=dev --no-audit --no-fund >>"$FAMILYE_DATA/boot.log" 2>&1) || { log "npm ci failed"; tail -20 "$FAMILYE_DATA/boot.log"; exit 1; }
   echo "$LOCK_SHA" > "$DEPS/.lock-sha"
 fi
 [ -e "$APP_DIR/node_modules" ] || ln -s "$DEPS/node_modules" "$APP_DIR/node_modules"
@@ -84,6 +84,9 @@ set -a; . "$APP_DIR/deploy/site.env"
 [ -f "$APP_DIR/deploy/qa.env" ] && . "$APP_DIR/deploy/qa.env"         # never committed: temporary QA mode
 set +a
 cd "$APP_DIR"
+# Always compile the checked-out TypeScript. dist/ is a build output, not tracked source.
+# Stop here if compilation fails; never start an older build left in the checkout.
+npm run build >>"$FAMILYE_DATA/boot.log" 2>&1 || { log "build failed"; tail -20 "$FAMILYE_DATA/boot.log"; exit 1; }
 node dist/bootstrap.js 2>&1 | tee -a "$FAMILYE_DATA/boot.log"
 [ "${PIPESTATUS[0]}" = "0" ] || { log "bootstrap failed"; exit 1; }
 log "starting API on :$PORT"
