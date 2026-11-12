@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {familyUnits,fitTreeScale} from '../web/tree-layout.js';
+import {familyUnits,fitTreeScale,treeViewportLayout} from '../web/tree-layout.js';
 
 test('married couple appears once, with both people’s father and mother edges',()=>{
   const people=[{id:1},{id:2},{id:3},{id:4},{id:5,father_id:1,mother_id:2,spouse_id:6},{id:6,father_id:3,mother_id:4,spouse_id:5}];
@@ -84,4 +84,25 @@ test('contradictory legacy generations are flagged instead of claiming a valid h
 test('a parent link hidden inside a spouse unit is never silently dropped',()=>{
   const result=familyUnits([{id:1,spouse_id:2},{id:2,spouse_id:1,father_id:1}]);
   assert.ok(result.generationConflicts.length);
+});
+
+
+test('zoom extents stay stable at scrollbar boundaries across the zoom range',()=>{
+  for(let percent=20;percent<=200;percent++) {
+    const zoom=percent/100;
+    const first=treeViewportLayout(2111,592,1358,736,zoom);
+    assert.deepEqual(treeViewportLayout(2111,592,1358,736,zoom),first);
+    assert.ok(first.stageWidth>=1358);assert.ok(first.stageHeight>=736);
+    assert.ok(first.right>=0);assert.ok(first.top>=0);
+  }
+  for(const zoom of [0.6399999,0.64,0.6400001]) {
+    const layout=treeViewportLayout(2399,600,1536,700,zoom);
+    assert.equal(layout.stageWidth,1536);assert.equal(layout.stageHeight,700);
+  }
+});
+test('fit uses inner dimensions with room for pixel rounding and does not invent vertical overflow',()=>{
+  const layout=treeViewportLayout(2111,592,1358,736);
+  assert.ok(2111*layout.scale<1358);assert.ok(592*layout.scale<736);
+  assert.equal(layout.stageWidth,1358);assert.equal(layout.stageHeight,736);
+  assert.ok(Number.isInteger(layout.stageWidth));assert.ok(Number.isInteger(layout.stageHeight));
 });
