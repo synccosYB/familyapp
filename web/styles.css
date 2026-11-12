@@ -38,6 +38,8 @@ label{font-weight:700;font-size:14px;display:block}.ltr{direction:ltr;text-align
 .family-person{display:flex;flex-direction:column;justify-content:center;gap:5px;background:#fff;border:1px solid #e0e7ff;border-radius:9px;padding:9px;width:150px;min-height:54px;min-width:0;cursor:pointer;font:inherit;font-size:14px;text-align:center;overflow-wrap:anywhere}
 .family-map .tree-relation{display:none}
 .family-person strong{font-weight:700}.family-person .muted{font-size:12px}.family-person.d{background:#fafaf9;border-color:#d6d3d1}
+.person-known-as{display:block;color:#334155;font-size:13px;line-height:1.35;overflow-wrap:anywhere}
+.family-table .person-known-as{margin-block-end:4px}
 .family-person:focus-visible{outline:3px solid #4338ca;outline-offset:2px}
 .family-lines{position:absolute;inset:0;z-index:0;overflow:visible;pointer-events:none;direction:ltr}
 .family-lines path{fill:none;stroke:#a5b4fc;stroke-width:2}

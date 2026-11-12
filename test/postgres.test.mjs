@@ -159,19 +159,21 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   const again=await request('/auth/login',{phone:'8455550101',password:'build-member-password'});assert.equal(again.status,200);
   assert.equal((await request('/people',undefined,again.cookie)).body.people.length,2);
   // Add relatives directly from the parent/spouse dropdown without leaving the form.
-  const inline=await request('/people',{name:'Inline child',side:'a',new_relatives:{father_id:{name:'Inline father',title:'Rabbi'},mother_id:{name:'Inline mother'},spouse_id:{name:'Inline spouse'}}},admin.cookie);
+  const inline=await request('/people',{name:'Inline child',side:'a',new_relatives:{father_id:{name:'Inline father',title:'Rabbi',known_as:'רבי פון שטאט'},mother_id:{name:'Inline mother'},spouse_id:{name:'Inline spouse'}}},admin.cookie);
   assert.equal(inline.status,200,JSON.stringify(inline.body));
   const inlineRows=(await request('/people',undefined,admin.cookie)).body.people;
   for(const key of ['father_id','mother_id','spouse_id'])assert.ok(inlineRows.some(p=>p.id===inline.body.person[key]));
   assert.equal(inlineRows.find(p=>p.id===inline.body.person.spouse_id).spouse_id,inline.body.person.id);
   assert.equal(inlineRows.find(p=>p.id===inline.body.person.father_id).life_status,'unknown');
+  assert.equal(inlineRows.find(p=>p.id===inline.body.person.father_id).known_as,'רבי פון שטאט');
   const beforeInlineFailure=inlineRows.length;
   assert.equal((await request('/people',{name:'Invalid inline child',side:'a',new_relatives:{father_id:{name:'Must roll back'},mother_id:{name:''}}},admin.cookie)).status,400);
   assert.equal((await request('/people',undefined,admin.cookie)).body.people.length,beforeInlineFailure,'failed save must not create an orphan relative');
   assert.equal((await request('/people',undefined,b.cookie)).body.people.length,0,'inline relatives follow the same side visibility');
   // Structured relationships are shared by tree, household directory and yahrzeits.
   const createPerson=async body=>{const r=await request('/people',{side:'a',...body},admin.cookie);assert.equal(r.status,200,JSON.stringify(r.body));return r.body.person;};
-  const father=await createPerson({name:'Structured father',title:'Rabbi',life_status:'deceased',death_hday:12,death_hmonth:'KISLEV'});
+  const father=await createPerson({name:'Structured father',title:'Rabbi',known_as:'  דער רב פון שטאט  ',note:'Profile note',life_status:'deceased',death_hday:12,death_hmonth:'KISLEV'});
+  assert.equal(father.known_as,'דער רב פון שטאט');
   const mother=await createPerson({name:'Structured mother'});
   const wife=await createPerson({name:'Structured spouse'});
   const son=await createPerson({name:'Structured son',father_id:father.id,mother_id:mother.id,spouse_id:wife.id});
@@ -179,10 +181,20 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal(personRows.find(p=>p.id===wife.id).spouse_id,son.id);
   assert.equal(personRows.find(p=>p.id===mother.id).life_status,'unknown');
   assert.equal(personRows.find(p=>p.id===son.id).mother_name,'Structured mother');
+  const editedCaption=await request('/people/'+mother.id,{known_as:'די באבע פון שטאט'},admin.cookie,'PUT');
+  assert.equal(editedCaption.status,200);
+  assert.equal((await request('/people',undefined,admin.cookie)).body.people.find(p=>p.id===mother.id).known_as,'די באבע פון שטאט');
   const directory=await request('/directory',{husband_person_id:son.id,wife_person_id:wife.id,parents:'Legacy note retained',side:'a',mine:true},admin.cookie);
   assert.equal(directory.status,200,JSON.stringify(directory.body));
   const familyId=directory.body.family.id;
   assert.equal((await request('/people/'+father.id,{name:'Renamed father',side:'a',title:'Rabbi'},admin.cookie,'PUT')).status,200);
+  const renamedFather=(await request('/people',undefined,admin.cookie)).body.people.find(p=>p.id===father.id);
+  assert.equal(renamedFather.known_as,'דער רב פון שטאט','an edit with no caption field preserves it');
+  assert.equal(renamedFather.note,'Profile note');
+  const clearedCaption=await request('/people/'+father.id,{known_as:''},admin.cookie,'PUT');
+  assert.equal(clearedCaption.status,200);
+  assert.equal(clearedCaption.body.person.known_as,'');
+  assert.equal(clearedCaption.body.person.note,'Profile note');
   const household=(await request('/directory',undefined,admin.cookie)).body.families.find(f=>f.id===familyId);
   assert.match(household.parents,/Renamed father/);
   assert.match(household.parents,/Structured mother/);
