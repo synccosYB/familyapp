@@ -3,8 +3,14 @@ import { word, htmlWord, applyWording } from './wording.js';
 import { familyUnits, treeViewportLayout } from './tree-layout.js';
 import { marriageChildren, childParents } from './family-relationships.js';
 import { automaticHebrewDate } from './hebrew-date.js';
+import { isDeceased, personName, withMemorialSuffix, yahrzeitName } from './person-names.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
 const $ = (id) => document.getElementById(id);
+const relationName = (peopleById, person, relation, title = false) => {
+  const relative = peopleById.get(person[relation + '_id']);
+  const name = [title && person[relation + '_title'], person[relation + '_name']].filter(Boolean).join(' ');
+  return relative ? personName(relative, name || relative.name) : name;
+};
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 let ME = null, EMAIL_READY = false, S = {}, STATE = { side: 'all', room: 'all', q: '', treeView: window.innerWidth < 800 ? 'list' : 'tree', treeSide: null };
 let POLL = null, LASTMSG = 0, SEEN = JSON.parse(localStorage.getItem('fam_seen') || '{}');
@@ -170,7 +176,7 @@ V.home = async () => {
   <a class="card" href="#sim" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.04")}</div><div class="big">${h.simchas.length}</div></a>
   <a class="card" href="#learn" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.05")}</div><div class="big">${h.lists.length}</div></a>
   <a class="card" href="#people" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.06")}</div><div class="big">${h.members}</div></a></div>
-  <h2>${htmlWord("home.07")}</h2>${h.yahrzeits.length ? h.yahrzeits.map((y) => `<div class="row"><div class="grow"><b>${esc(y.name)} ${esc(y.father_name)}</b><div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}${esc(y.hebrew)} · ${esc(gdate(y.next.ymd))} · <b>${esc(inDays(y.next.days))}</b></div></div>${familyTags(y)}</div>`).join('')
+  <h2>${htmlWord("home.07")}</h2>${h.yahrzeits.length ? h.yahrzeits.map((y) => `<div class="row"><div class="grow"><b>${esc(yahrzeitName(y))}</b><div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}${esc(y.hebrew)} · ${esc(gdate(y.next.ymd))} · <b>${esc(inDays(y.next.days))}</b></div></div>${familyTags(y)}</div>`).join('')
     : empty('🕯️', word("home.14"), `<a class="btn s" href="#yz">${htmlWord("home.15")}</a>`)}
   ${h.lists.length ? `<h2>${htmlWord("home.16")}</h2>${h.lists.map((l) => `<a class="row" href="#learn/${l.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${l.kind === 'tehillim' ? htmlWord("home.19") : htmlWord("home.20")} · ${esc(l.niftar)}</b><div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${htmlWord("home.17", { taken: l.taken, total: l.total })}${l.target_date ? ` ${htmlWord("home.21")} ` + esc(gdate(l.target_date)) : ''}</div></div><span class="btn s">${htmlWord("home.18")}</span></a>`).join('')}` : ''}
   <h2>${htmlWord("home.08")}</h2>${h.simchas.length ? h.simchas.map((x) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(simchaKind(x.kind))} · ${esc(x.whose)}</b><div class="muted">${esc(gdate(x.gdate))} · ${esc(x.hebrew)}${x.hall ? ' · ' + esc(x.hall) : ''} · ${esc(inDays(x.days))}</div></div><div class="btns">${navBtns(x.address)}<a class="btn s l" href="#sim">RSVP</a></div></div>`).join('')
@@ -190,7 +196,7 @@ V.yz = async () => {
   const { yahrzeits } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
   const L = yahrzeits.filter(y => !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
   return `<h1>${htmlWord("yahrzeits.heading")}</h1><div class="cap">${htmlWord("yahrzeits.yz.01")}</div>${familySelector(yahrzeits,'yzFamily',word("yahrzeits.yz.03"))}
-  ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(y.name)} ${esc(y.father_name)}</b>
+  ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(yahrzeitName(y))}</b>
    ${y.families?.length?`<div class="yahrzeit-families">${familyTags(y)}</div>`:''}
    <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` ${htmlWord("yahrzeits.yz.06", { date: gdate(y.next.ymd) })} <b style="color:#4338ca">${esc(inDays(y.next.days))}</b>` : ''}</div>
    ${y.kever ? `<div class="muted">🪦 ${esc(y.kever)}</div>` : ''}${y.kever_address?`<div class="muted" dir="auto">📍 ${esc(y.kever_address)}</div><div class="btns">${navBtns(y.kever_address)}</div>`:''}${y.note ? `<div class="muted">${esc(y.note)}</div>` : ''}</div>
@@ -204,7 +210,7 @@ async function yzForm(id) {
   if(y?.person_id)return personForm(y.person_id);
   const {people}=await api('/people');STATE.yzLegacy=y||null;
   modal(`<h2>${y?htmlWord("yahrzeits.yz_form.05"):htmlWord("yahrzeits.yz_form.06")}</h2><p class="muted">${htmlWord("yahrzeits.yz_form.01")}</p>
-    ${field(word("yahrzeits.yz_form.07"),`<select id="yzperson"><option value="">${htmlWord("yahrzeits.yz_form.08")}</option>${people.map(p=>`<option value="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
+    ${field(word("yahrzeits.yz_form.07"),`<select id="yzperson"><option value="">${htmlWord("yahrzeits.yz_form.08")}</option>${people.map(p=>`<option value="${p.id}">${esc(personName(p))}</option>`).join('')}</select>`)}
     <div class="btns"><button class="btn" data-act="yzexisting">${htmlWord("yahrzeits.yz_form.02")}</button><button class="btn l" data-act="yznew">${htmlWord("yahrzeits.yz_form.03")}</button><button class="btn l" data-act="close">${htmlWord("yahrzeits.yz_form.04")}</button></div>`);
 }
 async function yahrzeitPerson(id) {
@@ -225,12 +231,14 @@ V.tree = async () => {
   const P = people; // Server permissions determine visibility; family membership never cuts spouse/ancestor links.
   const {units,edges,generationConflicts}=familyUnits(P); STATE.treeEdges=edges;
   const graphMode=STATE.treeView==='tree' && !generationConflicts.length;
-  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?` ${htmlWord("tree.node.01")}`:''}</strong>${knownAs(p)}${p.spouse_name?`<span class="muted">${htmlWord("tree.node.02", { spouse_name: p.spouse_name })}</span>`:''}${p.second_spouse_name?`<span class="muted">${htmlWord("tree.node.03", { second_spouse_name: p.second_spouse_name })}</span>`:''}${p.father_name?`<span class="muted tree-relation">${htmlWord("tree.node.04", { father_name: p.father_name })}</span>`:''}${p.mother_name?`<span class="muted tree-relation">${htmlWord("tree.node.05", { mother_name: p.mother_name })}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">${htmlWord("tree.node.06", { spouse: p.spouse })}</span>`:''}</button>`;
+  const peopleById=new Map(P.map(p=>[p.id,p]));
+  const relative=(p,key)=>relationName(peopleById,p,key);
+  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${isDeceased(p)?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><strong>${esc(personName(p))}</strong>${knownAs(p)}${p.spouse_name?`<span class="muted">${htmlWord("tree.node.02", { spouse_name: relative(p,'spouse') })}</span>`:''}${p.second_spouse_name?`<span class="muted">${htmlWord("tree.node.03", { second_spouse_name: relative(p,'second_spouse') })}</span>`:''}${p.father_name?`<span class="muted tree-relation">${htmlWord("tree.node.04", { father_name: relative(p,'father') })}</span>`:''}${p.mother_name?`<span class="muted tree-relation">${htmlWord("tree.node.05", { mother_name: relative(p,'mother') })}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">${htmlWord("tree.node.06", { spouse: p.spouse })}</span>`:''}</button>`;
   const couple = unit => `<section class="family-unit ${unit.members.length>1?'married':''}" aria-label="${unit.members.length>1?htmlWord("tree.couple.01"):htmlWord("tree.couple.02")}">${unit.members.length>1?`<div class="marriage-label">${htmlWord("tree.couple.01")}</div>`:''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
   const treeHtml=graphMode
     ? `<div class="tree-toolbar" aria-label="${htmlWord("tree.01")}"><button class="btn s l" data-act="treezoom" data-v="fit">${htmlWord("tree.02")}</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="${htmlWord("tree.03")}">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="${htmlWord("tree.04")}">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">${htmlWord("tree.05")}</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
-     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>${htmlWord("tree.06")}</th><th>${htmlWord("tree.07")}</th><th>${htmlWord("tree.08")}</th><th>${htmlWord("tree.09")}</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?` ${htmlWord("tree.node.01")}`:''}</button>${knownAs(p)} ${familyTags(p)}</td><td>${esc(p.spouse_name?`${word("tree.10")} `+p.spouse_name:p.spouse)||'—'}${p.second_spouse_name?`<br>${htmlWord("tree.11")} `+esc(p.second_spouse_name):''}</td><td>${esc(p.father_name)||'—'}</td><td>${esc(p.mother_name)||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
+     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>${htmlWord("tree.06")}</th><th>${htmlWord("tree.07")}</th><th>${htmlWord("tree.08")}</th><th>${htmlWord("tree.09")}</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${esc(personName(p))}</button>${knownAs(p)} ${familyTags(p)}</td><td>${esc(p.spouse_name?`${word("tree.10")} `+relative(p,'spouse'):p.spouse)||'—'}${p.second_spouse_name?`<br>${htmlWord("tree.11")} `+esc(relative(p,'second_spouse')):''}</td><td>${esc(relative(p,'father'))||'—'}</td><td>${esc(relative(p,'mother'))||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
   return `<h1>${htmlWord("tree.12")}</h1><div class="cap">${htmlWord("tree.13")}</div>
   ${familySelector(P,'treeFamily',word("tree.16"))}
   <div class="btns" style="margin-bottom:6px">
@@ -318,15 +326,16 @@ document.addEventListener('wheel',ev=>{
 
 async function personProfile(id) {
   const {people}=await api('/people'),p=people.find(p=>p.id===id);if(!p)throw new Error(word("tree.person_profile.01"));
-  const linked=(key,label)=>p[key]?`<div class="row"><span class="muted">${esc(label)}</span><button type="button" class="btn l" data-act="viewperson" data-id="${p[key]}">${esc([p[key.replace('_id','_title')],p[key.replace('_id','_name')]].filter(Boolean).join(' '))}</button></div>`:'';
-  const childRow=c=>`<div class="row"><button class="btn l" data-act="viewperson" data-id="${c.id}">${esc(c.name)}</button><span class="muted">${htmlWord("tree.child_row.02", { value: c.father_name||word("tree.child_row.01"), value2: c.mother_name||word("tree.child_row.01") })}</span></div>`;
+  const byId=new Map(people.map(person=>[person.id,person]));
+  const linked=(key,label)=>p[key]?`<div class="row"><span class="muted">${esc(label)}</span><button type="button" class="btn l" data-act="viewperson" data-id="${p[key]}">${esc(relationName(byId,p,key.slice(0,-3),true))}</button></div>`:'';
+  const childRow=c=>`<div class="row"><button class="btn l" data-act="viewperson" data-id="${c.id}">${esc(personName(c,c.name))}</button><span class="muted">${htmlWord("tree.child_row.02", { value: relationName(byId,c,'father')||word("tree.child_row.01"), value2: relationName(byId,c,'mother')||word("tree.child_row.01") })}</span></div>`;
   const marriages=[['spouse_id',word("tree.person_profile.02")],['second_spouse_id',word("tree.person_profile.03")]].map(([key,label])=>{
-    const spouse=people.find(x=>x.id===p[key]);
+    const spouse=byId.get(p[key]);
     return `<section class="card"><h3>${esc(label)}</h3>${spouse?linked(key,word("tree.07")):`<button class="btn l" data-act="addmarriage" data-id="${id}" data-key="${key}">${htmlWord("tree.person_profile.04", { label: label })}</button>`}${spouse?`<h4>${htmlWord("tree.person_profile.05", { label: label })}</h4>${marriageChildren(people,id,spouse.id).map(childRow).join('')||`<p class="muted">${htmlWord("tree.person_profile.07")}</p>`}<button class="btn l" data-act="marriagechild" data-id="${id}" data-spouse="${spouse.id}">${htmlWord("tree.person_profile.06", { label: label })}</button>`:''}</section>`;
   }).join('');
   const otherChildren=marriageChildren(people,id).filter(c=>![p.spouse_id,p.second_spouse_id].includes(c.father_id===id?c.mother_id:c.father_id));
-  modal(`<h2>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.life_status==='deceased'?` ${htmlWord("tree.node.01")}`:''}</h2>${knownAs(p)}<div class="btns">${familyTags(p)}</div>
-    <p class="muted">${p.life_status==='deceased'?htmlWord("tree.person_profile.11"):p.life_status==='living'?htmlWord("tree.person_profile.12"):htmlWord("tree.person_profile.13")}</p>
+  modal(`<h2>${esc(personName(p))}</h2>${knownAs(p)}<div class="btns">${familyTags(p)}</div>
+    <p class="muted">${isDeceased(p)?htmlWord("tree.person_profile.11"):p.life_status==='living'?htmlWord("tree.person_profile.12"):htmlWord("tree.person_profile.13")}</p>
     ${linked('father_id',word("tree.08"))}${linked('mother_id',word("tree.09"))}${marriages}
     ${otherChildren.length?`<h3>${htmlWord("tree.person_profile.14")}</h3>${otherChildren.map(childRow).join('')}`:''}
     <button class="btn l" data-act="addchild" data-id="${id}">${htmlWord("tree.person_profile.08")}</button>
@@ -336,7 +345,7 @@ async function personProfile(id) {
 }
 const personNameKey=value=>String(value||'').normalize('NFKD').replace(/\p{M}/gu,'').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]/gu,'');
 function matchCards(matches,field='person') {
-  return matches.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="muted">${p.father_name?`${htmlWord("tree.match_cards.02")} `+esc(p.father_name)+' · ':''}${p.mother_name?`${htmlWord("tree.match_cards.03")} `+esc(p.mother_name)+' · ':''}${p.spouse_name?`${htmlWord("tree.match_cards.04")} `+esc(p.spouse_name):''}</div><button type="button" class="btn s" data-act="reuseperson" data-id="${p.id}" data-field="${field}">${htmlWord("tree.match_cards.01")}</button></div>`).join('');
+  return matches.map(p=>`<div class="card"><b>${esc(personName(p,p.name))}</b><div class="muted">${p.father_name?`${htmlWord("tree.match_cards.02")} `+esc(p.father_name)+' · ':''}${p.mother_name?`${htmlWord("tree.match_cards.03")} `+esc(p.mother_name)+' · ':''}${p.spouse_name?`${htmlWord("tree.match_cards.04")} `+esc(p.spouse_name):''}</div><button type="button" class="btn s" data-act="reuseperson" data-id="${p.id}" data-field="${field}">${htmlWord("tree.match_cards.01")}</button></div>`).join('');
 }
 function renderPersonMatches(field='person',forced) {
   const form=document.querySelector('[data-form="person"]');if(!form)return;
@@ -356,8 +365,8 @@ async function personForm(id, parentId, defaults={}) {
   const p = {...(P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null}),...defaults};
   const yahrzeit = !!defaults.requireYahrzeit;
   const knownAsField=(inputId,value='')=>field(word("tree.known_as_field.01"),`<input id="${inputId}" maxlength="160" dir="auto" value="${esc(value)}" placeholder="${htmlWord("tree.known_as_field.02")}">`);
-  const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">${htmlWord("tree.choice.01")}</option><option value="new">${htmlWord("tree.choice.02")}</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">${htmlWord("tree.choice.03")}</p>${field(word("tree.choice.04"), `<input id="new_${key}_title" dir="auto">`)}${field(word("tree.06"), `<input id="new_${key}_name" dir="auto">`)}${knownAsField('new_'+key+'_known_as')}<div id="matches_${key}" aria-live="polite"></div></div>`);
-  modal(`<h2 style="margin-top:0">${yahrzeit ? htmlWord("tree.person_form.10") : id ? '✏️ ' + esc(p.name) : htmlWord("tree.person_form.11")}</h2><form data-form="person" data-id="${id}" data-yahrzeit="${yahrzeit ? '1' : ''}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?`<p class="muted">${htmlWord("tree.person_form.12")}</p>`:''}
+  const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">${htmlWord("tree.choice.01")}</option><option value="new">${htmlWord("tree.choice.02")}</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc(personName(x))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">${htmlWord("tree.choice.03")}</p>${field(word("tree.choice.04"), `<input id="new_${key}_title" dir="auto">`)}${field(word("tree.06"), `<input id="new_${key}_name" dir="auto">`)}${knownAsField('new_'+key+'_known_as')}<div id="matches_${key}" aria-live="polite"></div></div>`);
+  modal(`<h2 style="margin-top:0">${yahrzeit ? htmlWord("tree.person_form.10") : id ? '✏️ ' + esc(personName(p,p.name)) : htmlWord("tree.person_form.11")}</h2><form data-form="person" data-id="${id}" data-yahrzeit="${yahrzeit ? '1' : ''}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?`<p class="muted">${htmlWord("tree.person_form.12")}</p>`:''}
   <div class="grid g2"><div>${field(word("tree.choice.04"),`<input id="ptitle" value="${esc(p.title)}" placeholder="${htmlWord("tree.person_form.13")}">`)}</div><div>${field(word("tree.06"),`<input id="pn" value="${esc(p.name)}">`)}</div></div>
   <div id="personmatches" aria-live="polite"></div>
   ${knownAsField('pknownas',p.known_as)}
@@ -458,7 +467,6 @@ function openPortion(chapter,mishnah) {
     </div>${!available?`<p class="muted">${htmlWord("learning.open_portion.07")}</p>`:''}
     <form data-form="portionhelp" style="margin-top:18px"><h3>${htmlWord("learning.open_portion.02")}</h3>${field(word("learning.open_portion.08"), `<textarea id="helpnote" maxlength="500" placeholder="${htmlWord("learning.open_portion.09")}"></textarea>`)}<div class="err" role="alert"></div><button class="btn l">${htmlWord("learning.open_portion.03")}</button></form><button class="btn l" style="margin-top:12px" data-act="backmasechta">${htmlWord("learning.open_portion.04")}</button>`);
 }
-const memorialName = (y) => [y.name,y.father_name].filter(Boolean).join(' ');
 const memorialSearch = (text) => text.normalize('NFKD').replace(/\p{M}|[׳״'"’“”]/gu,'').toLowerCase();
 const selectedMemorialIds = (form) => [...form.querySelectorAll('[name="learning-yahrzeit"]:checked')].map(input=>Number(input.value));
 
@@ -473,9 +481,9 @@ async function listForm(yzId, trigger) {
   if (yzId&&!byId.has(yzId)) throw new Error(word("learning.list_form.15"));
   const defaultSide=STATE.side==='all' ? mySides()[0] : STATE.side;
   const familyName=ME.family_groups?.find(g=>g.id===group)?.name || S.family_yi;
-  const optionsMarkup=(rows,selected)=>rows.map(y=>`<label class="dedication-option" data-search="${esc(memorialSearch(`${memorialName(y)} ${y.hebrew}`))}">
+  const optionsMarkup=(rows,selected)=>rows.map(y=>`<label class="dedication-option" data-search="${esc(memorialSearch(`${yahrzeitName(y)} ${y.hebrew}`))}">
     <input type="checkbox" name="learning-yahrzeit" value="${y.id}" ${selected.has(y.id)?'checked':''}>
-    <span><strong>${esc(memorialName(y))}</strong><small>${esc(y.hebrew)}</small></span></label>`).join('');
+    <span><strong>${esc(yahrzeitName(y))}</strong><small>${esc(y.hebrew)}</small></span></label>`).join('');
   modal(`<h2 id="learning-create-title" tabindex="-1">${htmlWord("learning.list_form.16")}</h2>
   <form id="learning-create-form" data-form="list">
   <div class="learning-form-body">
@@ -517,7 +525,7 @@ async function listForm(yzId, trigger) {
     $('learning-manual').hidden=!custom;
     $('ln').required=custom;
     $('learning-selected-count').textContent=selected.length?word("learning.update_selection.01", { length: selected.length }):word("learning.update_selection.02");
-    $('learning-selected-names').innerHTML=selected.map(y=>`<button type="button" data-remove="${y.id}" aria-label="${htmlWord("learning.update_selection.03", { value: memorialName(y) })}"><span>${esc(memorialName(y))}</span><span aria-hidden="true">×</span></button>`).join('');
+    $('learning-selected-names').innerHTML=selected.map(y=>`<button type="button" data-remove="${y.id}" aria-label="${htmlWord("learning.update_selection.03", { value: yahrzeitName(y) })}"><span>${esc(yahrzeitName(y))}</span><span aria-hidden="true">×</span></button>`).join('');
     const date=selected.map(y=>y.next?.ymd).filter(Boolean).sort()[0];
     $('learning-due-hint').textContent=date?word("learning.update_selection.05", { date: gdate(date), value2: selected.length>1?` ${word("learning.update_selection.04")}`:'' }):word("learning.update_selection.06");
     const sides=[...new Set(selected.map(y=>y.side).filter(side=>side==='a'||side==='b'))];
@@ -743,7 +751,7 @@ V.people = async () => {
   return `<h1>${htmlWord("directory.people.01")}</h1><div class="cap">${htmlWord("directory.people.02")}</div>${seg()}
   <h2>${htmlWord("directory.people.03", { length: members.length })}</h2>
   ${groups.length>1?`<fieldset class="person-family-picker"><legend>${htmlWord("directory.people.10")}</legend><div class="person-family-options">${groups.map(g=>`<label><input type="checkbox" name="cousin-family" data-change="cousinfamily" value="${g.id}" ${selected.includes(g.id)?'checked':''}><strong>${esc(g.name)}</strong></label>`).join('')}</div></fieldset>`:''}
-  <div id="memberlist">${siblingSets.map(set=>`<section><h3>${set.every(member=>member.lineage_term==='בן')?htmlWord("directory.people.12"):htmlWord("directory.people.13")} ${htmlWord("directory.people.11", { father_name: set[0].father_name })}</h3><div class="grid g2">${set.map(memberCard).join('')}</div></section>`).join('')}
+  <div id="memberlist">${siblingSets.map(set=>`<section><h3>${set.every(member=>member.lineage_term==='בן')?htmlWord("directory.people.12"):htmlWord("directory.people.13")} ${htmlWord("directory.people.11", { father_name: set[0].father_deceased?withMemorialSuffix(set[0].father_name):set[0].father_name })}</h3><div class="grid g2">${set.map(memberCard).join('')}</div></section>`).join('')}
   <div class="grid g2">${members.filter(member=>!siblingIds.has(member.id)).map(memberCard).join('')}</div>${members.length?'':`<p class="muted">${htmlWord("directory.people.14")}</p>`}</div><h2>${htmlWord("directory.people.04", { family: S.family_yi })}</h2>
   ${hasMine ? '' : `<div class="row" style="background:#eef2ff;border-color:#c7d2fe"><div class="grow"><b>${htmlWord("directory.people.15")}</b><div class="muted">${htmlWord("directory.people.16")}</div></div><button class="btn s" data-act="editdir" data-id="0" data-mine="1">${htmlWord("directory.people.17")}</button></div>`}
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" type="search" placeholder="${htmlWord("directory.people.05")}" value="${esc(STATE.q)}" style="margin:0;max-width:340px" data-input="q"><span class="muted" id="qn">${htmlWord("directory.people.06", { length: L.length })}</span>
@@ -752,7 +760,7 @@ V.people = async () => {
   <button class="btn" style="margin-top:14px" data-act="familyinvite">${htmlWord("directory.people.09")}</button>`;
 };
 function dirCards(L) {
-  return L.map((d) => `<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow"><b style="font-size:18px">${esc(d.husband)}${d.husband && d.wife ? ' · ' : ''}${esc(d.wife)}</b><div class="muted">${esc(d.parents)}</div></div>${sideTag(d.side)}</div>
+  return L.map((d) => `<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow"><b style="font-size:18px">${esc(d.husband_deceased?withMemorialSuffix(d.husband):d.husband)}${d.husband && d.wife ? ' · ' : ''}${esc(d.wife_deceased?withMemorialSuffix(d.wife):d.wife)}</b><div class="muted">${esc(d.parents)}</div></div>${sideTag(d.side)}</div>
   <div style="margin-top:10px;display:grid;gap:6px"><div>📍 <span dir="auto">${esc(d.address) || '—'}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap">${d.husband ? `<span><span class="muted">${htmlWord("directory.dir_cards.01")}</span> ${tel(d.phone_h)}</span>` : ''}${d.wife ? `<span><span class="muted">${htmlWord("directory.dir_cards.02")}</span> ${tel(d.phone_w)}</span>` : ''}</div></div>
   <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">${htmlWord("directory.dir_cards.03")}</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || `<div class="muted">${htmlWord("directory.dir_cards.04")}</div>`;
 }
@@ -761,8 +769,8 @@ async function dirForm(id, mine) {
   const d = (STATE.dir || []).find((x) => x.id === id) || { side: mySides()[0], husband: mine ? ME.name : '' };
   modal(`<h2 style="margin-top:0">${id ? htmlWord("directory.dir_cards.03") : mine ? htmlWord("directory.people.17") : htmlWord("directory.dir_form.07")}</h2><form data-form="dir" data-id="${id}" data-mine="${mine ? 1 : 0}">
   <p class="muted">${htmlWord("directory.dir_form.01")}</p>
-  ${field(word("directory.dir_form.08"),`<select id="dhperson"><option value="">${htmlWord("directory.dir_form.09")}</option>${people.map(p=>`<option value="${p.id}" ${d.husband_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
-  ${field(word("directory.dir_form.10"),`<select id="dwperson"><option value="">${htmlWord("directory.dir_form.09")}</option>${people.map(p=>`<option value="${p.id}" ${d.wife_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
+  ${field(word("directory.dir_form.08"),`<select id="dhperson"><option value="">${htmlWord("directory.dir_form.09")}</option>${people.map(p=>`<option value="${p.id}" ${d.husband_person_id===p.id?'selected':''}>${esc(personName(p))}</option>`).join('')}</select>`)}
+  ${field(word("directory.dir_form.10"),`<select id="dwperson"><option value="">${htmlWord("directory.dir_form.09")}</option>${people.map(p=>`<option value="${p.id}" ${d.wife_person_id===p.id?'selected':''}>${esc(personName(p))}</option>`).join('')}</select>`)}
   <a href="#tree">${htmlWord("directory.dir_form.02")}</a>
   <p class="muted">${htmlWord("directory.dir_form.03")}</p>
   ${field(word("directory.dir_form.11"), `<input id="dh" value="${esc(d.husband)}">`)}${field(word("directory.dir_form.12"), `<input id="dw" value="${esc(d.wife)}">`)}
@@ -875,7 +883,7 @@ async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStop
 const ACT = {
   linkcousin:async el=>{
     const id=Number(el.dataset.id),profile=await api(`/admin/users/${id}/tree-profile`);
-    const options=profile.people.map(p=>`<option value="${p.id}" ${p.id===profile.person_id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.father_name?` ${htmlWord("shared.linkcousin.01")} `+esc(p.father_name):''}</option>`).join('');
+    const options=profile.people.map(p=>`<option value="${p.id}" ${p.id===profile.person_id?'selected':''}>${esc(personName(p))}${p.father_name?` ${htmlWord("shared.linkcousin.01")} `+esc(p.father_name):''}</option>`).join('');
     modal(`<h2>${htmlWord("shared.linkcousin.02", { name: profile.name })}</h2><form data-form="cousinprofile" data-id="${id}">
       ${field(word("shared.linkcousin.05"),`<select id="cousinperson"><option value="">${htmlWord("shared.linkcousin.06")}</option>${options}</select>`)}
       <div class="err" role="alert"></div><div class="btns"><button class="btn">${htmlWord("shared.linkcousin.03")}</button><button type="button" class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button></div></form>`);
@@ -976,7 +984,7 @@ ${word("shared.sharelearn.07")}`;
     const {people}=await api('/people'),p=people.find(x=>x.id===Number(el.dataset.id)),spouse=people.find(x=>x.id===Number(el.dataset.spouse));
     if(!p||!spouse)throw new Error(word("shared.marriagechild.01"));
     STATE.childMarriage={person:p,spouse};
-    modal(`<h2>${htmlWord("shared.marriagechild.02", { name: p.name, name2: spouse.name })}</h2><form data-form="marriagechild">${field(word("shared.marriagechild.05"),`<select id="childfather" required><option value="">${htmlWord("shared.marriagechild.06")}</option><option value="${p.id}">${esc(p.name)}</option><option value="${spouse.id}">${esc(spouse.name)}</option></select>`)}<p>${htmlWord("shared.marriagechild.03")}</p><button class="btn">${htmlWord("shared.marriagechild.04")}</button><button type="button" class="btn l" data-act="close">${htmlWord("shared.recoverypreview.03")}</button></form>`);
+    modal(`<h2>${htmlWord("shared.marriagechild.02", { name: personName(p,p.name), name2: personName(spouse,spouse.name) })}</h2><form data-form="marriagechild">${field(word("shared.marriagechild.05"),`<select id="childfather" required><option value="">${htmlWord("shared.marriagechild.06")}</option><option value="${p.id}">${esc(personName(p,p.name))}</option><option value="${spouse.id}">${esc(personName(spouse,spouse.name))}</option></select>`)}<p>${htmlWord("shared.marriagechild.03")}</p><button class="btn">${htmlWord("shared.marriagechild.04")}</button><button type="button" class="btn l" data-act="close">${htmlWord("shared.recoverypreview.03")}</button></form>`);
   },
   addchild: el=>personForm(0, Number(el.dataset.id)),
   delp: async (el) => { if (!confirm(word("shared.delp.01"))) return; await api('/people/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast(word("shared.delyz.02")); refresh(); },

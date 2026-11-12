@@ -505,7 +505,7 @@ app.get('/api/admin/users/:id/tree-profile',async req=>{
   const {id}=await memberTreeProfileTarget(req);
   const user=await q1(memberProfileSelect,[id]);
   if(!user)throw new HttpError(404,word("errors.11"));
-  const people=await q(`SELECT p.id,p.name,p.title,f.name father_name FROM people p
+  const people=await q(`SELECT p.id,p.name,p.title,p.life_status,p.niftar,f.name father_name FROM people p
     LEFT JOIN people f ON f.id=p.father_id AND ${memberProfileSql('f')}
     WHERE ${memberProfileSql('p')} AND NOT EXISTS (SELECT 1 FROM users u WHERE u.person_id=p.id AND u.id<>$4)
     ORDER BY p.name,p.id`,[...memberProfileParams(user),id]);
@@ -1446,6 +1446,7 @@ async function listDir(u: User) {
     const parentName=(id:number)=>{const p=byId.get(id);return p?[full(p),p.niftar?word("errors.parent_name.01"):''].filter(Boolean).join(' '):'';};
     const parents=(p:any)=>p ? [p.father_id?word("errors.parents.01", { value: parentName(p.father_id) }):'',p.mother_id?word("errors.parents.02", { value: parentName(p.mother_id) }):''].filter(Boolean).join(' · ') : '';
     return {...d,husband:h?full(h):d.husband,wife:w?full(w):d.wife,
+      husband_deceased:h?.life_status==='deceased'||h?.niftar===true, wife_deceased:w?.life_status==='deceased'||w?.niftar===true,
       parents:[h&&parents(h)?`${h.name}: ${parents(h)}`:'',w&&parents(w)?`${w.name}: ${parents(w)}`:''].filter(Boolean).join(' · ') || d.parents};
   });
 }
@@ -1466,7 +1467,8 @@ app.get('/api/cousins',async req=>{
   const members=await q(`WITH roster AS (
     SELECT u.id,u.name,u.person_id,ARRAY(SELECT g FROM unnest($1::int[]) g WHERE g=ANY(u.family_group_ids)
       AND (g=ANY($2::int[]) OR u.is_admin OR u.sides && $3::text[])) group_ids FROM users u WHERE u.status='active'
-  ) SELECT r.id,r.name,r.group_ids,p.id person_id,p.lineage_term,f.id father_id,f.name father_name
+  ) SELECT r.id,r.name,r.group_ids,p.id person_id,p.lineage_term,f.id father_id,f.name father_name,
+    (f.life_status='deceased' OR f.niftar) father_deceased
     FROM roster r LEFT JOIN people p ON p.id=r.person_id AND ${memberProfileSql('p')}
     LEFT JOIN people f ON f.id=p.father_id AND ${memberProfileSql('f')}
     WHERE cardinality(r.group_ids)>0 ORDER BY r.name,r.id`,[selected,managed,u.sides]);
