@@ -10,7 +10,15 @@ let POLL = null, LASTMSG = 0, SEEN = JSON.parse(localStorage.getItem('fam_seen')
 
 function toast(t) { const e = $('ts'); e.textContent = t; e.style.display = 'block'; clearTimeout(e._t); e._t = setTimeout(() => (e.style.display = 'none'), 2600); }
 function modal(html, wide) { $('mb').className = 'mbox' + (wide ? ' wide' : ''); $('mb').innerHTML = html; $('md').classList.add('on'); const f = $('mb').querySelector('input:not([type=file]),select,textarea'); if (f && window.innerWidth > 800) f.focus(); }
-function closeModal() { $('md').classList.remove('on'); $('mb').innerHTML = ''; }
+let learningDialogTrigger = null;
+function closeModal() {
+  $('md').classList.remove('on'); $('mb').innerHTML = '';
+  if (!learningDialogTrigger) return;
+  for (const attr of ['role','aria-modal','aria-labelledby']) $('mb').removeAttribute(attr);
+  for (const id of ['top','nav','m','tabs']) $(id).inert=false;
+  if (learningDialogTrigger.isConnected) learningDialogTrigger.focus();
+  learningDialogTrigger=null;
+}
 
 async function api(path, opts = {}) {
   const o = { method: opts.method || 'GET', headers: { 'x-familye': '1' }, credentials: 'same-origin' };
@@ -350,11 +358,11 @@ async function personForm(id, parentId, defaults={}) {
 V.learn = async (arg) => {
   if (arg) return learnDetail(Number(arg));
   const [{ lists },{people}] = await Promise.all([api('/lists'),api('/people')]); STATE.learningLists=lists; const L = lists.filter(l => vis(l.side) && (!STATE.learnFamily || (l.families||[]).some(f=>f.id===Number(STATE.learnFamily))));
-  return `<h1>📖 משניות און תהילים</h1><p><a href="#me">✉ טעגליכע אימעיל דערמאנונגען — איינשטעלונגען</a></p><div class="cap">נעם א מסכתא, פרק אדער משנה לעילוי נשמת.</div><div class="cap">פילטער לויט צוטריט גרופע</div>${seg()}${familySelector([...lists,...people],'learnFamily','משפחה')}
+  return `<header class="learning-header"><h1>📖 משניות און תהילים</h1><button type="button" class="btn" data-act="newlist">+ נייע ליסט</button></header>
+  <p><a href="#me">✉ טעגליכע אימעיל דערמאנונגען — איינשטעלונגען</a></p><div class="cap">פילטער לויט צוטריט גרופע</div>${seg()}${familySelector([...lists,...people],'learnFamily','משפחה')}
   ${L.map((l) => `<a class="card" href="#learn/${l.id}" style="display:block;text-decoration:none;color:inherit;margin-bottom:10px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:18px">${l.kind === 'tehillim' ? '📜 תהילים' : '📚 משניות'} · לעילוי נשמת ${esc(l.niftar)}</b>${familyTags(l)}</div>
   <div class="muted">${l.target_date ? `ביז ${gdate(l.target_date)} (${inDays(l.days)})` : 'קיין דאטום'}${l.mine ? ` · דו האסט ${l.mine}` : ''}</div>
-  <div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${l.taken} פון ${l.total} אינגאנצן גענומען${l.partial?` · ${l.partial} טיילווייז`: ''} · ${l.done} געענדיגט</div></a>`).join('') || empty('📖', 'נאך קיין ליסטס. מאך איינס פאר א יארצייט.')}
-  <button class="btn" data-act="newlist" data-yz="0">+ נייע ליסט</button>`;
+  <div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${l.taken} פון ${l.total} אינגאנצן גענומען${l.partial?` · ${l.partial} טיילווייז`: ''} · ${l.done} געענדיגט</div></a>`).join('') || empty('📖', 'קיין ליסטס צו ווייזן.')}`;
 };
 async function learnDetail(id) {
   const group=Number(location.hash.split('/')[2]);
@@ -373,7 +381,7 @@ async function learnDetail(id) {
   const body = l.kind === 'tehillim'
     ? `<div class="perek">${items.map((i) => `<button class="${cls(i)}" data-act="item" data-idx="${i.idx}" title="${esc(i.taken_name || '')}">${heb(i.idx)}</button>`).join('')}</div>`
     : [...new Set(masechtos.map((m) => m.seder))].map((sd) => `<h2 style="font-size:17px">סדר ${sd}</h2><div class="ms">${items.filter((i) => masechtos[i.idx].seder === sd).map((i) => `<button class="${cls(i)}" data-act="masechta" data-idx="${i.idx}">${masechtos[i.idx].name} ▾<small>${i.parts ? i.parts.taken + ' / ' + i.parts.total + ' משניות גענומען' : i.taken_by ? esc(i.taken_name || '') + (i.done ? ' ✓' : '') : 'פריי · עפן פרקים / משניות'}</small>${assignees(i)}</button>`).join('')}</div>`).join('');
-  return `<a href="#learn" class="muted">→ צוריק צו אלע ליסטס</a><h1>${l.kind === 'tehillim' ? '📜 תהילים' : '📚 משניות'} לעילוי נשמת ${esc(l.niftar)}</h1>
+  return `<a href="#learn" class="muted">→ צוריק צו אלע ליסטס</a><h1 class="learning-title">${l.kind === 'tehillim' ? '📜 תהילים' : '📚 משניות'} לעילוי נשמת ${esc(l.niftar)}</h1>
   <div class="cap">${l.target_date ? `ביז ${gdate(l.target_date)} (${inDays(l.days)})` : ''} ${sideTag(l.side)}${familyTags(l)}</div>
   <div class="card" style="margin-bottom:12px"><div class="bar"><div style="width:${Math.round(100 * taken / items.length)}%"></div></div><div class="muted">${taken} פון ${items.length} אינגאנצן גענומען${partial ? ` · ${partial} טיילווייז` : ''}</div>
   <div class="bar"><div class="dn" style="width:${Math.round(100 * done / items.length)}%"></div></div><div class="muted">${done} געענדיגט</div>
@@ -416,56 +424,122 @@ function openPortion(chapter,mishnah) {
     </div>${!available?'<p class="muted">א טייל איז שוין גענומען. קלייב א פרייען פרק אדער משנה.</p>':''}
     <form data-form="portionhelp" style="margin-top:18px"><h3>🙋 בעט הילף</h3>${field('וואס פאר הילף דארפסטו?', '<textarea id="helpnote" maxlength="500" placeholder="למשל: איך דארף א חברותא אדער הילף צו פארשטיין"></textarea>')}<div class="err" role="alert"></div><button class="btn l">בעט הילף פון דער משפחה</button></form><button class="btn l" style="margin-top:12px" data-act="backmasechta">צוריק צו די פרקים</button>`);
 }
-function dedicationOptions(yahrzeits, selected) {
-  return yahrzeits.map(y=>`<label>
-    <input type="checkbox" name="yahrzeit" value="${y.id}" data-change="listdedications" ${selected.has(y.id)?'checked':''}>
-    <span>${esc(y.name)} ${esc(y.father_name)}<small>${esc(y.hebrew)}</small></span></label>`).join('');
-}
-const selectedDedications = (form) => [...form.querySelectorAll('[name=yahrzeit]:checked')].map(box=>Number(box.value));
-function filterDedications() {
-  const query = val('dedication-search').normalize('NFKC');
-  for (const label of $('dedication-options').children)
-    label.hidden = !label.textContent.normalize('NFKC').includes(query);
-  $('dedication-empty').hidden = [...$('dedication-options').children].some(label=>!label.hidden);
-}
-async function refreshDedications(button) {
-  const form = button.closest('form');
-  button.disabled = true;
-  try {
-    const {yahrzeits} = await api('/yahrzeits');
-    if (!form.isConnected) return;
-    $('dedication-options').innerHTML = dedicationOptions(yahrzeits, new Set(selectedDedications(form)));
-    filterDedications();
-    updateListDedications();
-  } finally { button.disabled = false; }
-}
-async function listForm(yzId) {
-  const {yahrzeits: yzs} = await api('/yahrzeits');
-  modal(`<h2 style="margin-top:0">+ נייע ליסט</h2><form data-form="list">
-  ${field('וואס', `<select id="lk"><option value="tehillim">📜 תהילים (150 קאפיטלעך)</option><option value="mishnayos">📚 משניות (אלע 63 מסכתות)</option></select>`)}
-  <fieldset class="dedication-picker"><legend>יארצייטן · ${esc(ME.family_groups?.find(g=>g.id===ME.selected_family_group_id)?.name || S.family_yi)}</legend>
-    <p class="muted">קלייב איין יארצייט אדער מער פאר דער זעלבער ליסט.</p>
-    <div class="btns"><input type="search" id="dedication-search" placeholder="זוך א יארצייט" aria-label="זוך א יארצייט">
-    <button type="button" class="btn s l" data-act="refreshdedications">לאד נאכאמאל</button></div>
-    <div class="dedication-options" id="dedication-options">${dedicationOptions(yzs, new Set([yzId]))}</div>
-    <p class="muted" id="dedication-empty" hidden>קיין יארצייט נישט געפונען אין דער משפחה.</p>
-    <p class="muted" id="dedication-count" role="status"></p></fieldset>
-  <div id="custom-dedication">${field('לעילוי נשמת', '<input id="ln" placeholder="ר׳ … בן ר׳ … ז״ל">')}</div>
-  ${field('ביז ווען', '<input id="ld" type="date" aria-describedby="dedication-deadline">')}
-  <p class="muted" id="dedication-deadline"></p>
-  ${field('פאר וועמען', `<select id="ls">${sideOptions(yzs.find(y=>y.id===yzId)?.side, true)}</select>`)}
-  <div class="err" id="ferr"></div><div class="btns"><button class="btn">מאך די ליסט</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>`);
-  filterDedications();
-  updateListDedications();
-}
-function updateListDedications() {
-  const count = selectedDedications($('dedication-options')).length;
-  $('custom-dedication').hidden = count > 0;
-  $('ln').required = count === 0;
-  $('ln').disabled = count > 0;
-  if ($('dedication-count')) $('dedication-count').textContent = `${count} יארצייטן אויסגעקליבן`;
-  $('dedication-deadline').textContent = count > 1 ? 'ליידיג = ביז דעם ערשטן פון די אויסגעקליבענע יארצייטן.'
-    : count === 1 ? 'ליידיג = ביז דעם אויסגעקליבענעם יארצייט.' : 'ליידיג = קיין ענד דאטום.';
+const memorialName = (y) => [y.name,y.father_name].filter(Boolean).join(' ');
+const memorialSearch = (text) => text.normalize('NFKD').replace(/\p{M}|[׳״'"’“”]/gu,'').toLowerCase();
+const selectedMemorialIds = (form) => [...form.querySelectorAll('[name="learning-yahrzeit"]:checked')].map(input=>Number(input.value));
+
+async function listForm(yzId, trigger) {
+  const group=ME.selected_family_group_id;
+  const route=location.hash;
+  const { yahrzeits }=await api('/yahrzeits');
+  if (learningDialogTrigger || !trigger.isConnected || location.hash!==route || ME?.selected_family_group_id!==group) return;
+  const eligibleMemorials=rows=>rows.filter(y=>y.side==='both'||mySides().includes(y.side));
+  const memorials=eligibleMemorials(yahrzeits);
+  let byId=new Map(memorials.map(y=>[y.id,y]));
+  if (yzId&&!byId.has(yzId)) throw new Error('דער יארצייט איז נישטא אין דער איצטיגער משפחה.');
+  const defaultSide=STATE.side==='all' ? mySides()[0] : STATE.side;
+  const familyName=ME.family_groups?.find(g=>g.id===group)?.name || S.family_yi;
+  const optionsMarkup=(rows,selected)=>rows.map(y=>`<label class="dedication-option" data-search="${esc(memorialSearch(`${memorialName(y)} ${y.hebrew}`))}">
+    <input type="checkbox" name="learning-yahrzeit" value="${y.id}" ${selected.has(y.id)?'checked':''}>
+    <span><strong>${esc(memorialName(y))}</strong><small>${esc(y.hebrew)}</small></span></label>`).join('');
+  modal(`<h2 id="learning-create-title" tabindex="-1">נייע ליסט</h2>
+  <form id="learning-create-form" data-form="list">
+  <div class="learning-form-body">
+    ${field('וואס לערנט מען?', '<select id="lk"><option value="tehillim">תהילים · 150 קאפיטלעך</option><option value="mishnayos">משניות · 63 מסכתות</option></select>')}
+    <fieldset class="dedication-picker"><legend>לעילוי נשמת · ${esc(familyName)}</legend>
+      <div class="learning-source">
+        <label><input type="radio" name="learning-source" checked> קלייב יארצייטן</label>
+        <label><input type="radio" name="learning-source" id="learning-custom"> שרייב א נאמען</label>
+      </div>
+      <div id="learning-picker">
+        <div class="learning-search-row">
+          <div>${field('זוך א יארצייט', '<input id="learning-search" type="search" autocomplete="off">')}</div>
+          <button type="button" id="learning-refresh" class="btn s l">לאד נאכאמאל</button>
+        </div>
+        <div class="dedication-options" id="learning-options">${optionsMarkup(memorials,new Set([yzId]))}</div>
+        <p id="learning-no-results" class="muted" hidden>קיין יארצייט געפונען.</p>
+        <div id="learning-selection" class="learning-selection">
+          <p id="learning-selected-count" class="muted" role="status"></p>
+          <div id="learning-selected-names"></div>
+        </div>
+      </div>
+      <div id="learning-manual" hidden>${field('נאמען', '<input id="ln" maxlength="150" placeholder="ר׳ … בן ר׳ …">')}</div>
+    </fieldset>
+    <div class="learning-list-settings">
+      <div>${field('ביז ווען?', '<input id="ld" type="date" aria-describedby="learning-due-hint">')}<p id="learning-due-hint" class="muted"></p></div>
+      <div>${field('ווער קען אנטייל נעמען?', `<select id="ls" aria-describedby="learning-side-hint">${sideOptions(defaultSide)}</select>`)}<p id="learning-side-hint" class="muted" hidden>די יארצייטן קומען פון ביידע זייטן. קלייב ווער קען זען די ליסט.</p></div>
+    </div>
+  </div>
+  <div class="learning-form-footer"><div class="err" role="alert"></div><div class="btns"><button type="submit" class="btn">מאך די ליסט</button><button type="button" class="btn l" data-act="close">קענסל</button></div></div>
+  </form>`);
+
+  const box=$('mb'), form=$('learning-create-form'), search=$('learning-search'), audience=$('ls');
+  const options=$('learning-options'), reload=$('learning-refresh');
+  let audienceChanged=false;
+  function updateSelection() {
+    const custom=$('learning-custom').checked;
+    const selected=custom?[]:selectedMemorialIds(form).map(id=>byId.get(id));
+    $('learning-picker').hidden=custom;
+    $('learning-manual').hidden=!custom;
+    $('ln').required=custom;
+    $('learning-selected-count').textContent=selected.length?`${selected.length} אויסגעקליבן`:'קלייב איין יארצייט אדער עטליכע.';
+    $('learning-selected-names').innerHTML=selected.map(y=>`<button type="button" data-remove="${y.id}" aria-label="נעם אראפ ${esc(memorialName(y))}"><span>${esc(memorialName(y))}</span><span aria-hidden="true">×</span></button>`).join('');
+    const date=selected.map(y=>y.next?.ymd).filter(Boolean).sort()[0];
+    $('learning-due-hint').textContent=date?`לאז ליידיג פאר ${gdate(date)}${selected.length>1?' (דער ערשטער יארצייט)':''}`:'מען קען עס לאזן ליידיג.';
+    const sides=[...new Set(selected.map(y=>y.side).filter(side=>side==='a'||side==='b'))];
+    if (!audienceChanged) {
+      audience.value=sides.length===1?sides[0]:selected.length&&!sides.length&&both()?'both':defaultSide;
+    }
+    $('learning-side-hint').hidden=sides.length!==2;
+  }
+  function filterOptions() {
+    const terms=memorialSearch(search.value).trim().split(/\s+/).filter(Boolean);
+    for (const option of options.children) option.hidden=!terms.every(term=>option.dataset.search.includes(term));
+    $('learning-no-results').hidden=[...options.children].some(option=>!option.hidden);
+    options.scrollTop=0;
+  }
+  reload.addEventListener('click',async()=>{
+    reload.disabled=true;
+    try {
+      const result=await api('/yahrzeits');
+      if (!form.isConnected) return;
+      const rows=eligibleMemorials(result.yahrzeits), selected=new Set(selectedMemorialIds(form));
+      byId=new Map(rows.map(y=>[y.id,y]));
+      options.innerHTML=optionsMarkup(rows,selected);
+      filterOptions();
+      updateSelection();
+    } catch (error) {
+      if (form.isConnected) fail(error);
+    } finally {
+      reload.disabled=false;
+    }
+  });
+  search.addEventListener('input',filterOptions);
+  search.addEventListener('keydown',event=>{if(event.key==='Enter')event.preventDefault();});
+  form.addEventListener('change',event=>{
+    if (event.target===audience) audienceChanged=true;
+    if (event.target===audience || event.target.name==='learning-source' || event.target.name==='learning-yahrzeit') {
+      form.querySelector('.err').textContent='';
+      updateSelection();
+    }
+  });
+  $('learning-selected-names').addEventListener('click',event=>{
+    const remove=event.target.closest('[data-remove]');
+    if (!remove) return;
+    const checkbox=form.querySelector(`[name="learning-yahrzeit"][value="${remove.dataset.remove}"]`);
+    checkbox.checked=false;
+    updateSelection();
+    (checkbox.closest('label').hidden?search:checkbox).focus();
+  });
+  filterOptions();
+  updateSelection();
+  box.classList.add('learning-create');
+  box.setAttribute('role','dialog');
+  box.setAttribute('aria-modal','true');
+  box.setAttribute('aria-labelledby','learning-create-title');
+  learningDialogTrigger=trigger;
+  for (const id of ['top','nav','m','tabs']) $(id).inert=true;
+  $('learning-create-title').focus({preventScroll:true});
 }
 
 // simchas
@@ -866,8 +940,7 @@ const ACT = {
   },
   addchild: el=>personForm(0, Number(el.dataset.id)),
   delp: async (el) => { if (!confirm('אויסמעקן?')) return; await api('/people/' + el.dataset.id, { method: 'DELETE' }); closeModal(); toast('אויסגעמעקט'); refresh(); },
-  newlist: (el) => listForm(Number(el.dataset.yz) || 0),
-  refreshdedications: refreshDedications,
+  newlist: (el) => listForm(Number(el.dataset.yz) || 0,el),
   item: (el) => onItem(Number(el.dataset.idx)),
   itemact: async (el) => { const { l } = STATE.list; const a = el.dataset.v; await api(`/lists/${l.id}/items/${el.dataset.idx}`, { method: 'POST', body: { action: a } }); closeModal(); toast(a === 'give' ? 'צוריקגעגעבן' : a === 'done' ? '✓ יישר כח!' : 'געטוישט'); refresh(); },
   learningreminders: async () => { const r = await api('/me/learning-reminders', {method:'POST',body:{on:!ME.learning_email_reminders}}); ME={...ME,...r.user}; toast('✓ געסעיווט'); await refresh(); },
@@ -896,7 +969,6 @@ const ACT = {
 };
 const CHANGE = {
   emailscope: el=>emailSim(Number(el.dataset.id),el.value),
-  listdedications:updateListDedications,
   cousinfamily:()=>{
     STATE.cousinFamilies=[...document.querySelectorAll('input[name="cousin-family"]:checked')].map(el=>Number(el.value));
     return refresh();
@@ -956,10 +1028,18 @@ const FORMS = {
       toast('✓ יארצייט געסעיווט');
       if (curView()==='yz') await refresh(); else location.hash='#yz';
     }else{toast('✓ ' + b.name + ' געסעיווט');refresh();} },
-  list: async f => {
-    const yahrzeit_ids = selectedDedications(f);
-    const r = await api('/lists', {method:'POST',body:{kind:val('lk'),yahrzeit_ids,niftar:yahrzeit_ids.length?'':val('ln'),target_date:val('ld'),side:val('ls')}});
-    closeModal();toast('✓ ליסט געמאכט');location.hash='#learn/'+r.list.id;
+  list: async (form) => {
+    const custom=$('learning-custom').checked;
+    const yahrzeit_ids=custom?[]:selectedMemorialIds(form);
+    if (!custom&&!yahrzeit_ids.length) {
+      $('learning-search').focus();
+      throw new Error('קלייב אויס כאטש איין יארצייט.');
+    }
+    const r=await api('/lists',{method:'POST',body:{kind:val('lk'),yahrzeit_ids,niftar:custom?val('ln'):'',target_date:val('ld'),side:val('ls')}});
+    if (!form.isConnected) return;
+    closeModal();
+    toast('✓ ליסט געמאכט');
+    location.hash=`#learn/${r.list.id}/${r.list.family_group_id}`;
   },
   cousinprofile:async f=>{
     await api(`/admin/users/${f.dataset.id}/tree-profile`,{method:'PUT',body:{person_id:Number(val('cousinperson'))||null}});
@@ -1011,7 +1091,6 @@ document.addEventListener('click', async (ev) => {
 });
 document.addEventListener('change', async (ev) => { const el = ev.target.closest('[data-change]'); if (!el || el.dataset.change==='familyfilter') return; try { await CHANGE[el.dataset.change](el); } catch (e) { fail(e); } });
 document.addEventListener('input', (ev) => {
-  if(ev.target.id==='dedication-search')return filterDedications();
   if(ev.target.id==='pn'){if($('pdistinct'))$('pdistinct').checked=false;return renderPersonMatches();}const relative=/^new_(father_id|mother_id|spouse_id|second_spouse_id)_name$/.exec(ev.target.id);if(relative)return renderPersonMatches(relative[1]);
   const el = ev.target;if(el.id==='ci'){STATE.chatActivity=Date.now();mentionChoices();return;} if (el.dataset.input !== 'q') return; STATE.q = el.value;
   const Q = STATE.q.trim(); const L = (STATE.dir || []).filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
@@ -1028,7 +1107,15 @@ document.addEventListener('change', (ev) => { if(ev.target.dataset.change==='fam
   if (ev.target.id === 'sd' || ev.target.id === 'safter') $('sh').value = automaticHebrewDate(val('sd'), $('safter').checked);
   if (ev.target.id === 'sf') { const f = ev.target.files[0]; $('ip').innerHTML = !f ? '' : f.type === 'application/pdf' ? `<div class="muted" style="margin:-4px 0 12px">📄 ${esc(f.name)}</div>` : `<img src="${URL.createObjectURL(f)}" style="max-width:100%;max-height:200px;border-radius:8px;margin:-4px 0 12px">`; } });
 document.addEventListener('pointerdown',()=>{if(curView()==='chat')STATE.chatActivity=Date.now();});
-document.addEventListener('keydown', (ev) => { if(curView()==='chat')STATE.chatActivity=Date.now(); if (ev.key === 'Escape') closeModal(); });
+document.addEventListener('keydown', (ev) => {
+  if(curView()==='chat')STATE.chatActivity=Date.now();
+  if (ev.key==='Escape') closeModal();
+  if (ev.key!=='Tab' || !learningDialogTrigger) return;
+  const controls=[...$('mb').querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled)')].filter(el=>el.getClientRects().length);
+  const first=controls[0], last=controls.at(-1);
+  if (ev.shiftKey && [first,$('learning-create-title')].includes(document.activeElement)) { ev.preventDefault(); last.focus(); }
+  if (!ev.shiftKey && document.activeElement===last) { ev.preventDefault(); first.focus(); }
+});
 window.addEventListener('hashchange', () => { closeModal(); go(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && ME) checkUnread(); });
 setInterval(checkUnread, 20000);
