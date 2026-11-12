@@ -97,4 +97,7 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
 
 .family-scroll{cursor:grab;user-select:none}.family-scroll.dragging,.family-scroll.dragging *{cursor:grabbing!important}.family-scroll .family-person{cursor:pointer}
 
-.family-switch{display:flex;align-items:center;gap:12px;padding:8px 16px;background:#fff;color:#1e1b4b;font-size:14px}.family-switch select{min-width:0;max-width:65%;margin:0}
+.family-switch{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 16px;background:#fff;color:#1e1b4b;font-size:14px}.family-switch select{flex:1 1 180px;min-width:0;max-width:100%;margin:0}
+.family-connection{display:inline-flex;max-width:100%;white-space:normal;overflow-wrap:anywhere;vertical-align:middle}
+.family-switch,.family-connection{line-height:1.5}
+
