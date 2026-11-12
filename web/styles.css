@@ -154,3 +154,68 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
 .yahrzeit-families{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
 .acting-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 16px;background:#fef3c7;color:#78350f}
 
+.family-feature-header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-block-end:10px}
+.family-feature-header h1{margin:0}
+.person-card-heading,.person-profile-heading{display:flex;align-items:center;gap:10px;min-width:0}
+.person-card-heading{justify-content:center}
+.person-photo{display:inline-block;flex:none;width:30px;height:30px;border-radius:50%;object-fit:cover;vertical-align:middle;background:#e0e7ff}
+.person-photo.portrait{width:80px;height:80px}
+.family-name .person-photo{margin-inline-end:7px}
+.profile-photo-form{margin:12px 0}
+.profile-photo-form input[type=file]{max-width:100%}
+.calendar-card{margin-block-end:14px}
+.calendar-controls{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:8px;align-items:center;margin-block-end:12px}
+.calendar-controls h2{margin:0;text-align:center;font-size:1rem}
+.calendar-controls .btn{justify-self:start;max-width:100%;min-height:44px;white-space:normal;text-align:center;line-height:1.2;overflow-wrap:anywhere}
+.calendar-controls .btn:last-child{justify-self:end}
+.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.calendar-weekday{text-align:center;font-size:.82rem;color:#4b5563;padding:3px 0}
+.calendar-day{display:flex;align-items:center;justify-content:center;gap:4px;min-height:40px;border:1px solid #e0e7ff;border-radius:8px;background:#fff;color:#1e1b4b;font:inherit;cursor:pointer;padding:3px}
+.calendar-day small{font-size:.7em;border-radius:10px;background:#e0e7ff;padding:0 4px}
+.calendar-day[aria-current=date]{border-color:#4338ca;font-weight:700}
+.calendar-day[aria-pressed=true]{background:#4338ca;color:white}
+.calendar-day[aria-pressed=true] small{background:#fff;color:#3730a3}
+.calendar-day:focus-visible{outline:2px solid #4338ca;outline-offset:2px}
+.calendar-all{margin-block-start:12px}
+.calendar-events,.relationship-path{padding:0;margin:0;list-style:none}
+.calendar-event{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:9px 0;border-block-end:1px solid #e6e8ec}
+.calendar-event:last-child{border:0}
+.calendar-event time{margin-inline-start:auto;color:#4b5563;font-size:.88rem}
+.calendar-date-fields{border:1px solid #e0e7ff;border-radius:10px;margin:10px 0;min-width:0;padding:6px 10px}
+.calendar-date-fields legend{font-weight:700;padding-inline:4px}
+.relationship-path{display:grid;gap:8px;margin-block-start:12px}
+.relationship-path li{padding:9px 12px;border-inline-start:3px solid #818cf8;border-radius:6px;background:#f5f3ff}
+.relationship-path small{display:block;color:#4b5563}
+.person-review-changes{margin:10px 0}
+.person-review-changes div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:8px;padding:5px 0}
+.person-review-changes dd{margin:0;overflow-wrap:anywhere}
+.person-review-changes del{color:#4b5563;margin-inline-end:6px}
+.reminder-option{display:flex;align-items:flex-start;gap:9px;margin:10px 0}
+.reminder-option input{margin-block-start:4px;accent-color:#4338ca}
+.family-print{display:none}
+@media(max-width:420px){
+  .calendar-card{padding:12px}
+  .calendar-controls{gap:4px}
+  .calendar-controls .btn{padding-inline:6px}
+  .calendar-grid{gap:3px}
+  .calendar-day{flex-direction:column;gap:0;min-height:42px;font-size:.82rem}
+}
+@page family-tree{size:A4 landscape;margin:12mm}
+@page yahrzeit-list{size:A4 portrait;margin:12mm}
+@media print{
+  body.printing-family{background:white;color:black;margin:0}
+  body.printing-family > :not(.family-print){display:none!important}
+  .family-print{display:block;color:black;font-size:11pt}
+  .family-print.print-tree{page:family-tree}
+  .family-print.print-yahrzeits{page:yahrzeit-list}
+  .family-print h1{margin:0 0 12px;font-size:18pt}
+  .family-print h2{font-size:13pt;break-after:avoid}
+  .family-print table{border-collapse:collapse;width:100%;margin-block-end:12px;text-align:start}
+  .family-print thead{display:table-header-group}
+  .family-print tr{break-inside:avoid}
+  .family-print th,.family-print td{padding:5px 8px;border:1px solid #888;text-align:start;vertical-align:top}
+  .family-print .print-chart{position:relative;break-inside:avoid}
+  .family-print .family-person,.family-print .family-unit{border-color:#777;color:black;background:white}
+  .family-print .family-lines path{stroke:#666}
+}
+

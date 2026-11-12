@@ -147,6 +147,26 @@ provider failures retry using the same persisted body and Resend idempotency key
 that day's pending delivery; the new address must be verified. Each email links to account
 settings to disable reminders. Delivery records are retained for 90 days.
 
+## Family calendar and reminders
+
+Edit a person's profile to add a Hebrew birthday and first or second wedding
+anniversary. The family calendar combines those dates with yahrzeits. The tree
+and yahrzeit list offer a print view that can be saved as PDF from the print dialog.
+Family admins can approve or reject members' suggestions from the admin review queue.
+
+Yahrzeit reminders use the existing daily worker and are scheduled three days in
+advance. Members can follow an individual yahrzeit or the ancestors linked to
+their account. Email requires a verified address. WhatsApp uses the member's
+account phone and requires a separate opt-in. Changing the number clears that opt-in.
+
+To enable WhatsApp in production, configure the Meta Cloud API sender and an
+approved utility template. The template body takes two text parameters, the Hebrew
+date and the sign-in link. Example body: `A yahrzeit you follow is coming up on
+{{1}}. Open Kobor at {{2}} to view the details.` Set `WHATSAPP_PHONE_NUMBER_ID`,
+`WHATSAPP_GRAPH_API_VERSION`, `WHATSAPP_YAHRZEIT_TEMPLATE`, and
+`WHATSAPP_YAHRZEIT_LANGUAGE` in the runtime. Store `WHATSAPP_ACCESS_TOKEN` as
+a secret. The app enables WhatsApp opt-in once these settings are present.
+
 ## Live Yiddish wording
 
 In the private Kobor wording spreadsheet, edit column B on the Wording tab. Keep the

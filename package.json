@@ -22,7 +22,8 @@
     "@hebcal/core": "^5.4.0",
     "@node-rs/argon2": "^2.0.2",
     "fastify": "^4.29.1",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

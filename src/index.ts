@@ -11,6 +11,7 @@ import { createReadStream, existsSync, mkdirSync, statSync, unlinkSync } from 'n
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash, verify } from '@node-rs/argon2';
+import sharp from 'sharp';
 import { config } from './config.js';
 import { nameKey, sameParent } from './person-matches.js';
 import { familyContext, familySql, personSql, personGroupsSql } from './family-scope.js';
@@ -18,11 +19,12 @@ import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
 import { dailyLearning, reminderClock, remainingLearning } from './learning-reminders.js';
 import { availableMishnayosSql, learningListFieldsSql, learningTitleSql } from './learning-dedications.js';
-import { YAHRZEIT_REMINDER_DAYS, yahrzeitAncestorIdsSql } from './yahrzeit-reminders.js';
+import { YAHRZEIT_REMINDER_DAYS, whatsappRemindersReady, yahrzeitAncestorIdsSql } from './yahrzeit-reminders.js';
 import { startJobs } from './jobs.js';
 import { MASECHTOS } from './masechtos.js';
 import { emailReady, learningRequestEmail, normalizeEmail, sendAccountEmail, sendLearningRequestBatch } from './email.js';
 import { renderInvitationEmail, type InvitationMail } from './invitation-emails.js';
+import { calendarEvents, calendarMonth, parseCalendarDates } from './family-calendar.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(__dirname, '../web');
@@ -51,7 +53,7 @@ const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0
 const pwProblem = (pw: unknown) => (typeof pw !== 'string' || pw.length < 6 ? word("errors.pw_problem.01") : pw.length > 200 ? word("errors.pw_problem.02") : null);
 const SIDE3 = ['a', 'b', 'both'];
 
-interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; learning_email_reminders: boolean; yahrzeit_ancestor_emails: boolean; person_id: number | null; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; primary_family_admin?: boolean; status: string; is_admin: boolean; is_family_admin: boolean; acting?: {admin_id:number; context:string} }
+interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; learning_email_reminders: boolean; yahrzeit_ancestor_emails: boolean; yahrzeit_whatsapp_phone: string | null; person_id: number | null; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; primary_family_admin?: boolean; status: string; is_admin: boolean; is_family_admin: boolean; acting?: {admin_id:number; context:string} }
 declare module 'fastify' { interface FastifyRequest { user?: User } }
 
 const app = Fastify({ logger: { level: config.logLevel }, trustProxy: config.trustProxy, bodyLimit: 200_000 });
@@ -98,7 +100,7 @@ async function loadUser(req: FastifyRequest, baseOnly=false): Promise<User | nul
   const baseToken=req.cookies[COOKIE];
   if(!baseToken)return null;
   const actingToken=baseOnly?undefined:req.cookies[ACTING_COOKIE];
-  const u = await q1<User & {acting_admin_id:number|null}>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.learning_email_reminders,u.yahrzeit_ancestor_emails,u.person_id,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin,actor.id acting_admin_id
+  const u = await q1<User & {acting_admin_id:number|null}>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.learning_email_reminders,u.yahrzeit_ancestor_emails,u.yahrzeit_whatsapp_phone,u.person_id,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin,actor.id acting_admin_id
     FROM sessions s JOIN users u ON u.id=s.user_id
     LEFT JOIN sessions original ON original.token_hash=s.admin_session_hash AND original.token_hash=$2
       AND original.admin_session_hash IS NULL AND original.expires_at>now()
@@ -209,7 +211,7 @@ async function newSession(reply: FastifyReply, userId: number) {
   reply.setCookie(COOKIE, t, { ...cookieOptions, maxAge: config.sessionDays * 86400 });
   reply.clearCookie(ACTING_COOKIE,{path:'/'}).clearCookie(ACTING_FAMILY_COOKIE,{path:'/'});
 }
-const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, learning_email_reminders: !!u.learning_email_reminders, yahrzeit_ancestor_emails: !!u.yahrzeit_ancestor_emails, person_id: u.person_id ?? null, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin, acting: u.acting || null });
+const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, learning_email_reminders: !!u.learning_email_reminders, yahrzeit_ancestor_emails: !!u.yahrzeit_ancestor_emails, whatsapp_yahrzeit_reminders: !!u.yahrzeit_whatsapp_phone && u.yahrzeit_whatsapp_phone===u.phone, person_id: u.person_id ?? null, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin, acting: u.acting || null });
 
 // ---------------- settings ----------------
 const getSettings = () => q1('SELECT family_yi,family_en,side_a_yi,side_a_en,side_a_family_yi,side_a_family_en,side_b_yi,side_b_en,side_b_family_yi,side_b_family_en FROM settings WHERE id=1');
@@ -341,7 +343,7 @@ app.get('/api/me', async (req) => {
   const groupId=u?.family_group_id;
   const groups=u?await q('SELECT id,name FROM family_groups WHERE NOT is_quarantine AND archived_at IS NULL AND ($1::boolean OR id=ANY($2::int[])) ORDER BY name',[u.is_admin,u.family_group_ids]):[];
   const group=groups.find(g=>g.id===groupId);
-  return { user: u ? {...publicUser(u),family_groups:groups,family_name:group?.name || null,selected_family_group_id:group?.id || null} : null, settings: {...await getSettings(),...(group?{family_yi:group.name,side_a_family_yi:'',side_b_family_yi:''}:{})}, email_enabled: emailReady(), can_stop_acting:canStopActing };
+  return { user: u ? {...publicUser(u),family_groups:groups,family_name:group?.name || null,selected_family_group_id:group?.id || null} : null, settings: {...await getSettings(),...(group?{family_yi:group.name,side_a_family_yi:'',side_b_family_yi:''}:{})}, email_enabled: emailReady(), whatsapp_enabled: whatsappRemindersReady(), can_stop_acting:canStopActing };
 });
 app.post('/api/me/family-group',async(req,reply)=>{
   const u=await member(req),group=Number((req.body as any)?.family_group_id);
@@ -413,11 +415,19 @@ app.post('/api/me/learning-reminders', async req => {
   return {user:publicUser(updated)};
 });
 app.post('/api/me/yahrzeit-reminders', async req => {
-  const u = await member(req), on = (req.body as any)?.on;
-  if (typeof on !== 'boolean') throw bad(word("errors.28"));
-  if (on && (!emailReady() || !u.email_verified_at || !normalizeEmail(u.email))) throw bad(word("errors.29"));
-  await q('UPDATE users SET yahrzeit_ancestor_emails=$1 WHERE id=$2',[on,u.id]);
-  return { yahrzeit_ancestor_emails: on };
+  const u = await member(req);
+  const { on, whatsapp } = (req.body ?? {}) as { on?: boolean; whatsapp?: boolean };
+  if ((on === undefined && whatsapp === undefined) ||
+      (on !== undefined && typeof on !== 'boolean') || (whatsapp !== undefined && typeof whatsapp !== 'boolean'))
+    throw bad(word('errors.28'));
+  if (whatsapp === true && !whatsappRemindersReady()) throw bad(word('family_tools.reminders.whatsapp_unavailable'));
+  const whatsappOn = whatsapp ?? (!!u.yahrzeit_whatsapp_phone && u.yahrzeit_whatsapp_phone === u.phone);
+  const emailOn = emailReady() && u.email_verified_at && normalizeEmail(u.email);
+  if (on === true && !emailOn && !(whatsappOn && whatsappRemindersReady())) throw bad(word('errors.29'));
+  const updated = await q1(`UPDATE users SET yahrzeit_ancestor_emails=coalesce($1::boolean,yahrzeit_ancestor_emails),
+    yahrzeit_whatsapp_phone=CASE WHEN $2::boolean IS NULL THEN yahrzeit_whatsapp_phone WHEN $2::boolean THEN phone ELSE NULL END WHERE id=$3
+    RETURNING yahrzeit_ancestor_emails,yahrzeit_whatsapp_phone`, [on ?? null, whatsapp ?? null, u.id]);
+  return { yahrzeit_ancestor_emails: updated.yahrzeit_ancestor_emails, whatsapp_yahrzeit_reminders: !!updated.yahrzeit_whatsapp_phone };
 });
 app.post('/api/me/email-verification', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
   const me = await member(req);
@@ -469,7 +479,7 @@ app.post('/api/me/phone', authLimit, async (req) => {
       if (!(await verify(u.password_hash || '', String(b.password || '')).catch(() => false)))
         throw bad(word("errors.31"));
       if (u.phone === phone) return u;
-      const changed = (await c.query('UPDATE users SET phone=$1 WHERE id=$2 RETURNING *', [phone, me.id])).rows[0];
+      const changed = (await c.query('UPDATE users SET phone=$1,yahrzeit_whatsapp_phone=NULL WHERE id=$2 RETURNING *', [phone, me.id])).rows[0];
       // Retain this browser session; old recovery links and other sessions expire.
       await c.query('DELETE FROM sessions WHERE user_id=$1 AND token_hash<>$2', [me.id, sha(req.cookies[COOKIE]!)]);
       await c.query('UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL', [me.id]);
@@ -824,6 +834,7 @@ const personSelect = () => `SELECT p.*,
   f.id father_id,m.id mother_id,sp.id spouse_id,sp2.id second_spouse_id,pa.id parent_id,
   CASE WHEN p.spouse_id IS NOT NULL AND sp.id IS NULL THEN '' ELSE p.spouse END spouse,
   ${personFamilyLabelsSql('p.id',personGroupsSql())} families,
+  EXISTS (SELECT 1 FROM person_photos photo WHERE photo.person_id=p.id) has_photo,
   f.name father_name,f.title father_title,m.name mother_name,m.title mother_title,
   sp.name spouse_name,sp.title spouse_title,sp2.name second_spouse_name,sp2.title second_spouse_title
   FROM people p LEFT JOIN people f ON f.id=p.father_id AND ${personSql('f')}
@@ -835,19 +846,68 @@ app.get('/api/people', async (req) => {
   const u = await member(req);
   return { people: await q(`${personSelect()} WHERE ${personSideSql('p',1)} ORDER BY p.id`, [mySides(u)]) };
 });
+app.get('/api/family-calendar', async req => {
+  const u = await member(req);
+  const { year, month } = req.query as { year?: string; month?: string };
+  const calendar = calendarMonth(year, month);
+  if (!calendar) throw bad(word('family_tools.calendar.invalid'));
+  const [people, yahrzeits] = await Promise.all([
+    q(`${personSelect()} WHERE ${personSideSql('p',1)} ORDER BY p.id`, [mySides(u)]), listYahrzeits(u),
+  ]);
+  return { ...calendar, events: calendarEvents(calendar.year, calendar.month, people, yahrzeits) };
+});
+
+app.get('/api/people/:id/photo', async (req, reply) => {
+  const u = await member(req), id = Number((req.params as { id: string }).id);
+  const photo = await q1<{ content: Buffer }>(`SELECT f.content FROM person_photos f JOIN people p ON p.id=f.person_id
+    WHERE p.id=$1 AND ${personSideSql('p',2)}`, [id, mySides(u)]);
+  if (!photo) throw new HttpError(404, word('errors.11'));
+  return reply.type('image/jpeg').header('Content-Security-Policy', "default-src 'none'; sandbox").send(photo.content);
+});
+
+async function changePersonPhoto(req: FastifyRequest, image?: Buffer) {
+  const u = await member(req), id = Number((req.params as { id: string }).id);
+  return tx(async c => {
+    const person = (await c.query(`SELECT p.family_group_id FROM people p WHERE p.id=$1 AND ${personSideSql('p',2)} FOR UPDATE`, [id,mySides(u)])).rows[0];
+    if (!person) throw new HttpError(404, word('errors.11'));
+    if (!(u.is_admin || u.person_id === id || (u.is_family_admin && person.family_group_id === u.family_group_id)))
+      throw new HttpError(403, word('errors.admin.01'));
+    if (image) await c.query(`INSERT INTO person_photos(person_id,content) VALUES($1,$2)
+      ON CONFLICT(person_id) DO UPDATE SET content=excluded.content`, [id,image]);
+    else await c.query('DELETE FROM person_photos WHERE person_id=$1', [id]);
+    return { ok: true };
+  });
+}
+
+app.put('/api/people/:id/photo', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async req => {
+  const u = await member(req), id = Number((req.params as { id: string }).id);
+  if (!managesFamily(u) && u.person_id !== id) throw new HttpError(403, word('errors.admin.01'));
+  const file = await req.file({ limits: { fileSize: 6 * 1024 * 1024, files: 1, fields: 0 } });
+  if (!file) throw bad(word('family_tools.photo.invalid'));
+  const content = await file.toBuffer();
+  let jpeg: Buffer;
+  try {
+    const image = sharp(content, { limitInputPixels: 25_000_000 });
+    const metadata = await image.metadata();
+    if (!['jpeg', 'png', 'webp'].includes(metadata.format ?? '') || (metadata.pages ?? 1) > 1) throw new Error('Unsupported image');
+    jpeg = await image.rotate().resize(720, 720, { fit: 'inside', withoutEnlargement: true }).flatten({ background: '#fff' }).jpeg({ quality: 85 }).toBuffer();
+  } catch { throw bad(word('family_tools.photo.invalid')); }
+  return changePersonPhoto(req, jpeg);
+});
+app.delete('/api/people/:id/photo', async req => changePersonPhoto(req));
+
 const personId = (v: any): number | null => {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v); if (!Number.isSafeInteger(n) || n < 1) throw bad(word("errors.37")); return n;
 };
-function personVersionHash(person: { known_as?: string } | null) {
-  // Pending reviews saved before the caption column existed still match an empty caption.
-  if (person?.known_as === '') {
-    const { known_as, ...fields } = person;
-    return sha(JSON.stringify(fields));
-  }
-  return sha(JSON.stringify(person));
+function personVersionHash(person: { known_as?: string; calendar_dates?: object } | null) {
+  const fields = person && { ...person };
+  // Older pending reviews were recorded before these fields were added.
+  if (fields?.known_as === '') delete fields.known_as;
+  if (fields?.calendar_dates && !Object.keys(fields.calendar_dates).length) delete fields.calendar_dates;
+  return sha(JSON.stringify(fields));
 }
-async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
+async function savePerson(u: User, b: any, id?: number, reviewId?: number, suggestion = false) {
   return tx(async c => {
     // Serialize graph changes so two simultaneous saves cannot introduce ancestry cycles.
     await c.query("SELECT pg_advisory_xact_lock(68427301)");
@@ -856,6 +916,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if(!managesFamily(u))throw new HttpError(403,word("errors.admin.01"));
       review=(await c.query(`SELECT * FROM person_reviews WHERE id=$1 AND ${familySql()} FOR UPDATE`,[reviewId])).rows[0];
       if(!review || review.status!=='pending')throw new HttpError(409,word("errors.save_person.01"));
+      if (review.kind === 'suggestion') delete familyContext.getStore()!.peopleGroups;
       b=review.payload;id=review.person_id||undefined;
     }
     const original=structuredClone(b), key=reviewId?'':str(b.request_key,80);
@@ -873,6 +934,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       if(key)await c.query('INSERT INTO person_save_requests(user_id,request_key,fingerprint,response) VALUES($1,$2,$3,$4)',[u.id,key,fingerprint,JSON.stringify(response)]);
       return response;
     };
+    if (suggestion) await c.query('SAVEPOINT person_suggestion');
     const old = id ? (await c.query('SELECT * FROM people WHERE id=$1 FOR UPDATE',[id])).rows[0] : null;
     if(review?.person_id && personVersionHash(old)!==review.previous_hash)throw new HttpError(409,word("errors.save_person.04"));
     if (id && (!old || !canSee(u,old.side) || !(await c.query(`SELECT 1 FROM people WHERE id=$1 AND ${personSql()}`,[id])).rows.length)) throw new HttpError(404,word("errors.11"));
@@ -900,7 +962,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     if(checkedFamilies.length!==familyIds.length)throw bad(word("errors.save_person.11"));
 
     const checkedGroups=[...new Set<number>(checkedFamilies.map(f=>f.family_group_id))];
-    const assignAccess=u.is_admin && original.family_ids!==undefined && checkedGroups.length>0;
+    const assignAccess=u.is_admin && review?.kind!=='suggestion' && !suggestion && original.family_ids!==undefined && checkedGroups.length>0;
     let owner:number=old?.family_group_id ?? viewedGroup;
     if(assignAccess && !checkedGroups.includes(owner) && (!old || (context.peopleGroups || [viewedGroup]).includes(owner))) {
       owner=checkedGroups.includes(viewedGroup)?viewedGroup:Math.min(...checkedGroups);
@@ -921,19 +983,19 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
       const key=nameKey(value);
       return people.filter(p=>p.id!==exclude&&nameKey(p.name)===key);
     };
-    const proposal={...original,name,father_id:b.father_id,mother_id:b.mother_id,parent_id:b.parent_id,spouse_id:b.spouse_id};
+    const proposal={...original,name,father_id:b.father_id,mother_id:b.mother_id,parent_id:b.parent_id,spouse_id:b.spouse_id,second_spouse_id:b.second_spouse_id};
     const candidates=!old || nameKey(name)!==nameKey(old.name)?await matches(name,[...accessGroups],id):[];
     let confirmationId:number|undefined;
-    if(candidates.length&&!reviewId) {
+    if(candidates.length&&(!reviewId||review?.kind==='suggestion')) {
       const reason=str(b.distinct_reason,500);
       if(b.confirm_distinct!==true || reason.length<5)throw new HttpError(409,word("errors.save_person.12"),{code:'person_matches',field:'person',matches:candidates.map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))});
       if(!key)throw bad(word("errors.save_person.13"));
-      if(candidates.some(p=>sameParent(p,b))) {
+      if(!reviewId&&candidates.some(p=>sameParent(p,b))) {
         const pending=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,family_group_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?personVersionHash(old):null,reason,owner])).rows[0];
         return finish({pending_review:pending.id,...(owner!==viewedGroup?{review_family_group_id:owner}:{})});
       }
       // Keep the explicit same-name exception for later audit; no automatic merge.
-      confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at,family_group_id) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now(),$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?personVersionHash(old):null,reason,owner])).rows[0].id;
+      if(!reviewId) confirmationId=(await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,status,reviewed_by,reviewed_at,family_group_id) VALUES($1,$2,$3,$4,$5,'confirmed',$1,now(),$6) RETURNING id`,[u.id,id||null,JSON.stringify(proposal),old?personVersionHash(old):null,reason,owner])).rows[0].id;
     }
     const relativeGroup=accessGroups.has(viewedGroup)?viewedGroup:owner;
     // Inline relatives and their links commit together, so a failed form leaves no orphan people.
@@ -962,6 +1024,8 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     const year = b.death_year === '' || b.death_year == null ? null : Number(b.death_year);
     if ((day !== null && (!Number.isInteger(day)||day<1||day>30)) || (month && !(MONTH_CODES as readonly string[]).includes(month)) || (year!==null && (!Number.isInteger(year)||year<=5000||year>=6000))) throw bad(word("errors.save_person.21"));
     if (status!=='deceased' && (day||month||year)) throw bad(word("errors.save_person.22"));
+    const calendarDates = parseCalendarDates(b.calendar_dates ?? {});
+    if (!calendarDates) throw bad(word('family_tools.calendar.invalid_date'));
     const refs = [...new Set([father,mother,...partners,legacyParent].filter(Boolean))];
     for (const ref of refs) {
       const r=(await c.query('SELECT * FROM people WHERE id=$1',[ref])).rows[0];
@@ -1009,7 +1073,7 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
     }
     row.kever=str(b.kever ?? old?.kever,200);
     row.kever_address=str(b.kever_address ?? old?.kever_address,500);
-    await c.query('UPDATE people SET kever=$1,kever_address=$3 WHERE id=$2',[row.kever,row.id,row.kever_address]);
+    await c.query('UPDATE people SET kever=$1,kever_address=$3,calendar_dates=$4 WHERE id=$2',[row.kever,row.id,row.kever_address,JSON.stringify(calendarDates)]);
     await c.query('UPDATE people SET second_spouse_id=$1 WHERE id=$2',[secondSpouse,row.id]);row.second_spouse_id=secondSpouse;
     for(const partner of partners) {
       const other=(await c.query('SELECT spouse_id,second_spouse_id FROM people WHERE id=$1',[partner])).rows[0];
@@ -1045,12 +1109,27 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
         await c.query(`UPDATE yahrzeit_email_deliveries prior SET yahrzeit_id=$1 WHERE prior.yahrzeit_id=$2
           AND NOT EXISTS (SELECT 1 FROM yahrzeit_email_deliveries current WHERE current.yahrzeit_id=$1
             AND current.user_id=prior.user_id AND current.occurrence_date=prior.occurrence_date)`,[canonical.id,legacy.id]);
+        await c.query(`INSERT INTO yahrzeit_whatsapp_deliveries(user_id,yahrzeit_id,occurrence_date,attempted_at,sent_at,provider_id)
+          SELECT user_id,$1,occurrence_date,attempted_at,sent_at,provider_id FROM yahrzeit_whatsapp_deliveries WHERE yahrzeit_id=$2
+          ON CONFLICT(user_id,yahrzeit_id,occurrence_date) DO UPDATE SET
+            sent_at=coalesce(yahrzeit_whatsapp_deliveries.sent_at,excluded.sent_at),
+            provider_id=coalesce(yahrzeit_whatsapp_deliveries.provider_id,excluded.provider_id)`,[canonical.id,legacy.id]);
         await c.query("UPDATE yahrzeits SET relation=CASE WHEN relation='' THEN $1 ELSE relation END,note=CASE WHEN note='' THEN $2 ELSE note END WHERE id=$3",[legacy.relation,legacy.note,canonical.id]);
         await c.query('UPDATE yahrzeits SET canonical_id=$1,archived_at=now() WHERE id=$2',[canonical.id,legacy.id]);
       }
     }
     // Keep a linked yahrzeit name in sync when its person's father is renamed too.
     await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=ANY($1::int[]) OR p.father_id=$2)`,[[row.id,father,mother].filter(Boolean),row.id]);
+    if (suggestion) {
+      // Validate with the same graph and database constraints as a save, then retain only the proposal.
+      await c.query('SET CONSTRAINTS ALL IMMEDIATE');
+      await c.query('ROLLBACK TO SAVEPOINT person_suggestion');
+      await c.query('RELEASE SAVEPOINT person_suggestion');
+      const pending = (await c.query(`INSERT INTO person_reviews(created_by,person_id,payload,previous_hash,reason,kind,family_group_id)
+        VALUES($1,$2,$3,$4,$5,'suggestion',$6) RETURNING id`,
+        [u.id,id ?? null,JSON.stringify(proposal),old ? personVersionHash(old) : null,str(original.suggestion_note,500),owner])).rows[0];
+      return finish({ pending_review: pending.id });
+    }
     if(confirmationId)await c.query('UPDATE person_reviews SET result_id=$1 WHERE id=$2',[row.id,confirmationId]);
     if(reviewId) {
       await c.query("UPDATE person_reviews SET status='approved',result_id=$1,reviewed_by=$2,reviewed_at=now() WHERE id=$3",[row.id,u.id,reviewId]);
@@ -1062,6 +1141,15 @@ async function savePerson(u: User, b: any, id?: number, reviewId?: number) {
 const personResponse=(person:any)=>person.pending_review?person:{person};
 app.post('/api/people', async req => personResponse(await savePerson(await member(req),req.body)));
 app.put('/api/people/:id', async req => personResponse(await savePerson(await member(req),req.body,Number((req.params as any).id))));
+async function suggestPerson(req: FastifyRequest) {
+  const body = { ...(req.body as Record<string,unknown>) };
+  delete body.family_ids;
+  delete body.new_family;
+  const id = (req.params as { id?: string }).id;
+  return personResponse(await savePerson(await member(req),body,id ? Number(id) : undefined,undefined,true));
+}
+app.post('/api/people/suggestions', suggestPerson);
+app.post('/api/people/:id/suggestions', suggestPerson);
 app.delete('/api/people/:id', async req => {
   const u=await member(req), id=Number((req.params as any).id);
   return tx(async c=>{
@@ -1078,9 +1166,20 @@ app.delete('/api/people/:id', async req => {
 
 app.get('/api/person-reviews',async req=>{
   const u=await member(req);
-  const reviews=await q(`SELECT id,person_id,payload,reason,status,result_id,created_at FROM person_reviews WHERE ${familySql()} AND ($1::boolean OR created_by=$2) ORDER BY (status='pending') DESC,id DESC LIMIT 200`,[managesFamily(u),u.id]);
+  const reviews=await q(`SELECT r.id,r.kind,r.person_id,r.payload,r.reason,r.status,r.result_id,r.created_at,u.name submitted_by
+    FROM person_reviews r JOIN users u ON u.id=r.created_by WHERE ${familySql('r')} AND ($1::boolean OR r.created_by=$2)
+    ORDER BY (r.status='pending') DESC,r.id DESC LIMIT 200`,[managesFamily(u),u.id]);
   const people=await q(`${personSelect()} WHERE ${personSideSql('p',1)}`,[mySides(u)]);
-  return {reviews:reviews.map(r=>({...r,proposal:{father:people.find(p=>p.id===Number(r.payload.father_id))?.name||r.payload.new_relatives?.father_id?.name||'',mother:people.find(p=>p.id===Number(r.payload.mother_id))?.name||r.payload.new_relatives?.mother_id?.name||'',spouse:people.find(p=>p.id===Number(r.payload.spouse_id))?.name||r.payload.new_relatives?.spouse_id?.name||''},matches:people.filter(p=>p.id!==r.person_id&&nameKey(p.name)===nameKey(r.payload.name)).map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name}))}))};
+  const byId = new Map(people.map(person => [person.id,person]));
+  return { reviews: reviews.map(r => {
+    const relative = (key: string) => byId.get(Number(r.payload[key]))?.name || str(r.payload.new_relatives?.[key]?.name,120);
+    const current = r.person_id ? byId.get(r.person_id) : undefined;
+    return { ...r, current: r.kind === 'suggestion' ? current : undefined,
+      proposal: { father:relative('father_id'), mother:relative('mother_id'), spouse:relative('spouse_id'), secondSpouse:relative('second_spouse_id') },
+      matches: r.kind === 'duplicate' ? people.filter(p=>p.id!==r.person_id&&nameKey(p.name)===nameKey(r.payload.name))
+        .map(p=>({id:p.id,name:p.name,father_name:p.father_name,mother_name:p.mother_name,spouse_name:p.spouse_name})) : [],
+    };
+  }) };
 });
 app.post('/api/person-reviews/:id/resolve',async req=>{
   const u=await member(req),id=Number((req.params as any).id),b:any=req.body||{};
@@ -1093,6 +1192,7 @@ app.post('/api/person-reviews/:id/resolve',async req=>{
     if(!review||review.status!=='pending')throw new HttpError(409,word("errors.save_person.01"));
     let person:any=null;
     if(b.action==='existing') {
+      if(review.kind!=='duplicate')throw bad(word('errors.64'));
       person=(await c.query(`${personSelect()} WHERE p.id=$1 AND ${personSql('p')}`,[personId(b.existing_person_id)])).rows[0];
       if(!person)throw new HttpError(404,word("errors.11"));
     }

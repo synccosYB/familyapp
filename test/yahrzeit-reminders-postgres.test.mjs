@@ -96,6 +96,21 @@ test('yahrzeit mail follows visible ancestors and explicit choices with one retr
     assert.deepEqual(calls[2],calls[0],'retry uses the same persisted body and provider key');
     await run('2026-11-13T14:10:00Z');
     assert.equal(calls.length,3,'once per occurrence across both families and all reminder days');
+
+    Object.assign(config.whatsapp,{token:'mock',sender:'123',version:'v24.0',template:'yahrzeit_notice',language:'en_US'});
+    await pool.query('UPDATE users SET yahrzeit_whatsapp_phone=phone WHERE id=ANY($1::int[])',[[descendant,unverified,pending]]);
+    const messages = [];
+    const sendWhatsApp = async (url,options) => {
+      assert.equal(url,'https://graph.facebook.com/v24.0/123/messages');
+      messages.push(JSON.parse(options.body));
+      return Response.json({messages:[{id:'test-whatsapp-id'}]});
+    };
+    await runYahrzeitReminders(log,new Date('2026-11-13T14:10:00Z'),sendWhatsApp);
+    assert.deepEqual(messages.map(message=>message.to),['15555551001','15555551003'],'only opted-in, active members get WhatsApp');
+    assert.ok(messages[0].template.components[0].parameters[1].text.includes(`/#learn/${list}/${shared}`));
+    assert.doesNotMatch(JSON.stringify(messages),/Grandparent|Private family|Private side/);
+    await runYahrzeitReminders(log,new Date('2026-11-14T14:10:00Z'),sendWhatsApp);
+    assert.equal(messages.length,2,'WhatsApp is sent once per occurrence');
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);

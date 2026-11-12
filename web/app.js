@@ -1,7 +1,7 @@
 'use strict';
 import { word, htmlWord, applyWording } from './wording.js';
 import { familyUnits, treeViewportLayout } from './tree-layout.js';
-import { marriageChildren, childParents } from './family-relationships.js';
+import { marriageChildren, childParents, relationshipPath } from './family-relationships.js';
 import { automaticHebrewDate } from './hebrew-date.js';
 import { isDeceased, personName, withMemorialSuffix, yahrzeitName } from './person-names.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
@@ -61,6 +61,7 @@ async function api(path, opts = {}) {
   if (opts.body instanceof FormData) o.body = opts.body;
   else if (opts.body !== undefined) { o.body = JSON.stringify(opts.body); o.headers['content-type'] = 'application/json'; }
   const r = await fetch('/api' + path, o);
+  if (opts.image && r.ok) return r.blob();
   let j = {}; try { j = await r.json(); } catch { /* */ }
   if (!r.ok) { const e = new Error(j.error || `${word("shared.api.01")} ` + r.status); e.status = r.status; e.details=j.details; throw e; }
   return j;
@@ -92,6 +93,22 @@ const sideLong = (c) => sideName(c) + (famOf(c) ? ` ${word("calendar.side_long.0
 const sideTag = (c) => `<span class="tag ${c === 'a' || c === 'b' ? c : 'g'}">${htmlWord("calendar.side_tag.02", { value: c === 'a' || c === 'b' ? sideLong(c) : word("calendar.side_tag.01") })}</span>`;
 const familyTags = (p) => (p.families || []).map(f=>`<span class="tag g family-connection">${htmlWord("calendar.family_tags.01", { name: f.name })}</span>`).join(' ');
 const knownAs = (p) => p.known_as ? `<span class="person-known-as" dir="auto">${esc(p.known_as)}</span>` : '';
+const photoPath = id => `/people/${id}/photo`;
+const profilePhoto = (person, portrait = false) => person.has_photo
+  ? `<img class="person-photo${portrait ? ' portrait' : ''}" ${ME.acting ? `data-person-photo="${person.id}"` : `src="/api${photoPath(person.id)}"`} alt="" decoding="async"${portrait ? '' : ' loading="lazy"'}>` : '';
+function loadActingPhotos(root) {
+  const acting = ME?.acting?.context;
+  if (!acting) return;
+  for (const img of root.querySelectorAll('img[data-person-photo]')) {
+    api(photoPath(img.dataset.personPhoto), { image:true }).then(blob => {
+      if (!img.isConnected || ME?.acting?.context !== acting) return;
+      const url = URL.createObjectURL(blob);
+      img.addEventListener('load', () => URL.revokeObjectURL(url), { once:true });
+      img.addEventListener('error', () => URL.revokeObjectURL(url), { once:true });
+      img.src = url;
+    }).catch(() => img.remove());
+  }
+}
 const familyChoices = (rows) => [...new Map(rows.flatMap(p=>p.families || []).map(f=>[f.id,f])).values()].sort((a,b)=>a.name.localeCompare(b.name));
 const familySelector = (rows,key,label) => field(label,`<select data-change="familyfilter" data-key="${key}"><option value="">${htmlWord("calendar.family_selector.01")}</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`);
 const isManager = () => ME && (ME.is_admin || ME.is_family_admin);
@@ -115,7 +132,8 @@ const field = (lbl, inner) => { const id=inner.match(/id="([^"]+)"/); return `<l
 const val = (id) => ($(id) ? $(id).value.trim() : '');
 
 // ---------- nav ----------
-const pages = () => [['home', '🏠', word("navigation.home")], ['yz', '🕯️', word("navigation.yahrzeits")], ['tree', '🌳', word("navigation.tree")], ['learn', '📖', word("navigation.learning")], ['sim', '🎉', word("navigation.simchas")], ['chat', '💬', word("navigation.chat")], ['people', '👥', word("navigation.directory")]];
+const calendarNav = () => ['calendar', '📅', word('family_tools.calendar.title')];
+const pages = () => [['home', '🏠', word("navigation.home")], ['yz', '🕯️', word("navigation.yahrzeits")], calendarNav(), ['tree', '🌳', word("navigation.tree")], ['learn', '📖', word("navigation.learning")], ['sim', '🎉', word("navigation.simchas")], ['chat', '💬', word("navigation.chat")], ['people', '👥', word("navigation.directory")]];
 let PENDING = 0, UNREAD = false;
 function actingBanner() {
   const text=ME?.acting?word("navigation.acting_banner.01", { name: ME.name }):word("navigation.acting_banner.02");
@@ -133,7 +151,7 @@ function renderNav(v) {
   if(ME.acting)$('top').insertAdjacentHTML('afterbegin',actingBanner());
 }
 function moreSheet() {
-  const L = [['tree', '🌳', word("navigation.tree")], ['learn', '📖', word("navigation.learning")], ['people', '👥', word("navigation.directory")], ...(managesAccounts() ? [['admin', '🛡️', word("navigation.admin") + (PENDING ? ` ${word("navigation.more_sheet.01", { PENDING: PENDING })}` : '')]] : []), ['me', '👤', word("navigation.account")]];
+  const L = [calendarNav(), ['tree', '🌳', word("navigation.tree")], ['learn', '📖', word("navigation.learning")], ['people', '👥', word("navigation.directory")], ...(managesAccounts() ? [['admin', '🛡️', word("navigation.admin") + (PENDING ? ` ${word("navigation.more_sheet.01", { PENDING: PENDING })}` : '')]] : []), ['me', '👤', word("navigation.account")]];
   modal(`<div class="sheet">${L.map(([k, i, t]) => `<a href="#${k}" data-act="close">${i} ${esc(t)}</a>`).join('')}<a data-act="logout">${htmlWord("navigation.render_nav.01")}</a></div><button class="btn l" style="width:100%;margin-top:12px" data-act="close">${htmlWord("navigation.more_sheet.02")}</button>`);
 }
 
@@ -205,12 +223,16 @@ V.yz = async arg => {
   const { yahrzeits, email_days } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
   const L = yahrzeits.filter(y => id ? y.id===id : !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
   const reminders = !ME.acting && `<section class="card" style="margin-bottom:14px"><h2>${htmlWord("yahrzeits.reminders.heading")}</h2>
-    <p>${htmlWord("yahrzeits.reminders.schedule",{days:email_days})}</p>
+    <p>${htmlWord("family_tools.reminders.lead",{days:email_days})}</p>
     ${EMAIL_READY ? (ME.email_verified ? '' : `<p class="muted"><a href="#me">${htmlWord("yahrzeits.reminders.verify")}</a></p>`) : `<p class="muted">${htmlWord("shared.emaillearn.02")}</p>`}
     ${ME.person_id ? '' : `<p class="muted">${htmlWord("yahrzeits.reminders.link_profile")}</p>`}
-    <button class="btn l" type="button" data-act="ancestorreminders" aria-pressed="${ME.yahrzeit_ancestor_emails}" ${!ME.yahrzeit_ancestor_emails && (!EMAIL_READY || !ME.email_verified) ? 'disabled' : ''}>${htmlWord(ME.yahrzeit_ancestor_emails?'yahrzeits.reminders.disable_branch':'yahrzeits.reminders.enable_branch')}</button>
+    <button class="btn l" type="button" data-act="ancestorreminders" aria-pressed="${ME.yahrzeit_ancestor_emails}" ${!ME.yahrzeit_ancestor_emails && ((!EMAIL_READY || !ME.email_verified) && !(STATE.whatsappEnabled && ME.whatsapp_yahrzeit_reminders)) ? 'disabled' : ''}>${htmlWord(ME.yahrzeit_ancestor_emails?'yahrzeits.reminders.disable_branch':'yahrzeits.reminders.enable_branch')}</button>
+    <label class="reminder-option"><input type="checkbox" data-change="yahrzeitpreference" ${ME.whatsapp_yahrzeit_reminders?'checked':''}
+    ${!STATE.whatsappEnabled && !ME.whatsapp_yahrzeit_reminders?'disabled':''}> ${htmlWord('family_tools.reminders.whatsapp')}</label>
+    <p class="muted">${STATE.whatsappEnabled ? htmlWord('family_tools.reminders.whatsapp_phone',{phone:`+${ME.phone}`}) : htmlWord('family_tools.reminders.whatsapp_unavailable')}</p>
     </section>`;
-  return `<h1>${htmlWord(id?'yahrzeits.reminders.detail':'yahrzeits.heading')}</h1>${id?`<p><a href="#yz">${htmlWord("yahrzeits.reminders.all")}</a></p>`:`<div class="cap">${htmlWord("yahrzeits.yz.01")}</div>${reminders || ''}${familySelector(yahrzeits,'yzFamily',word("yahrzeits.yz.03"))}`}
+  STATE.printYahrzeits = L;
+  return `<header class="family-feature-header"><h1>${htmlWord(id?'yahrzeits.reminders.detail':'yahrzeits.heading')}</h1><div class="btns"><a href="#calendar" class="btn s l">${htmlWord('family_tools.calendar.title')}</a>${L.length ? `<button class="btn s l" data-act="printyahrzeits">${htmlWord('family_tools.print.action')}</button>` : ''}</div></header>${id?`<p><a href="#yz">${htmlWord("yahrzeits.reminders.all")}</a></p>`:`<div class="cap">${htmlWord("yahrzeits.yz.01")}</div>${reminders || ''}${familySelector(yahrzeits,'yzFamily',word("yahrzeits.yz.03"))}`}
   ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(yahrzeitName(y))}</b>
    ${y.families?.length?`<div class="yahrzeit-families">${familyTags(y)}</div>`:''}
    <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` ${htmlWord("yahrzeits.yz.06", { date: gdate(y.next.ymd) })} <b style="color:#4338ca">${esc(inDays(y.next.days))}</b>` : ''}</div>
@@ -219,9 +241,40 @@ V.yz = async arg => {
    <button class="btn s l" data-act="newlist" data-yz="${y.id}">${htmlWord("yahrzeits.yz.04")}</button><button class="btn s l" data-act="shareyz" data-id="${y.id}">${htmlWord("yahrzeits.reminders.whatsapp")}</button><button class="btn s l" data-act="edityz" data-id="${y.id}">${htmlWord("yahrzeits.yz.05")}</button></div></div>`).join('') || empty('🕯️', word(id?'yahrzeits.reminders.missing':'yahrzeits.yz.09'))}
   ${id?reminders || '':`<button class="btn" style="margin-top:10px" data-act="edityz" data-id="0">${htmlWord("yahrzeits.add")}</button>`}`;
 };
+
+const eventLabel = kind => word(`family_tools.calendar.${kind}`);
+const calendarRow = (event, day) => `<li class="calendar-event"><span class="tag ${event.kind==='yahrzeit'?'b':'g'}">${esc(eventLabel(event.kind))}</span>
+  ${event.kind === 'yahrzeit' ? `<a href="#yz/${event.yahrzeitId}/${ME.selected_family_group_id}">${esc(withMemorialSuffix(event.name))}</a>`
+    : `<button type="button" class="family-name" data-act="viewperson" data-id="${event.personId}">${esc(event.name)}</button>`}
+  <time datetime="${day.date}">${esc(day.label)}</time></li>`;
+function calendarAgenda(calendar, selected) {
+  const day = calendar.days.find(entry => entry.date === selected);
+  const heading = day ? day.date === calendar.today ? word('family_tools.calendar.today_date', { date:day.label }) : day.label : calendar.label;
+  const events = day ? calendar.events.filter(event => event.date === day.date) : calendar.events;
+  const dates = new Map(calendar.days.map(entry => [entry.date,entry]));
+  return `<h2>${esc(heading)}</h2>${events.length ? `<ul class="calendar-events">${events.map(event => calendarRow(event,dates.get(event.date))).join('')}</ul>`
+    : `<p class="muted">${htmlWord('family_tools.calendar.empty')}</p>`}`;
+}
+V.calendar = async () => {
+  const { year, month } = STATE.calendarMonth || {};
+  const calendar = await api('/family-calendar' + (year ? `?year=${year}&month=${month}` : ''));
+  STATE.familyCalendar = calendar;
+  if (!year) STATE.calendarDay = calendar.today;
+  const counts = new Map();
+  for (const event of calendar.events) counts.set(event.date, (counts.get(event.date) || 0) + 1);
+  const monthButton = (key, label) => `<button type="button" class="btn s l" data-act="calendarmonth" data-v="${key}">${htmlWord(label)}</button>`;
+  return `<header class="family-feature-header"><h1>${htmlWord('family_tools.calendar.title')}</h1><button class="btn s" data-act="calendarmonth" data-v="today">${htmlWord('family_tools.calendar.today')}</button></header>
+  <section class="card calendar-card"><div class="calendar-controls">${monthButton('previous','family_tools.calendar.previous')}<h2>${esc(calendar.label)}</h2>${monthButton('next','family_tools.calendar.next')}</div>
+  <div class="calendar-grid">${dayWords.map((key,index) => `<span class="calendar-weekday" title="${htmlWord(key)}">${index===6?htmlWord('family_tools.calendar.shabbos'):esc(hebD(index+1))}</span>`).join('')}
+  ${'<span aria-hidden="true"></span>'.repeat(calendar.startWeekday)}
+  ${calendar.days.map(day => `<button class="calendar-day" data-act="calendarday" data-v="${day.date}" aria-pressed="${STATE.calendarDay===day.date}" ${calendar.today===day.date?'aria-current="date"':''}
+    aria-label="${htmlWord('family_tools.calendar.day_events', { day:day.label, count:counts.get(day.date)||0 })}"><span>${esc(day.day)}</span>${counts.has(day.date)?`<small>${counts.get(day.date)}</small>`:''}</button>`).join('')}</div>
+  <button class="btn s l calendar-all" data-act="calendarday" data-v="">${htmlWord('family_tools.calendar.all_month')}</button></section>
+  <section id="calendar-agenda" class="card" aria-live="polite">${calendarAgenda(calendar, STATE.calendarDay)}</section>`;
+};
 async function yzForm(id) {
   const y=(STATE.yzs||[]).find(x=>x.id===id);
-  if(y?.person_id)return personForm(y.person_id);
+  if(y?.person_id)return personForm(y.person_id,undefined,{fromYahrzeit:true});
   const {people}=await api('/people');STATE.yzLegacy=y||null;
   modal(`<h2>${y?htmlWord("yahrzeits.yz_form.05"):htmlWord("yahrzeits.yz_form.06")}</h2><p class="muted">${htmlWord("yahrzeits.yz_form.01")}</p>
     ${field(word("yahrzeits.yz_form.07"),`<select id="yzperson"><option value="">${htmlWord("yahrzeits.yz_form.08")}</option>${people.map(p=>`<option value="${p.id}">${esc(personName(p))}</option>`).join('')}</select>`)}
@@ -244,23 +297,104 @@ V.tree = async () => {
   const { people } = await api('/people'); STATE.people = people;
   const P = people; // Server permissions determine visibility; family membership never cuts spouse/ancestor links.
   const {units,edges,generationConflicts}=familyUnits(P); STATE.treeEdges=edges;
+  STATE.treePrintUnits = units;
   const graphMode=STATE.treeView==='tree' && !generationConflicts.length;
   const peopleById=new Map(P.map(p=>[p.id,p]));
   const relative=(p,key)=>relationName(peopleById,p,key);
-  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${isDeceased(p)?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><strong>${esc(personName(p))}</strong>${knownAs(p)}${p.spouse_name?`<span class="muted">${htmlWord("tree.node.02", { spouse_name: relative(p,'spouse') })}</span>`:''}${p.second_spouse_name?`<span class="muted">${htmlWord("tree.node.03", { second_spouse_name: relative(p,'second_spouse') })}</span>`:''}${p.father_name?`<span class="muted tree-relation">${htmlWord("tree.node.04", { father_name: relative(p,'father') })}</span>`:''}${p.mother_name?`<span class="muted tree-relation">${htmlWord("tree.node.05", { mother_name: relative(p,'mother') })}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">${htmlWord("tree.node.06", { spouse: p.spouse })}</span>`:''}</button>`;
+  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${isDeceased(p)?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><span class="person-card-heading">${profilePhoto(p)}<strong>${esc(personName(p))}</strong></span>${knownAs(p)}${p.spouse_name?`<span class="muted">${htmlWord("tree.node.02", { spouse_name: relative(p,'spouse') })}</span>`:''}${p.second_spouse_name?`<span class="muted">${htmlWord("tree.node.03", { second_spouse_name: relative(p,'second_spouse') })}</span>`:''}${p.father_name?`<span class="muted tree-relation">${htmlWord("tree.node.04", { father_name: relative(p,'father') })}</span>`:''}${p.mother_name?`<span class="muted tree-relation">${htmlWord("tree.node.05", { mother_name: relative(p,'mother') })}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">${htmlWord("tree.node.06", { spouse: p.spouse })}</span>`:''}</button>`;
   const couple = unit => `<section class="family-unit ${unit.members.length>1?'married':''}" aria-label="${unit.members.length>1?htmlWord("tree.couple.01"):htmlWord("tree.couple.02")}">${unit.members.length>1?`<div class="marriage-label">${htmlWord("tree.couple.01")}</div>`:''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
   const treeHtml=graphMode
-    ? `<div class="tree-toolbar" aria-label="${htmlWord("tree.01")}"><button class="btn s l" data-act="treezoom" data-v="fit">${htmlWord("tree.02")}</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="${htmlWord("tree.03")}">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="${htmlWord("tree.04")}">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">${htmlWord("tree.05")}</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
-     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>${htmlWord("tree.06")}</th><th>${htmlWord("tree.07")}</th><th>${htmlWord("tree.08")}</th><th>${htmlWord("tree.09")}</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${esc(personName(p))}</button>${knownAs(p)} ${familyTags(p)}</td><td>${esc(p.spouse_name?`${word("tree.10")} `+relative(p,'spouse'):p.spouse)||'—'}${p.second_spouse_name?`<br>${htmlWord("tree.11")} `+esc(relative(p,'second_spouse')):''}</td><td>${esc(relative(p,'father'))||'—'}</td><td>${esc(relative(p,'mother'))||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
-  return `<h1>${htmlWord("tree.12")}</h1><div class="cap">${htmlWord("tree.13")}</div>
+    ? `<div class="tree-toolbar" aria-label="${htmlWord("tree.01")}"><button class="btn s l" data-act="treezoom" data-v="fit">${htmlWord("tree.02")}</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="${htmlWord("tree.03")}">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="${htmlWord("tree.04")}">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">${htmlWord(isManager() ? "tree.05" : "family_tools.suggestions.add")}</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
+     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>${htmlWord("tree.06")}</th><th>${htmlWord("tree.07")}</th><th>${htmlWord("tree.08")}</th><th>${htmlWord("tree.09")}</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${profilePhoto(p)}${esc(personName(p))}</button>${knownAs(p)} ${familyTags(p)}</td><td>${esc(p.spouse_name?`${word("tree.10")} `+relative(p,'spouse'):p.spouse)||'—'}${p.second_spouse_name?`<br>${htmlWord("tree.11")} `+esc(relative(p,'second_spouse')):''}</td><td>${esc(relative(p,'father'))||'—'}</td><td>${esc(relative(p,'mother'))||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
+  return `<header class="family-feature-header"><h1>${htmlWord("tree.12")}</h1><div class="btns">
+  ${P.length > 1 ? `<button class="btn s l" data-act="findrelationship">${htmlWord('family_tools.relationship.title')}</button>` : ''}
+  ${P.length ? `<button class="btn s l" data-act="printtree">${htmlWord('family_tools.print.action')}</button>` : ''}</div></header><div class="cap">${htmlWord("tree.13")}</div>
   ${familySelector(P,'treeFamily',word("tree.16"))}
   <div class="btns" style="margin-bottom:6px">
   <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">${htmlWord("tree.14")}</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">${htmlWord("tree.15")}</button></div></div>
   ${generationConflicts.length ? `<p class="err" role="alert">${htmlWord("tree.17")}</p>` : ''}
   ${units.length ? `<div class="card">${treeHtml}</div>` : empty('🌳',word("tree.18"))}
-  ${graphMode && units.length ? '' : `<button class="btn" style="margin-top:12px" data-act="editp" data-id="0">${htmlWord("tree.05")}</button>`}`;
+  ${graphMode && units.length ? '' : `<button class="btn" style="margin-top:12px" data-act="editp" data-id="0">${htmlWord(isManager() ? "tree.05" : "family_tools.suggestions.add")}</button>`}`;
 };
+
+function findRelationship() {
+  const people = [...STATE.people].sort((a,b) => personName(a).localeCompare(personName(b),'he'));
+  const options = rows => `<option value="">${htmlWord('family_tools.relationship.pick')}</option>` + rows.map(person =>
+    `<option value="${person.id}">${esc(personName(person))}${person.father_name ? ` · ${esc(person.father_name)}` : ''}</option>`).join('');
+  const picker = key => `<div>${field(word(`family_tools.relationship.${key}`), `<input type="search" id="relation-${key}-search" autocomplete="off">`)}
+    <select id="relation-${key}" aria-label="${htmlWord(`family_tools.relationship.${key}`)}" required>${options(people)}</select></div>`;
+  modal(`<h2>${htmlWord('family_tools.relationship.title')}</h2><form data-form="relationship"><div class="grid g2">${picker('from')}${picker('to')}</div>
+    <div class="btns"><button class="btn">${htmlWord('family_tools.relationship.find')}</button><button type="button" class="btn l" data-act="close">${htmlWord('tree.person_profile.10')}</button></div>
+    <div id="relationship-result" aria-live="polite"></div></form>`);
+  for (const key of ['from','to']) {
+    const search = $(`relation-${key}-search`), select = $(`relation-${key}`);
+    search.addEventListener('input', () => {
+      const selected = select.value, query = personNameKey(search.value);
+      const filtered = people.filter(p => personNameKey(`${personName(p)} ${p.known_as || ''} ${p.father_name || ''}`).includes(query));
+      select.innerHTML = options(filtered);
+      if (filtered.some(person => String(person.id) === selected)) select.value = selected;
+      else if (filtered.length === 1) select.value = String(filtered[0].id);
+    });
+  }
+}
+
+function showRelationship() {
+  const people = STATE.people;
+  const byId = new Map(people.map(person => [person.id,person]));
+  const path = relationshipPath(people, Number(val('relation-from')), Number(val('relation-to')));
+  $('relationship-result').innerHTML = path?.length === 1 ? `<p>${htmlWord('family_tools.relationship.same')}</p>` : path
+    ? `<ol class="relationship-path">${path.map(step => `<li>${step.relation ? `<small>${htmlWord(`family_tools.relationship.edge_${step.relation}`)}</small>` : ''}<strong>${esc(personName(byId.get(step.id)))}</strong></li>`).join('')}</ol>`
+    : `<p>${htmlWord('family_tools.relationship.disconnected')}</p>`;
+}
+
+function showPrint(kind, heading, markup) {
+  $('family-print')?.remove();
+  const section = document.createElement('section');
+  section.id = 'family-print';
+  section.className = `family-print print-${kind}`;
+  section.innerHTML = `<h1>${esc(heading)} · ${esc(S.family_yi)}</h1>${markup}`;
+  document.body.append(section);
+  document.body.classList.add('printing-family');
+  const previousTitle = document.title;
+  document.title = `${heading} - ${S.family_yi}`;
+  window.addEventListener('afterprint', () => {
+    section.remove();
+    document.body.classList.remove('printing-family');
+    document.title = previousTitle;
+  }, { once:true });
+  window.print();
+}
+
+function printFamilyTree() {
+  const units = STATE.treePrintUnits;
+  const map = $('family-map');
+  const scale = map ? Math.min(1, 960 / map.offsetWidth) : 0;
+  const title = word('family_tools.print.tree');
+  if (map && scale >= 0.55 && map.offsetHeight * scale <= 620) {
+    drawFamilyLines();
+    const graph = map.cloneNode(true);
+    graph.removeAttribute('id');
+    graph.querySelectorAll('img').forEach(photo => photo.style.visibility = 'hidden');
+    Object.assign(graph.style,{ right:'0', top:'0', width:`${map.offsetWidth}px`, transform:`scale(${scale})` });
+    showPrint('tree', title, `<div class="print-chart" style="height:${Math.ceil(map.offsetHeight*scale)}px">${graph.outerHTML}</div>`);
+    return;
+  }
+  const generations = [...new Set(units.map(unit => unit.level))].sort((a,b) => a-b);
+  const nameColumn = key => htmlWord(`tree.${key}`);
+  const groups = generations.map((level,index) => `<h2>${htmlWord('family_tools.print.generation', { number:index+1 })}</h2>
+    <table><thead><tr><th>${nameColumn('06')}</th><th>${nameColumn('08')}</th><th>${nameColumn('09')}</th><th>${nameColumn('07')}</th></tr></thead><tbody>
+    ${units.filter(unit => unit.level === level).flatMap(unit => unit.members).map(person => `<tr><td>${esc(personName(person))}</td><td>${esc(person.father_name || '—')}</td>
+      <td>${esc(person.mother_name || '—')}</td><td>${esc([person.spouse_name || person.spouse,person.second_spouse_name].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table>`);
+  showPrint('tree', title, groups.join(''));
+}
+
+function printYahrzeits() {
+  const rows = STATE.printYahrzeits.map(y => `<tr><td>${esc(yahrzeitName(y))}</td><td>${esc(y.hebrew)}</td>
+    <td>${esc(y.next ? gdate(y.next.ymd) : '—')}</td><td>${esc(y.kever || '—')}</td></tr>`).join('');
+  showPrint('yahrzeits', word('family_tools.print.yahrzeits'), `<table><thead><tr><th>${htmlWord('tree.06')}</th><th>${htmlWord('family_tools.print.hebrew_date')}</th>
+    <th>${htmlWord('family_tools.print.next_date')}</th><th>${htmlWord('tree.person_profile.16')}</th></tr></thead><tbody>${rows}</tbody></table>`);
+}
 let treeObserver;
 function drawFamilyLines() {
   const map=$('family-map'); if(!map) return;
@@ -348,14 +482,18 @@ async function personProfile(id) {
     return `<section class="card"><h3>${esc(label)}</h3>${spouse?linked(key,word("tree.07")):`<button class="btn l" data-act="addmarriage" data-id="${id}" data-key="${key}">${htmlWord("tree.person_profile.04", { label: label })}</button>`}${spouse?`<h4>${htmlWord("tree.person_profile.05", { label: label })}</h4>${marriageChildren(people,id,spouse.id).map(childRow).join('')||`<p class="muted">${htmlWord("tree.person_profile.07")}</p>`}<button class="btn l" data-act="marriagechild" data-id="${id}" data-spouse="${spouse.id}">${htmlWord("tree.person_profile.06", { label: label })}</button>`:''}</section>`;
   }).join('');
   const otherChildren=marriageChildren(people,id).filter(c=>![p.spouse_id,p.second_spouse_id].includes(c.father_id===id?c.mother_id:c.father_id));
-  modal(`<h2>${esc(personName(p))}</h2>${knownAs(p)}<div class="btns">${familyTags(p)}</div>
+  const editPhoto = ME.is_admin || ME.person_id === id || (ME.is_family_admin && p.family_group_id === ME.selected_family_group_id);
+  modal(`<div class="person-profile-heading">${profilePhoto(p,true)}<div><h2>${esc(personName(p))}</h2>${knownAs(p)}<div class="btns">${familyTags(p)}</div></div></div>
+    ${editPhoto ? `<form class="card profile-photo-form" data-form="personphoto" data-id="${id}">${field(word('family_tools.photo.label'), '<input type="file" id="person-photo-file" name="photo" accept="image/jpeg,image/png,image/webp" required>')}
+    <div class="err" role="alert"></div><div class="btns"><button class="btn s l">${htmlWord('family_tools.photo.save')}</button>${p.has_photo ? `<button type="button" class="btn s r" data-act="removephoto" data-id="${id}">${htmlWord('family_tools.photo.remove')}</button>` : ''}</div></form>` : ''}
     <p class="muted">${isDeceased(p)?htmlWord("tree.person_profile.11"):p.life_status==='living'?htmlWord("tree.person_profile.12"):htmlWord("tree.person_profile.13")}</p>
     ${linked('father_id',word("tree.08"))}${linked('mother_id',word("tree.09"))}${marriages}
     ${otherChildren.length?`<h3>${htmlWord("tree.person_profile.14")}</h3>${otherChildren.map(childRow).join('')}`:''}
     <button class="btn l" data-act="addchild" data-id="${id}">${htmlWord("tree.person_profile.08")}</button>
     ${p.death_hday&&p.death_hmonth?`<p><b>${htmlWord("tree.person_profile.15")}</b> ${esc(hebD(p.death_hday))} ${esc(hebrewMonthLabel(p.death_hmonth))}${p.death_year?' · '+esc(p.death_year):''}</p>`:''}
     ${p.kever?`<p><b>${htmlWord("tree.person_profile.16")}</b> ${esc(p.kever)}</p>`:''}${p.kever_address?`<p dir="auto">📍 ${esc(p.kever_address)}</p><div class="btns">${navBtns(p.kever_address)}</div>`:''}${p.note?`<p>${esc(p.note)}</p>`:''}
-    <div class="btns"><button class="btn" data-act="editp" data-id="${p.id}">${htmlWord("tree.person_profile.09")}</button><button class="btn l" data-act="close">${htmlWord("tree.person_profile.10")}</button></div>`);
+    <div class="btns"><button class="btn" data-act="editp" data-id="${p.id}">${htmlWord(isManager() ? 'tree.person_profile.09' : 'family_tools.suggestions.edit')}</button><button class="btn l" data-act="close">${htmlWord("tree.person_profile.10")}</button></div>`);
+  loadActingPhotos($('mb'));
 }
 const personNameKey=value=>String(value||'').normalize('NFKD').replace(/\p{M}/gu,'').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]/gu,'');
 function matchCards(matches,field='person') {
@@ -369,28 +507,81 @@ function renderPersonMatches(field='person',forced) {
   const matches=forced||(query.length<2||existingName?[]:people.filter(p=>p.id!==id&&personNameKey(p.name).includes(query)).slice(0,12));
   const target=$(field==='person'?'personmatches':'matches_'+field);if(target)target.innerHTML=matches.length?`<p>${htmlWord("tree.render_person_matches.01")}</p>`+matchCards(matches,field):'';
 }
-V.personreviews=async()=>{
-  const {reviews}=await api('/person-reviews');
-  return `<h1>${htmlWord("tree.personreviews.01")}</h1><p>${htmlWord("tree.personreviews.02")}</p>${reviews.map(r=>`<section class="card"><h2>${esc(r.payload.name||word("tree.personreviews.10"))}</h2><p>${esc(r.reason)}</p><p>${htmlWord("tree.personreviews.03", { value: r.proposal.father||word("tree.child_row.01"), value2: r.proposal.mother||word("tree.child_row.01"), value3: r.proposal.spouse||word("tree.child_row.01") })}</p><p>${htmlWord("tree.personreviews.09", { value: ({pending:word("tree.personreviews.04"),approved:word("tree.personreviews.05"),confirmed:word("tree.personreviews.06"),existing:word("tree.personreviews.07"),rejected:word("tree.personreviews.08")})[r.status] })}</p>${r.result_id?`<button class="btn s" data-act="editp" data-id="${r.result_id}">${htmlWord("tree.personreviews.11")}</button>`:''}${r.status==='pending'&&isManager()?`<div>${r.matches.map(p=>`<p>${esc(p.name)} · ${esc(p.father_name||'')} · ${esc(p.mother_name||'')} · ${esc(p.spouse_name||'')} <button class="btn s" data-act="reviewperson" data-id="${r.id}" data-v="existing" data-person="${p.id}">${htmlWord("tree.personreviews.14")}</button></p>`).join('')}</div><button class="btn" data-act="reviewperson" data-id="${r.id}" data-v="approve">${htmlWord("tree.personreviews.12")}</button><button class="btn r" data-act="reviewperson" data-id="${r.id}" data-v="reject">${htmlWord("tree.personreviews.13")}</button>`:''}</section>`).join('')||`<p>${htmlWord("tree.personreviews.15")}</p>`}`;
+function proposedPersonChanges(review) {
+  const before = review.current || {}, after = review.payload;
+  const dateLabel = date => date?.day && date.month ? [hebD(date.day),hebrewMonthLabel(date.month),date.year].filter(Boolean).join(' ') : '';
+  const statusLabel = status => word(({ deceased:'tree.person_profile.11', living:'tree.person_profile.12' })[status] || 'tree.person_profile.13');
+  const comparison = [
+    ['tree.06', before.name, after.name], ['tree.choice.04', before.title, after.title],
+    ['tree.known_as_field.01', before.known_as, after.known_as],
+    ['tree.08', before.father_name, review.proposal.father], ['tree.09', before.mother_name, review.proposal.mother],
+    ['tree.person_profile.02', before.spouse_name, review.proposal.spouse], ['tree.person_profile.03', before.second_spouse_name, review.proposal.secondSpouse],
+    ['tree.person_form.23', before.life_status ? statusLabel(before.life_status) : '', after.life_status ? statusLabel(after.life_status) : ''],
+    ['tree.person_form.25', dateLabel({day:before.death_hday,month:before.death_hmonth,year:before.death_year}), dateLabel({day:Number(after.death_hday),month:after.death_hmonth,year:Number(after.death_year)})],
+    ['tree.person_form.30', before.kever, after.kever], ['tree.person_form.32', before.kever_address, after.kever_address],
+    ['tree.person_form.34', before.note, after.note],
+    ...dateKinds.map(kind => [`family_tools.calendar.${kind}`, dateLabel(before.calendar_dates?.[kind]), dateLabel(after.calendar_dates?.[kind])]),
+  ];
+  const changes = comparison.filter(([, previous, next]) => (previous || '') !== (next || ''));
+  return changes.length ? `<dl class="person-review-changes">${changes.map(([label,previous,next]) =>
+    `<div><dt>${htmlWord(label)}</dt><dd>${previous ? `<del>${esc(previous)}</del> ` : ''}<strong>${esc(next || '—')}</strong></dd></div>`).join('')}</dl>`
+    : `<p class="muted">${htmlWord('family_tools.suggestions.no_changes')}</p>`;
+}
+V.personreviews = async () => {
+  const { reviews } = await api('/person-reviews');
+  const statuses = { pending:'04',approved:'05',confirmed:'06',existing:'07',rejected:'08' };
+  const card = review => {
+    const suggestion = review.kind === 'suggestion';
+    const resolution = review.status === 'pending' && isManager();
+    const button = (action, label, style='', person) => `<button class="btn ${style}" data-act="reviewperson" data-id="${review.id}" data-v="${action}"${person?` data-person="${person}"`:''}>${htmlWord(label)}</button>`;
+    return `<section class="card"><h2>${esc(review.payload.name || word('tree.personreviews.10'))}</h2>
+    <p class="muted">${htmlWord('family_tools.suggestions.submitted', { name:review.submitted_by })}</p>
+    ${review.reason ? `<p>${esc(review.reason)}</p>` : ''}
+    ${suggestion ? proposedPersonChanges(review) : `<p>${htmlWord('tree.personreviews.03', { value:review.proposal.father||'—',value2:review.proposal.mother||'—',value3:review.proposal.spouse||'—' })}</p>`}
+    <p>${htmlWord('tree.personreviews.09', { value:word('tree.personreviews.'+statuses[review.status]) })}</p>
+    ${review.result_id ? `<button class="btn s l" data-act="viewperson" data-id="${review.result_id}">${htmlWord('tree.personreviews.11')}</button>` : ''}
+    ${resolution ? `<div>${review.matches.map(p=>`<p>${esc(p.name)} · ${esc(p.father_name||'')} · ${esc(p.mother_name||'')} · ${esc(p.spouse_name||'')} ${button('existing','tree.personreviews.14','s',p.id)}</p>`).join('')}</div>
+    <div class="btns">${button('approve',suggestion?'family_tools.suggestions.approve':'tree.personreviews.12')}${button('reject','tree.personreviews.13','r')}</div>` : ''}</section>`;
+  };
+  return `<h1>${htmlWord('family_tools.suggestions.queue')}</h1>${reviews.length ? reviews.map(card).join('') : `<p>${htmlWord('tree.personreviews.15')}</p>`}`;
 };
+const dateKinds = ['birthday','anniversary','second_anniversary'];
+function calendarDateFields(p,kind) {
+  const date = p.calendar_dates?.[kind] || {};
+  const id = `person-${kind}`;
+  return `<fieldset class="calendar-date-fields"><legend>${esc(eventLabel(kind))}</legend><div class="grid g3">
+    <div>${field(word('tree.person_form.26'), `<select id="${id}-day"><option value="">—</option>${Array.from({length:30},(_,i)=>`<option value="${i+1}" ${date.day===i+1?'selected':''}>${esc(hebD(i+1))}</option>`).join('')}</select>`)}</div>
+    <div>${field(word('tree.person_form.28'), `<select id="${id}-month"><option value="">—</option>${HMONTHS.map(([key,label])=>`<option value="${key}" ${date.month===key?'selected':''}>${htmlWord(label)}</option>`).join('')}</select>`)}</div>
+    <div>${field(word('family_tools.calendar.optional_year'), `<input type="number" id="${id}-year" min="5001" max="5999" value="${date.year || ''}">`)}</div></div></fieldset>`;
+}
+function readCalendarDates() {
+  const dates = {};
+  for (const kind of dateKinds) {
+    const day=val(`person-${kind}-day`), month=val(`person-${kind}-month`), year=val(`person-${kind}-year`);
+    if (day || month || year) dates[kind] = { day:Number(day),month,year:year?Number(year):null };
+  }
+  return dates;
+}
 async function personForm(id, parentId, defaults={}) {
   const {people:P}=await api('/people'); STATE.people=P;
   if(id&&!P.some(x=>x.id===id))throw new Error(word("tree.person_form.01"));
   const p = {...(P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null}),...defaults};
   const yahrzeit = !!defaults.requireYahrzeit;
+  const suggestion = !isManager() && !yahrzeit && !defaults.fromYahrzeit;
   const knownAsField=(inputId,value='')=>field(word("tree.known_as_field.01"),`<input id="${inputId}" maxlength="160" dir="auto" value="${esc(value)}" placeholder="${htmlWord("tree.known_as_field.02")}">`);
   const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">${htmlWord("tree.choice.01")}</option><option value="new">${htmlWord("tree.choice.02")}</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc(personName(x))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">${htmlWord("tree.choice.03")}</p>${field(word("tree.choice.04"), `<input id="new_${key}_title" dir="auto">`)}${field(word("tree.06"), `<input id="new_${key}_name" dir="auto">`)}${knownAsField('new_'+key+'_known_as')}<div id="matches_${key}" aria-live="polite"></div></div>`);
-  modal(`<h2 style="margin-top:0">${yahrzeit ? htmlWord("tree.person_form.10") : id ? '✏️ ' + esc(personName(p,p.name)) : htmlWord("tree.person_form.11")}</h2><form data-form="person" data-id="${id}" data-yahrzeit="${yahrzeit ? '1' : ''}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?`<p class="muted">${htmlWord("tree.person_form.12")}</p>`:''}
+  modal(`<h2 style="margin-top:0">${yahrzeit ? htmlWord("tree.person_form.10") : id ? '✏️ ' + esc(personName(p,p.name)) : htmlWord("tree.person_form.11")}</h2><form data-form="person" data-id="${id}" data-yahrzeit="${yahrzeit ? '1' : ''}" data-suggestion="${suggestion?'1':''}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?`<p class="muted">${htmlWord("tree.person_form.12")}</p>`:''}
+  ${suggestion ? `<p class="muted">${htmlWord('family_tools.suggestions.explain')}</p>` : ''}
   <div class="grid g2"><div>${field(word("tree.choice.04"),`<input id="ptitle" value="${esc(p.title)}" placeholder="${htmlWord("tree.person_form.13")}">`)}</div><div>${field(word("tree.06"),`<input id="pn" value="${esc(p.name)}">`)}</div></div>
   <div id="personmatches" aria-live="polite"></div>
   ${knownAsField('pknownas',p.known_as)}
   <label><input id="pdistinct" type="checkbox"> ${htmlWord("tree.person_form.02")}</label>
   ${field(word("tree.person_form.14"), '<textarea id="pdistinctreason" maxlength="500"></textarea>')}
   <p class="muted">${htmlWord("tree.person_form.03")}</p>
-  <fieldset class="person-family-picker"><legend>${htmlWord("tree.person_form.04")}</legend>
+  ${suggestion ? '' : `<fieldset class="person-family-picker"><legend>${htmlWord("tree.person_form.04")}</legend>
   <p class="muted">${htmlWord("tree.person_form.05")}${ME.is_admin?` ${htmlWord("tree.person_form.15")}`:''}</p>
   <div class="person-family-options">${familyChoices(P).map(f=>`<label><input type="checkbox" name="person_family" value="${f.id}" ${(p.families || []).some(x=>x.id===f.id)?'checked':''}><strong>${esc(f.name)}</strong></label>`).join('')}</div>
-  <details><summary>${htmlWord("tree.person_form.06")}</summary>${field(word("tree.person_form.16"),`<input id="pnewfamily" maxlength="80">`)}</details></fieldset>
+  <details><summary>${htmlWord("tree.person_form.06")}</summary>${field(word("tree.person_form.16"),`<input id="pnewfamily" maxlength="80">`)}</details></fieldset>`}
   ${choice('father_id',word("tree.08"))}${choice('mother_id',word("tree.09"))}${choice('spouse_id',word("tree.person_profile.02"))}${choice('second_spouse_id',word("tree.person_profile.03"))}<p class="muted">${htmlWord("tree.person_form.07")}</p>
   ${p.parent_id ? choice('parent_id',word("tree.person_form.17")) : '<input type="hidden" id="pparent_id" value="">'}
   ${p.spouse && !p.spouse_id ? `<p class="muted">${htmlWord("tree.person_form.18", { spouse: p.spouse })}</p>` : ''}
@@ -405,8 +596,10 @@ async function personForm(id, parentId, defaults={}) {
   ${field(word("tree.person_form.30"),`<input id="pkever" value="${esc(p.kever)}" placeholder="${htmlWord("tree.person_form.31")}">`)}
   ${field(word("tree.person_form.32"),`<input id="pkeveraddress" dir="auto" value="${esc(p.kever_address)}" placeholder="${htmlWord("tree.person_form.33")}">`)}
   ${field(word("tree.person_form.34"),`<input id="pno" value="${esc(p.note)}">`)}
-  <div class="err" id="ferr"></div><div class="btns"><button class="btn">${yahrzeit ? htmlWord("tree.person_form.35") : htmlWord("tree.person_form.36")}</button><button type="button" class="btn l" data-act="close">${htmlWord("tree.person_form.09")}</button>
-  ${id ? `<button type="button" class="btn l" data-act="addchild" data-id="${id}">${htmlWord("tree.person_form.37")}</button><button type="button" class="btn r" data-act="delp" data-id="${id}">🗑</button>` : ''}</div></form>`);
+  ${yahrzeit ? '' : `<details${Object.keys(p.calendar_dates || {}).length?' open':''}><summary>${htmlWord('family_tools.calendar.profile_dates')}</summary>${dateKinds.map(kind=>calendarDateFields(p,kind)).join('')}</details>`}
+  ${suggestion ? field(word('family_tools.suggestions.note'), '<textarea id="person-suggestion-note" maxlength="500"></textarea>') : ''}
+  <div class="err" id="ferr" role="alert"></div><div class="btns"><button class="btn">${htmlWord(suggestion ? 'family_tools.suggestions.send' : yahrzeit ? 'tree.person_form.35' : 'tree.person_form.36')}</button><button type="button" class="btn l" data-act="close">${htmlWord("tree.person_form.09")}</button>
+  ${id ? `<button type="button" class="btn l" data-act="addchild" data-id="${id}">${htmlWord("tree.person_form.37")}</button>${suggestion ? '' : `<button type="button" class="btn r" data-act="delp" data-id="${id}">🗑</button>`}` : ''}</div></form>`);
   renderPersonMatches();
   if(defaults.openRelative){const key=defaults.openRelative;$('p'+key).value='new';$('new_'+key).hidden=false;$('new_'+key+'_name').focus();}
 }
@@ -888,15 +1081,34 @@ async function go() {
   if (view !== 'chat') stopPoll();
   renderNav(view);
   const my = ++RENDER;
-  try { const html = await V[view](arg); if (my !== RENDER) return; const keep = STATE.keepScroll; $('m').innerHTML = html; if (!keep) window.scrollTo(0, 0); STATE.keepScroll = false; renderNav(view); observeFamilyTree(); }
+  try { const html = await V[view](arg); if (my !== RENDER) return; const keep = STATE.keepScroll; $('m').innerHTML = html; if (!keep) window.scrollTo(0, 0); STATE.keepScroll = false; renderNav(view); observeFamilyTree(); loadActingPhotos($('m')); }
   catch (e) { if (my === RENDER) { if (e.status === 401 || e.status === 403) { await loadMe(); if (!ME || ME.status !== 'active') return go(); } $('m').innerHTML = `<div class="empty"><div class="e">⚠️</div>${esc(e.message)}<div style="margin-top:10px"><button class="btn s" data-act="reload">${htmlWord("account.go.11")}</button></div></div>`; } }
 }
 const refresh = () => { STATE.keepScroll = true; return go(); };
 function clearChrome() { $('m').classList.remove('tree-workspace'); $('nav').innerHTML = ''; $('tabs').innerHTML = ''; $('top').innerHTML = ''; }
-async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStopActing=!!r.can_stop_acting; EMAIL_READY = !!r.email_enabled; S = r.settings || {}; document.title = S.family_yi || word("account.load_me.01"); }
+async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStopActing=!!r.can_stop_acting; EMAIL_READY = !!r.email_enabled; STATE.whatsappEnabled = !!r.whatsapp_enabled; S = r.settings || {}; document.title = S.family_yi || word("account.load_me.01"); }
 
 // ---------- actions ----------
 const ACT = {
+  calendarmonth: el => {
+    STATE.calendarMonth = el.dataset.v === 'today' ? null : STATE.familyCalendar[el.dataset.v];
+    STATE.calendarDay = '';
+    return refresh();
+  },
+  calendarday: el => {
+    STATE.calendarDay = el.dataset.v;
+    for (const day of document.querySelectorAll('.calendar-day')) day.setAttribute('aria-pressed',String(day.dataset.v===STATE.calendarDay));
+    $('calendar-agenda').innerHTML = calendarAgenda(STATE.familyCalendar,STATE.calendarDay);
+  },
+  findrelationship: findRelationship,
+  printtree: printFamilyTree,
+  printyahrzeits: printYahrzeits,
+  removephoto: async el => {
+    if (!confirm(word('family_tools.photo.confirm'))) return;
+    await api(photoPath(el.dataset.id), { method:'DELETE' });
+    await refresh();
+    await personProfile(Number(el.dataset.id));
+  },
   linkcousin:async el=>{
     const id=Number(el.dataset.id),profile=await api(`/admin/users/${id}/tree-profile`);
     const options=profile.people.map(p=>`<option value="${p.id}" ${p.id===profile.person_id?'selected':''}>${esc(personName(p))}${p.father_name?` ${htmlWord("shared.linkcousin.01")} `+esc(p.father_name):''}</option>`).join('');
@@ -994,7 +1206,8 @@ ${word("shared.sharelearn.07")}`;
   remind: async el => {
     const on = el.dataset.on === '1';
     await api(`/yahrzeits/${el.dataset.id}/remind`, {method:'POST',body:{on}});
-    toast(word(on ? (ME.email_verified && EMAIL_READY ? 'shared.remind.01' : 'yahrzeits.reminders.saved_pending') : 'shared.remind.02'));
+    const reachable = (ME.email_verified && EMAIL_READY) || (STATE.whatsappEnabled && ME.whatsapp_yahrzeit_reminders);
+    toast(word(on ? (reachable ? 'shared.remind.01' : 'yahrzeits.reminders.saved_pending') : 'shared.remind.02'));
     return refresh();
   },
   ancestorreminders: async () => {
@@ -1050,6 +1263,15 @@ ${word("shared.sharelearn.07")}`;
   copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast(word("shared.copy.01")); },
 };
 const CHANGE = {
+  yahrzeitpreference: async el => {
+    const checked = el.checked;
+    el.disabled = true;
+    try {
+      await api('/me/yahrzeit-reminders', { method:'POST',body:{ whatsapp:checked } });
+      await loadMe();
+      await refresh();
+    } catch (error) { el.checked = !checked; el.disabled = false; throw error; }
+  },
   emailscope: el=>emailSim(Number(el.dataset.id),el.value),
   cousinfamily:()=>{
     STATE.cousinFamilies=[...document.querySelectorAll('input[name="cousin-family"]:checked')].map(el=>Number(el.value));
@@ -1066,6 +1288,14 @@ const CHANGE = {
     try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast(word("shared.usides.01")); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
 };
 const FORMS = {
+  relationship: showRelationship,
+  personphoto: async form => {
+    const id = Number(form.dataset.id);
+    await api(photoPath(id), { method:'PUT',body:new FormData(form) });
+    await refresh();
+    await personProfile(id);
+    toast(word('family_tools.photo.saved'));
+  },
   simemail: async f=>{await api(`/simchas/${f.dataset.id}/email`,{method:'POST',body:{scope:f.dataset.scope,confirmed:$('emailconfirm').checked}});toast(word("shared.simemail.01"));await emailSim(Number(f.dataset.id),f.dataset.scope);},
   marriagechild: ()=>{
     const {person,spouse}=STATE.childMarriage;
@@ -1091,20 +1321,29 @@ const FORMS = {
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast(word("shared.portionaction.01")); refresh(); },
   person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),known_as:val('pknownas'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),second_spouse_id:val('psecond_spouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno'),kever:val('pkever'),kever_address:val('pkeveraddress'),legacy_yahrzeit_id:f.dataset.legacyid||undefined,require_yahrzeit:f.dataset.yahrzeit==='1'||undefined};
+    const suggestion = f.dataset.suggestion === '1';
+    if ($('person-birthday-day')) b.calendar_dates = readCalendarDates();
+    if (suggestion) {
+      delete b.family_ids;
+      delete b.new_family;
+      b.suggestion_note = val('person-suggestion-note');
+    }
     b.new_relatives = {};
     for (const key of ['father_id','mother_id','spouse_id','second_spouse_id']) if (b[key] === 'new') {
       b.new_relatives[key] = { name: val('new_' + key + '_name'), title: val('new_' + key + '_title'), known_as: val('new_' + key + '_known_as') }; b[key] = null;
     }
     b.confirm_distinct=$('pdistinct').checked;b.distinct_reason=val('pdistinctreason');
     const fingerprint=JSON.stringify(b);if(f._saveFingerprint!==fingerprint){f._saveKey=crypto.randomUUID();f._saveFingerprint=fingerprint;}b.request_key=f._saveKey;
-    let result;try{result=await api(id ? '/people/' + id : '/people', { method: id ? 'PUT' : 'POST', body: b });}
+    const path = id ? `/people/${id}` : '/people';
+    let result;try{result=await api(suggestion ? path+'/suggestions' : path, { method: id && !suggestion ? 'PUT' : 'POST', body: b });}
     catch(e){if(e.details?.code==='person_matches')renderPersonMatches(e.details.field,e.details.matches);throw e;}
     closeModal();if(result.pending_review){
       if(result.review_family_group_id){
         await api('/me/family-group',{method:'POST',body:{family_group_id:result.review_family_group_id}});
         await loadMe();
       }
-      toast(word("shared.person.01"));location.hash='#personreviews';
+      toast(word(suggestion?'family_tools.suggestions.queued':'shared.person.01'));
+      if (curView()==='personreviews') await refresh(); else location.hash='#personreviews';
     }else if (b.require_yahrzeit) {
       STATE.yzFamily='';
       toast(word("shared.person.02"));
