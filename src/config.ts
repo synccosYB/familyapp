@@ -27,6 +27,13 @@ export const config = {
     template: env.WHATSAPP_YAHRZEIT_TEMPLATE || '',
     language: env.WHATSAPP_YAHRZEIT_LANGUAGE || '',
   },
+  twilioWhatsApp: {
+    accountSid: env.TWILIO_ACCOUNT_SID || '',
+    apiKeySid: env.TWILIO_API_KEY_SID || '',
+    apiKeySecret: env.TWILIO_API_KEY_SECRET || '',
+    from: env.TWILIO_WHATSAPP_FROM || '',
+    contentSid: env.TWILIO_WHATSAPP_YAHRZEIT_CONTENT_SID || '',
+  },
   wordingSyncToken: env.KOBOR_WORDING_SYNC_TOKEN || '',
   // first admin, created by bootstrap if missing
   admin: {

@@ -111,6 +111,35 @@ test('yahrzeit mail follows visible ancestors and explicit choices with one retr
     assert.doesNotMatch(JSON.stringify(messages),/Grandparent|Private family|Private side/);
     await runYahrzeitReminders(log,new Date('2026-11-14T14:10:00Z'),sendWhatsApp);
     assert.equal(messages.length,2,'WhatsApp is sent once per occurrence');
+
+    const accountSid = 'AC'+'1'.repeat(32);
+    const apiKeySid = 'SK'+'2'.repeat(32);
+    const contentSid = 'HX'+'3'.repeat(32);
+    const messageSid = 'SM'+'4'.repeat(32);
+    const apiKeySecret = 'fake-twilio-secret';
+    Object.assign(config.twilioWhatsApp,{accountSid,apiKeySid,apiKeySecret,from:'+15555551000',contentSid});
+    await pool.query('UPDATE users SET yahrzeit_whatsapp_phone=phone WHERE id=$1',[follower]);
+    const twilioCalls = [];
+    const sendTwilio = async (url,options) => {
+      assert.equal(url,`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`);
+      assert.equal(options.headers.Authorization,`Basic ${Buffer.from(`${apiKeySid}:${apiKeySecret}`).toString('base64')}`);
+      assert.equal(options.headers['Content-Type'],'application/x-www-form-urlencoded');
+      const fields = Object.fromEntries(options.body);
+      assert.equal(fields.From,'whatsapp:+15555551000');
+      assert.equal(fields.To,'whatsapp:+15555551002');
+      assert.equal(fields.ContentSid,contentSid);
+      const variables = JSON.parse(fields.ContentVariables);
+      assert.match(variables['1'],/כסלו/);
+      assert.equal(variables['2'],`${config.publicUrl}/#yz/${manual}/${primary}`);
+      assert.equal(fields.Body,undefined);
+      twilioCalls.push(fields);
+      return twilioCalls.length===1 ? new Response('{}',{status:429}) : Response.json({sid:messageSid,status:'queued'});
+    };
+    await runYahrzeitReminders(log,new Date('2026-11-13T14:10:00Z'),sendTwilio);
+    await runYahrzeitReminders(log,new Date('2026-11-13T14:15:00Z'),sendTwilio);
+    await runYahrzeitReminders(log,new Date('2026-11-14T14:10:00Z'),sendTwilio);
+    assert.equal(twilioCalls.length,2,'Twilio retries a rejected rate-limited request, then deduplicates');
+    assert.equal((await pool.query('SELECT provider_id FROM yahrzeit_whatsapp_deliveries WHERE user_id=$1 AND yahrzeit_id=$2',[follower,manual])).rows[0].provider_id,messageSid);
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);

@@ -11,9 +11,15 @@ import type { Occurrence } from './hebrew.js';
 import type { PoolClient } from 'pg';
 
 export const YAHRZEIT_REMINDER_DAYS = 3;
+const e164 = /^\+[1-9]\d{7,14}$/;
+function twilioRemindersReady() {
+  const { accountSid, apiKeySid, apiKeySecret, from, contentSid } = config.twilioWhatsApp;
+  return !!(apiKeySecret && /^AC[0-9a-f]{32}$/i.test(accountSid) && /^SK[0-9a-f]{32}$/i.test(apiKeySid) &&
+    /^HX[0-9a-f]{32}$/i.test(contentSid) && e164.test(from));
+}
 export function whatsappRemindersReady() {
   const { token, sender, version, template, language } = config.whatsapp;
-  return !!(token && /^\d+$/.test(sender) && /^v\d+\.\d+$/.test(version) && template && language);
+  return twilioRemindersReady() || !!(token && /^\d+$/.test(sender) && /^v\d+\.\d+$/.test(version) && template && language);
 }
 
 function reminderScopesSql(where: string) {
@@ -96,31 +102,46 @@ function yahrzeitEmail(recipient: Recipient, email: string, occurrence: Occurren
 const occurrenceFor = (row: YahrzeitDate, today: string) => Object.hasOwn(MONTH_YI,row.hmonth)
   ? nextYahrzeit(row.hday,row.hmonth,row.death_year,today) : null;
 
+function whatsappRequest(phone: string, date: string, link: string) {
+  if (twilioRemindersReady()) {
+    const { accountSid, apiKeySid, apiKeySecret, from, contentSid } = config.twilioWhatsApp;
+    return {
+      url: `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+      headers: { Authorization: `Basic ${Buffer.from(`${apiKeySid}:${apiKeySecret}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ From:`whatsapp:${from}`, To:`whatsapp:+${phone}`, ContentSid:contentSid,
+        ContentVariables:JSON.stringify({ '1':date, '2':link }) }),
+    };
+  }
+  const { token, sender, version, template, language } = config.whatsapp;
+  return {
+    url: `https://graph.facebook.com/${version}/${sender}/messages`,
+    headers: { Authorization:`Bearer ${token}`, 'Content-Type':'application/json' },
+    body: JSON.stringify({ messaging_product:'whatsapp',to:phone,type:'template',template:{
+      name:template, language:{ code:language }, components:[{ type:'body',parameters:[date,link].map(text=>({type:'text',text})) }],
+    } }),
+  };
+}
+
 async function sendWhatsAppReminder(c: PoolClient, sql: string, row: Recipient, occurrence: Occurrence, today: string, send: typeof fetch) {
   const current = (await c.query<Recipient>(sql, [[row.id],[occurrence.ymd],today,row.user_id])).rows[0];
-  if (!current || current.phone !== row.phone || occurrenceFor(current,today)?.ymd !== occurrence.ymd) return;
-  const { token, sender, version, template, language } = config.whatsapp;
+  if (!current || current.phone !== row.phone || !e164.test(`+${current.phone}`) || occurrenceFor(current,today)?.ymd !== occurrence.ymd) return;
   const path = current.list_id ? `learn/${current.list_id}` : `yz/${current.id}`;
   const link = `${config.publicUrl}/#${path}/${current.family_group_id}`;
+  const { url, headers, body } = whatsappRequest(current.phone, occurrence.hebrew, link);
   const key = [row.user_id,row.id,occurrence.ymd];
-  // Meta has no request idempotency key. Reserve the send before calling it so
-  // a timeout or interrupted worker cannot deliver the same reminder twice.
+  // A request can be accepted even if its response is lost. Reserve it before
+  // sending so a timeout or interrupted worker cannot deliver it twice.
   const reserved = await c.query(`INSERT INTO yahrzeit_whatsapp_deliveries(user_id,yahrzeit_id,occurrence_date)
     VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING user_id`, key);
   if (!reserved.rowCount) return;
-  const response = await send(`https://graph.facebook.com/${version}/${sender}/messages`, {
-    method:'POST', signal:AbortSignal.timeout(8000),
-    headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/json' },
-    body: JSON.stringify({ messaging_product:'whatsapp',to:current.phone,type:'template',template:{
-      name:template, language:{ code:language }, components:[{ type:'body',parameters:[occurrence.hebrew,link].map(text=>({type:'text',text})) }],
-    } }),
-  });
+  const response = await send(url, { method:'POST', signal:AbortSignal.timeout(8000), headers, body });
   if (!response.ok) {
     if (response.status === 429) await c.query('DELETE FROM yahrzeit_whatsapp_deliveries WHERE user_id=$1 AND yahrzeit_id=$2 AND occurrence_date=$3 AND sent_at IS NULL',key);
     throw new Error(`WhatsApp provider returned ${response.status}`);
   }
-  const result = await response.json() as { messages?: { id?: string }[] };
-  const providerId = result.messages?.[0]?.id;
+  const result = await response.json() as { sid?: string; messages?: { id?: string }[] };
+  const providerId = result.sid ?? result.messages?.[0]?.id;
   if (!providerId) throw new Error('WhatsApp provider did not return a message ID');
   await c.query('UPDATE yahrzeit_whatsapp_deliveries SET sent_at=now(),provider_id=$4 WHERE user_id=$1 AND yahrzeit_id=$2 AND occurrence_date=$3',[...key,providerId]);
 }
