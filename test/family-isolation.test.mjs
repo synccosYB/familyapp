@@ -86,12 +86,23 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   // Concurrent requests must not bleed request-local family defaults or filters.
   const mixed=await Promise.all(Array.from({length:12},(_,i)=>req('/people',{name:'Concurrent '+i,side:'a'},i%2?a.cookie:b.cookie)));
   mixed.forEach((r,i)=>assert.equal(ok(r).person.family_group_id,i%2?ga:gb));
-  // Reassignment invalidates old sessions and old member-generated invites.
+  // Family ownership can correct its own name but cannot rename another group.
+  ok(await req('/admin/family-groups/'+ga,{name:'Bochner-Biderman corrected'},a.cookie,'PATCH'));
+  assert.equal((await req('/admin/family-groups/'+gb,{name:'Hijacked'},a.cookie,'PATCH')).status,404);
+  // A legacy account in the holding group cannot log in or use an existing session.
+  const holding=(await db.query(`SELECT id FROM ${schema}.family_groups WHERE is_quarantine`)).rows[0].id;
+  await db.query(`UPDATE ${schema}.users SET family_group_id=$1 WHERE id=$2`,[holding,b.body.user.id]);
+  assert.equal((await req('/people',undefined,b.cookie)).status,403);
+  assert.equal((await req('/auth/login',{phone:'8455559002',password:'test-password'})).status,403);
+  await db.query(`UPDATE ${schema}.users SET family_group_id=$1 WHERE id=$2`,[gb,b.body.user.id]);
+  // Reassignment invalidates old sessions, family-admin authority and member-generated invites.
+  ok(await req('/admin/users/'+m.body.user.id,{is_family_admin:true},a.cookie,'PATCH'));
+  assert.equal(ok(await req('/me',undefined,m.cookie)).user.is_family_admin,true);
   const memberInvite=ok(await req('/family-invitations',{sides:['a']},m.cookie)).link.split('#join=')[1];
   ok(await req('/admin/users/'+m.body.user.id+'/family-group',{family_group_id:gb},root.cookie,'PUT'));
   assert.equal((await req('/people',undefined,m.cookie)).status,401);
   assert.equal((await req('/family-invitations/'+memberInvite)).status,404);
-  const moved=await req('/auth/login',{phone:'8455559003',password:'test-password'});ok(moved);
+  const moved=await req('/auth/login',{phone:'8455559003',password:'test-password'});ok(moved);assert.equal(moved.body.user.is_family_admin,false);
   assert.doesNotMatch(JSON.stringify(ok(await req('/people',undefined,moved.cookie))),/A ancestor|Corrected child|Legacy hidden/);
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.users WHERE family_group_id IS NULL`)).rows[0].n,0);
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.family_groups WHERE name='Spoof'`)).rows[0].n,0);
