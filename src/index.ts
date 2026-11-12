@@ -119,6 +119,27 @@ app.get('/api/health', async () => { await q('SELECT 1'); return { ok: true, boo
 
 // ---------------- auth ----------------
 const authLimit = { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } };
+async function findInvitation(token: unknown) {
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(token)) throw bad('דער אינוויטעישן לינק איז נישט גוט');
+  const invitation = await q1(`SELECT i.sides,i.created_by FROM family_invitations i JOIN users u ON u.id=i.created_by
+    WHERE i.token_hash=$1 AND i.expires_at>now() AND u.status='active'
+    AND (u.is_admin OR i.sides <@ u.sides)`, [sha(token)]);
+  if (!invitation) throw new HttpError(404, 'דער אינוויטעישן לינק איז אויסגעלאפן. בעט א נייעם לינק.');
+  return invitation;
+}
+app.post('/api/family-invitations', { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } }, async req => {
+  const u = await member(req), raw = (req.body as any)?.sides;
+  if (!Array.isArray(raw) || !raw.length || raw.length > 2 || raw.some(s => !['a','b'].includes(s))) throw bad('קלייב אויס איין סייד אדער ביידע סיידס');
+  const sides = [...new Set(raw)] as string[];
+  if (sides.some(s => !mySides(u).includes(s))) throw new HttpError(403, 'דו קענסט נאר איינלאדענען צו דיין אייגענע סייד');
+  const token = tok(24);
+  await q('INSERT INTO family_invitations(token_hash,sides,created_by) VALUES($1,$2,$3)', [sha(token),sides,u.id]);
+  return { link: `${config.publicUrl}/#join=${token}`, sides, days: 7 };
+});
+app.get('/api/family-invitations/:token', authLimit, async req => {
+  const invitation = await findInvitation((req.params as any).token);
+  return { sides: invitation.sides };
+});
 app.post('/api/auth/forgot-password', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
   const phone = normPhone((req.body as any)?.phone);
   if (!phone) throw bad('שרייב א ריכטיגן טעלעפאן נומער');
@@ -151,15 +172,16 @@ app.post('/api/auth/forgot-password', { config: { rateLimit: { max: 5, timeWindo
 app.post('/api/auth/signup', authLimit, async (req, reply) => {
   const b: any = req.body || {};
   const name = str(b.name, 80), phone = normPhone(b.phone), email = str(b.email, 120) || null;
-  const sides = Array.isArray(b.sides) ? [...new Set(b.sides.filter((s: any) => s === 'a' || s === 'b'))] as string[] : [];
+  const invitation = b.invitation_token ? await findInvitation(b.invitation_token) : null;
+  const sides = invitation ? invitation.sides : Array.isArray(b.sides) ? [...new Set(b.sides.filter((s: any) => s === 'a' || s === 'b'))] as string[] : [];
   if (!name) throw bad('שרייב דיין נאמען');
   if (!phone) throw bad('שרייב א ריכטיגן טעלעפאן נומער');
   if (!sides.length) throw bad('קלייב אויס פון וועלכע סייד דו ביסט');
   const p = pwProblem(b.password); if (p) throw bad(p);
   if (await q1('SELECT 1 FROM users WHERE phone=$1', [phone])) throw new HttpError(409, 'דער טעלעפאן נומער איז שוין רעדזשיסטרירט. לאג אין.');
   const isQa = !!config.qaPhonePrefix && phone.startsWith(config.qaPhonePrefix);
-  const u = await q1(`INSERT INTO users(name,phone,email,password_hash,sides,is_qa,note) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [name, phone, email, await hashPw(b.password), sides, isQa, str(b.note, 300)]);
+  const u = await q1(`INSERT INTO users(name,phone,email,password_hash,sides,is_qa,note,invited_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [name, phone, email, await hashPw(b.password), sides, isQa, str(b.note, 300), invitation?.created_by || null]);
   await newSession(reply, u.id);
   return { user: publicUser(u) };
 });
