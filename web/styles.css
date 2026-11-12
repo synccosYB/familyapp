@@ -78,14 +78,6 @@ label{font-weight:700;font-size:14px;display:block}.ltr{direction:ltr;text-align
 .home-view .empty .e{font-size:18px;flex:none}
 .home-view .empty .empty-action{margin:0}
 .home-view .empty>div:nth-child(2){flex:1}
-.cousin-family-filters{min-width:0;margin:0 0 10px;padding:0;border:0}
-.cousin-family-filters legend{padding:0 0 4px;color:#4b5563;font-size:13px;font-weight:700}
-.cousin-family-filters label{display:inline-flex;align-items:center;gap:5px;min-height:32px;padding:4px 8px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer}
-.cousin-family-filters label:has(input:checked){background:#eef2ff;border-color:#c7d2fe;color:#3730a3}
-.cousin-family-filters input{margin:0;transform:none;accent-color:#4338ca}
-#memberlist h3{font-size:16px;margin:8px 0 4px}
-#memberlist section{margin-bottom:8px}
-#memberlist .card{padding:8px 10px}
 .learning-title{overflow-wrap:anywhere}
 .mbox.learning-create{display:flex;flex-direction:column;width:620px;max-height:min(92dvh,760px);padding:0;overflow:hidden}
 .learning-create h2{margin:0;padding:14px 18px;border-bottom:1px solid #e6e8ec}
@@ -163,7 +155,7 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
  .modal{align-items:flex-end;padding:0}.mbox{border-radius:16px 16px 0 0;max-height:92vh;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
  table.t.resp thead{display:none}table.t.resp tr{display:block;border-bottom:6px solid #f6f7f9}table.t.resp td{display:block;border:0;padding:6px 10px}
  .seg button{padding:9px 11px}
- .view-picker select,.view-header .btn.s,.list-tools .btn.s,.list-tools .seg button,.cousin-family-filters label{min-height:42px}
+ .view-picker select,.view-header .btn.s,.list-tools .btn.s,.list-tools .seg button{min-height:42px}
  .yahrzeit-reminders{padding-block:10px}
 }
 @media(min-width:801px){.topbar{display:none}#top{margin-right:230px}}
@@ -183,6 +175,132 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
 .person-family-picker summary{cursor:pointer;color:#3730a3}
 .yahrzeit-families{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
 .acting-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 16px;background:#fef3c7;color:#78350f}
+
+main:has(> .people-view) { max-width: 1280px; }
+.people-columns {
+  display: grid;
+  gap: 14px 18px;
+  align-items: start;
+}
+.people-columns > section { min-width: 0; }
+.cousin-jump {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 14px;
+  text-underline-offset: 2px;
+}
+#cousins-heading { scroll-margin-block-start: 4rem; }
+.people-section-header,
+.directory-search,
+.directory-row-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.people-section-header {
+  flex-wrap: wrap;
+  min-height: 34px;
+  margin-block-end: 6px;
+}
+.people-section-header h2 { margin: 0; overflow-wrap: anywhere; }
+.people-view .btn.s {
+  max-width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+.directory-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-block-end: 8px;
+}
+.directory-tools > .btns { flex-basis: 100%; }
+.directory-tools .seg { margin: 0; }
+.directory-tools .seg button { min-width: 0; padding: 5px 8px; font-size: 14px; overflow-wrap: anywhere; }
+.directory-search { flex: 1 1 280px; min-width: 0; }
+.directory-search input {
+  min-width: 0;
+  min-height: 34px;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 14px;
+}
+.directory-search .muted { flex: none; max-width: 40%; overflow-wrap: anywhere; }
+.people-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #e6e8ec;
+  border-radius: 8px;
+}
+.people-rows > li + li { border-block-start: 1px solid #e6e8ec; }
+.cousin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  padding: 4px 8px;
+}
+.cousin-info {
+  display: flex;
+  flex: 1 1 120px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cousin-info .tag { padding: 1px 5px; }
+.cousin-family-filters { min-width: 0; margin: 0 0 8px; padding: 0; border: 0; }
+.cousin-family-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.cousin-family-filters label:has(input:checked) {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+.cousin-family-filters input { flex: none; margin: 0; transform: none; accent-color: #4338ca; }
+#memberlist > * + * { margin-block-start: 8px; }
+#memberlist h3 { margin: 0 0 3px; font-size: 14px; }
+.directory-row { padding: 7px 9px; overflow-wrap: anywhere; }
+.directory-row-heading { flex-wrap: wrap; }
+.directory-row .tag { max-width: 100%; padding: 2px 6px; white-space: normal; }
+.directory-phones { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 14px; }
+.directory-phones:empty { display: none; }
+.directory-phones a { display: inline-block; min-height: 24px; }
+.directory-row .btns { margin-block-start: 4px; }
+.people-empty { margin: 0; padding: 6px 8px; }
+@media (min-width: 1000px) {
+  .people-columns { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+  .cousin-jump { display: none; }
+}
+@media (max-width: 800px) {
+  .people-view .btn.s,
+  .people-view .view-picker select,
+  .directory-search input,
+  .directory-tools .seg button,
+  .cousin-family-filters label { min-height: 44px; }
+  .directory-search input { font-size: 16px; }
+}
 
 .person-card-heading,.person-profile-heading{display:flex;align-items:center;gap:10px;min-width:0}
 .person-card-heading{justify-content:center}

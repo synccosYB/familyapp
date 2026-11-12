@@ -233,6 +233,7 @@ const defaults: Record<string, string> = Object.freeze({
   "directory.member_card.02": "מיין פרטים",
   "directory.member_card.03": "טויש בוים פראפיל",
   "directory.member_card.04": "פארבינד צום בוים",
+  "directory.address_book": "אדרעס בוך",
   "directory.family_filter": "ווייז קאזינס פון",
   "directory.people.01": "👥 קאזינס · אדרעסן און טעלעפאנען",
   "directory.people.02": "יעדער קאזין מיט מאן און ווייב, אדרעס און טעלעפאן. יעדער קען עדיטן זיינע אייגענע פרטים.",

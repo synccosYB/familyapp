@@ -81,7 +81,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // --- directory
   await A.goto(BASE + '/#people'); await A.waitForSelector('[data-mine="1"]'); await A.click('[data-act=editdir][data-mine="1"]');
   await A.fill('#dw', 'מרת טעסט'); await A.fill('#dp', 'זון פון ר׳ משה באכנער'); await A.fill('#da', '12 Main St, Monsey, NY 10952'); await A.fill('#dph', '845-555-0101'); await A.fill('#dpw', '845-555-0102');
-  await A.click('[data-form=dir] button.btn:not([type=button])'); await A.waitForSelector('#dirlist .card');
+  await A.click('[data-form=dir] button.btn:not([type=button])'); await A.waitForSelector('#dirlist .directory-row');
   await A.fill('#q', 'Monsey'); await sleep(300); log('search count:', await A.locator('#qn').textContent()); await shot(A, 'cousins-390', false);
   const csv = await Promise.all([A.waitForEvent('download'), A.click('a:has-text("Excel")')]); const cp = await csv[0].path(); const cb = fs.readFileSync(cp); log('csv', csv[0].suggestedFilename(), 'BOM', cb.slice(0, 3).toString('hex'), cb.toString('utf8').split('\n')[1]);
   // --- home screens
