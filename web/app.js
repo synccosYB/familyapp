@@ -1,4 +1,5 @@
 'use strict';
+import { familyUnits } from './tree-layout.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -156,19 +157,43 @@ V.tree = async () => {
   const { people } = await api('/people'); STATE.people = people;
   const sides = mySides(); if (!STATE.treeSide || !sides.includes(STATE.treeSide)) STATE.treeSide = sides[0];
   const s = STATE.treeSide, P = people.filter((p) => p.side === s || p.side === 'both');
-  const primaryParent = p => [p.father_id,p.mother_id,p.parent_id].find(id=>id && P.some(x=>x.id===id)) || null;
-  const kids = (id) => P.filter((p) => primaryParent(p) === id);
-  const node = (p) => `<button class="pn ${p.niftar ? 'd' : ''}" data-act="editp" data-id="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar ? ' ז״ל' : ''}${p.spouse_name || p.spouse ? `<span class="muted">מאן / ווייב: ${esc(p.spouse_name || p.spouse)}</span>` : ''}${p.father_name ? `<span class="muted">טאטע: ${esc(p.father_name)}</span>` : ''}${p.mother_name ? `<span class="muted">מאמע: ${esc(p.mother_name)}</span>` : ''}</button>`;
-  const treeUl = (list) => (list.length ? `<ul>${list.map((p) => `<li>${node(p)}${treeUl(kids(p.id))}</li>`).join('')}</ul>` : '');
-  const listUl = (list) => (list.length ? `<ul>${list.map((p) => `<li>${node(p)}${listUl(kids(p.id))}</li>`).join('')}</ul>` : '');
-  const roots = kids(null);
+  const {units,edges}=familyUnits(P); STATE.treeEdges=edges;
+  const node = p => `<button class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="editp" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</strong>${p.father_name?`<span class="muted">טאטע: ${esc(p.father_name)}</span>`:''}${p.mother_name?`<span class="muted">מאמע: ${esc(p.mother_name)}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">מאן / ווייב: ${esc(p.spouse)}</span>`:''}</button>`;
+  const couple = unit => `<section class="family-unit ${unit.members.length===2?'married':''}" aria-label="${unit.members.length===2?'פארהייראטע פארפאלק':'מענטש'}">${unit.members.length===2?'<div class="marriage-label">פארהייראט</div>':''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
+  const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
+  const treeHtml=STATE.treeView==='tree'
+    ? `<div class="family-scroll"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div>`
+    : `<div class="family-list">${units.map(couple).join('')}</div>`;
   return `<h1>🌳 פעמילי טרי</h1><div class="cap">דריק אויף א נאמען צו עדיטן אדער צולייגן קינדער.</div>
   <div class="btns" style="margin-bottom:6px">${sides.length > 1 ? `<div class="seg">${sides.map((c) => `<button class="${s === c ? 'on' : ''}" data-act="treeside" data-v="${c}">${esc(sideLong(c))}</button>`).join('')}</div>` : `<b style="margin-bottom:14px">${esc(sideLong(s))}</b>`}
   <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">בוים</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">ליסט</button></div></div>
-  ${roots.length ? `<div class="card">${STATE.treeView === 'tree' ? `<div class="tree">${treeUl(roots)}</div>` : `<div class="tlist">${listUl(roots).replace('<ul>', '<ul class="tlist" style="border:0;padding:0;margin:0">')}</div>`}</div>`
-    : empty('🌳', 'דער בוים איז נאך ליידיג. הייב אן מיט די זיידע און באבע.')}
+  ${units.length ? `<div class="card">${treeHtml}</div>` : empty('🌳','דער בוים איז נאך ליידיג. הייב אן מיט די זיידע און באבע.')}
   <button class="btn" style="margin-top:12px" data-act="editp" data-id="0">+ לייג צו אין בוים</button>`;
 };
+let treeObserver;
+function drawFamilyLines() {
+  const map=$('family-map'); if(!map) return;
+  const svg=map.querySelector('svg'), base=map.getBoundingClientRect();
+  svg.setAttribute('width',String(map.scrollWidth)); svg.setAttribute('height',String(map.scrollHeight));
+  const paths=[];
+  for(const edge of STATE.treeEdges || []) {
+    const parent=map.querySelector(`[data-tree-person="${edge.parentId}"]`),child=map.querySelector(`[data-tree-person="${edge.childId}"]`);
+    if(!parent || !child) continue;
+    const a=parent.getBoundingClientRect(),b=child.getBoundingClientRect();
+    const parentUnit=parent.closest('.family-unit').getBoundingClientRect(),childUnit=child.closest('.family-unit').getBoundingClientRect();
+    const x1=a.left+a.width/2-base.left,y1=parentUnit.bottom-base.top,x2=b.left+b.width/2-base.left,y2=childUnit.top-base.top;
+    const bend=Math.max(20,(y2-y1)*0.45);
+    paths.push(`<path d="M ${x1} ${y1} C ${x1} ${y1+bend}, ${x2} ${y2-bend}, ${x2} ${y2}"/>`);
+  }
+  svg.innerHTML=paths.join('');
+}
+function observeFamilyTree() {
+  treeObserver?.disconnect();
+  const map=$('family-map'); if(!map) return;
+  if(typeof ResizeObserver!=='undefined') {treeObserver=new ResizeObserver(drawFamilyLines);treeObserver.observe(map);}
+  requestAnimationFrame(drawFamilyLines);
+  document.fonts?.ready.then(drawFamilyLines);
+}
 async function personForm(id, parentId) {
   const {people:P}=await api('/people'); STATE.people=P;
   const p = P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null};
@@ -403,7 +428,7 @@ async function go() {
   if (view !== 'chat') stopPoll();
   renderNav(view);
   const my = ++RENDER;
-  try { const html = await V[view](arg); if (my !== RENDER) return; const keep = STATE.keepScroll; $('m').innerHTML = html; if (!keep) window.scrollTo(0, 0); STATE.keepScroll = false; renderNav(view); }
+  try { const html = await V[view](arg); if (my !== RENDER) return; const keep = STATE.keepScroll; $('m').innerHTML = html; if (!keep) window.scrollTo(0, 0); STATE.keepScroll = false; renderNav(view); observeFamilyTree(); }
   catch (e) { if (my === RENDER) { if (e.status === 401 || e.status === 403) { await loadMe(); if (!ME || ME.status !== 'active') return go(); } $('m').innerHTML = `<div class="empty"><div class="e">⚠️</div>${esc(e.message)}<div style="margin-top:10px"><button class="btn s" data-act="reload">פרוביר נאכאמאל</button></div></div>`; } }
 }
 const refresh = () => { STATE.keepScroll = true; return go(); };
