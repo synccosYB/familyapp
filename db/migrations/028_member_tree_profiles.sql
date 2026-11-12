@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN person_id int UNIQUE REFERENCES people(id) ON DELETE SET NULL;

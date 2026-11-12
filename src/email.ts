@@ -6,6 +6,29 @@ export function normalizeEmail(value: unknown): string {
   return email.length <= 254 && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email) ? email : '';
 }
 const escape = (s: string) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+export function learningRequestEmail(name: string, link: string) {
+  const subject=`משניות לעילוי נשמת ${name.replace(/\s+/g,' ').trim()}`;
+  const intro='טייערע משפחה, לאמיר צוזאמען לערנען. קלייבט א מסכתא, א פרק אדער א משנה פון די פרייע חלקים.';
+  const action='קלייב אויס דיין חלק משניות';
+  return {
+    subject,
+    text:`${subject}\n\n${intro}\n\n${action}: ${link}\n\nיישר כח!`,
+    html:`<!doctype html><html lang="yi" dir="rtl"><body style="font-family:Arial,sans-serif;color:#19362d"><h1>${escape(subject)}</h1><p>${intro}</p><p><a href="${escape(link)}">${action}</a></p><p>יישר כח!</p></body></html>`
+  };
+}
+
+export async function sendLearningRequestBatch(recipients: string[], message: ReturnType<typeof learningRequestEmail>, key: string) {
+  if(!emailReady())throw new Error('Email is not configured');
+  const response=await fetch('https://api.resend.com/emails/batch',{
+    method:'POST',signal:AbortSignal.timeout(8000),
+    headers:{Authorization:`Bearer ${config.resendApiKey}`,'Content-Type':'application/json','Idempotency-Key':key,'x-batch-validation':'strict'},
+    body:JSON.stringify(recipients.map(to=>({from:config.resendFromEmail,to:[to],...message})))
+  });
+  if(!response.ok)throw new Error(`Email provider returned ${response.status}`);
+  const result=await response.json() as {data?:{id:string}[]};
+  if(result.data?.length!==recipients.length || result.data.some(item=>!item.id))throw new Error('Email provider did not accept the batch');
+}
+
 export async function sendAccountEmail(to: string, kind: 'verify' | 'reset', link: string, requestKey: string, send: typeof fetch = fetch) {
   if (!emailReady()) throw new Error('Email is not configured');
   const action = kind === 'verify' ? 'באשטעטיג מיין אימעיל' : 'שטעל איין א נייעם פאסווארט';
