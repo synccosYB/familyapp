@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { runLearningReminders } from './learning-reminders.js';
+import { runInvitationEmails } from './invitation-emails.js';
 import { config } from './config.js';
 
 export function startJobs(log: { info: (o: object, m: string) => void; error: (o: object, m: string) => void }) {
@@ -16,6 +17,9 @@ export function startJobs(log: { info: (o: object, m: string) => void; error: (o
   };
   setTimeout(remind, 5000).unref();
   setInterval(remind, 5 * 60000).unref();
+  let inviting=false;
+  const invitations=async()=>{if(inviting)return;inviting=true;try{await runInvitationEmails(log);}catch(e){log.error({error:String(e)},'Invitation email job failed');}finally{inviting=false;}};
+  setInterval(invitations,2000).unref();
   const dir = path.resolve(config.dataDir, 'backups');
   mkdirSync(dir, { recursive: true });
   const run = () => {

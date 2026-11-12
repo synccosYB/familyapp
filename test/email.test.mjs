@@ -19,3 +19,16 @@ test('recovery email validation and Resend payload',async()=>{
   await assert.rejects(sendAccountEmail('owner@example.test','verify','https://example.test','hash',async()=>new Response('{}',{status:403})),/403/);
   await assert.rejects(sendAccountEmail('owner@example.test','verify','https://example.test','hash',async()=>Response.json({})),/did not accept/);
 });
+
+
+test('invitation mail sends privately through Resend with a stable retry key',async()=>{
+ const {sendInvitationEmail}=await import('../dist/invitation-emails.js');
+ config.resendApiKey='synthetic-test-key';config.resendFromEmail='Family <noreply@example.test>';
+ let payload;
+ assert.equal(await sendInvitationEmail('member@example.test',{title:'Wedding <test>',lines:['Hall & address'],link:'https://example.test/#sim/3/3'},'familye/invitation/3/4',async(url,options)=>{
+  assert.equal(url,'https://api.resend.com/emails');assert.equal(options.headers['Idempotency-Key'],'familye/invitation/3/4');payload=JSON.parse(options.body);return Response.json({id:'accepted'});
+ }),'accepted');
+ assert.deepEqual(payload.to,['member@example.test']);assert.equal(payload.cc,undefined);assert.equal(payload.bcc,undefined);
+ assert.match(payload.html,/Wedding &lt;test&gt;/);assert.match(payload.html,/Hall &amp; address/);assert.match(payload.text,/#sim\/3\/3/);
+ await assert.rejects(sendInvitationEmail('member@example.test',{title:'Test',lines:[],link:'https://example.test'},'retry-key',async()=>new Response('{}',{status:429})),/429/);
+});
