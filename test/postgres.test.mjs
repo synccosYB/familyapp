@@ -86,6 +86,24 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal(hiddenDetail.list.niftar,'Side A only ז״ל');
   const sim=await request('/simchas',{kind:'Wedding',whose:'Test family',gdate:'2099-01-01',audience:'all'},a.cookie);assert.equal(sim.status,200);
   const simId=sim.body.simcha.id;
+  // Broadcasting is server-side, explicitly confirmed, and idempotent per recipient.
+  await adminPool.query(`UPDATE ${schema}.users SET email='invite-'||id||'@example.test' WHERE id=ANY($1::int[])`,[[a.body.user.id,b.body.user.id]]);
+  assert.equal((await request('/simchas/'+simId+'/email?scope=all',undefined,a.cookie)).status,403);
+  assert.equal((await request('/simchas/'+simId+'/email',{scope:'all',confirmed:true},a.cookie)).status,403);
+  assert.equal((await request('/simchas/'+simId+'/email',{scope:'family'},a.cookie)).status,400);
+  assert.equal((await request('/simchas/'+simId+'/email?scope=family',undefined,a.cookie)).body.recipients,2);
+  assert.equal((await request('/simchas/'+simId+'/email',{scope:'family',confirmed:true},a.cookie)).body.queued,2);
+  assert.equal((await request('/simchas/'+simId+'/email',{scope:'family',confirmed:true},a.cookie)).body.queued,0);
+  const queuedInvitations=await adminPool.query(`SELECT recipient,payload FROM ${schema}.invitation_email_deliveries WHERE simcha_id=$1`,[simId]);
+  assert.equal(queuedInvitations.rows.length,2);assert.ok(queuedInvitations.rows.every(r=>r.payload.link.endsWith('/#sim/'+simId+'/'+testFamily)));
+  let invitationAccepted=0;
+  for(let i=0;i<60;i++) {
+    invitationAccepted=(await adminPool.query(`SELECT count(*)::int n FROM ${schema}.invitation_email_deliveries WHERE simcha_id=$1 AND provider_id='test-provider-id' AND sent_at IS NOT NULL`,[simId])).rows[0].n;
+    if(invitationAccepted===2)break;await new Promise(resolve=>setTimeout(resolve,150));
+  }
+  assert.equal(invitationAccepted,2,'background worker submits every queued invitation through the mocked provider');
+
+
   assert.equal((await request('/simchas?id='+simId,undefined,a.cookie)).body.simchas[0].id,simId);
   assert.equal((await request('/simchas?id=bad',undefined,a.cookie)).status,400);
   const oldSim=await request('/simchas',{kind:'Wedding',whose:'Past invitation',gdate:'2000-01-01',audience:'a'},a.cookie);
