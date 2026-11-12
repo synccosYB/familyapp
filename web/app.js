@@ -44,14 +44,23 @@ async function checkWording() {
 
 function toast(t) { const e = $('ts'); e.textContent = t; e.style.display = 'block'; clearTimeout(e._t); e._t = setTimeout(() => (e.style.display = 'none'), 2600); }
 function modal(html, wide) { $('mb').className = 'mbox' + (wide ? ' wide' : ''); $('mb').innerHTML = html; $('md').classList.add('on'); const f = $('mb').querySelector('input:not([type=file]),select,textarea'); if (f && window.innerWidth > 800) f.focus(); }
-let learningDialogTrigger = null;
+let dialogTrigger = null;
+function activateDialog(trigger, title) {
+  const box = $('mb');
+  box.setAttribute('role','dialog');
+  box.setAttribute('aria-modal','true');
+  box.setAttribute('aria-labelledby',title);
+  dialogTrigger = trigger;
+  for (const id of ['top','nav','m','tabs']) $(id).inert = true;
+  $(title).focus({ preventScroll: true });
+}
 function closeModal() {
   $('md').classList.remove('on'); $('mb').innerHTML = '';
-  if (!learningDialogTrigger) return;
+  if (!dialogTrigger) return;
   for (const attr of ['role','aria-modal','aria-labelledby']) $('mb').removeAttribute(attr);
   for (const id of ['top','nav','m','tabs']) $(id).inert=false;
-  if (learningDialogTrigger.isConnected) learningDialogTrigger.focus();
-  learningDialogTrigger=null;
+  if (dialogTrigger.isConnected) dialogTrigger.focus();
+  dialogTrigger=null;
 }
 
 async function api(path, opts = {}) {
@@ -484,7 +493,7 @@ async function listForm(yzId, trigger) {
   const group=ME.selected_family_group_id;
   const route=location.hash;
   const { yahrzeits }=await api('/yahrzeits');
-  if (learningDialogTrigger || !trigger.isConnected || location.hash!==route || ME?.selected_family_group_id!==group) return;
+  if (dialogTrigger || !trigger.isConnected || location.hash!==route || ME?.selected_family_group_id!==group) return;
   const eligibleMemorials=rows=>rows.filter(y=>y.side==='both'||mySides().includes(y.side));
   const memorials=eligibleMemorials(yahrzeits);
   let byId=new Map(memorials.map(y=>[y.id,y]));
@@ -586,12 +595,7 @@ async function listForm(yzId, trigger) {
   filterOptions();
   updateSelection();
   box.classList.add('learning-create');
-  box.setAttribute('role','dialog');
-  box.setAttribute('aria-modal','true');
-  box.setAttribute('aria-labelledby','learning-create-title');
-  learningDialogTrigger=trigger;
-  for (const id of ['top','nav','m','tabs']) $(id).inert=true;
-  $('learning-create-title').focus({preventScroll:true});
+  activateDialog(trigger, 'learning-create-title');
 }
 
 // simchas
@@ -745,7 +749,8 @@ V.people = async () => {
   const memberCard=member=>`<div class="card"><b>${esc(member.name)}</b>${member.id===ME.id?` <span class="tag g">${htmlWord("directory.member_card.01")}</span>`:''}
     <div class="muted">${member.group_ids.map(id=>esc(groupNames.get(id))).join(' · ')}</div><div class="btns">
     ${member.id===ME.id?`<button class="btn s l" data-act="editdir" data-id="${families.find(d=>d.owner_id===member.id)?.id||0}" data-mine="1">${htmlWord("directory.member_card.02")}</button>`:''}
-    ${ME.is_admin?`<button class="btn s l" data-act="linkcousin" data-id="${member.id}">${member.person_id?htmlWord("directory.member_card.03"):htmlWord("directory.member_card.04")}</button>`:''}</div></div>`;
+    ${ME.is_admin?`<button class="btn s l" data-act="linkcousin" data-id="${member.id}">${member.person_id?htmlWord("directory.member_card.03"):htmlWord("directory.member_card.04")}</button>
+    <button class="btn s l" data-act="linkparents" data-id="${member.id}">${htmlWord("member_parents.action")}</button>`:''}</div></div>`;
   const byFather=new Map();
   for(const member of members){
     if(!member.father_id)continue;
@@ -809,6 +814,8 @@ V.admin = async () => {
   const options=(id)=>`<option value="">${htmlWord("admin.options.01")}</option>`+groups.map(g=>`<option value="${g.id}" ${g.id===id?'selected':''}>${esc(g.name)}</option>`).join('');
   const { users, owner_phone } = await api('/admin/users'); STATE.users = users; PENDING = users.filter((u) => u.status === 'pending').length;
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
+  const parentsButton = u => (ME.is_admin || u.family_group_ids.length === 1) && groups.some(g => u.family_group_ids.includes(g.id))
+    ? `<button class="btn s l" data-act="linkparents" data-id="${u.id}">${htmlWord("member_parents.action")}</button>` : '';
   const sidesBox = (u) => !ME.is_admin&&(u.family_group_ids||[]).length>1?`<span class="muted">${htmlWord("admin.sides_box.01")}</span>`:['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
   return `<a class="btn l" href="#personreviews">${htmlWord("admin.02")}</a><h1>${htmlWord("admin.03")}</h1><div class="cap">${htmlWord("admin.04")}</div>
   ${ME.is_admin?`<section class="card"><h2>${htmlWord("admin.14")}</h2>${groups.length?field(word("admin.17"),`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):`<p role="status">${htmlWord("admin.18")}</p>`}<form data-form="newgroup">${field(word("admin.19"),'<input id="groupname" maxlength="120" required>')}<button class="btn">${htmlWord("admin.15")}</button></form><button class="btn l" data-act="unassigned">${htmlWord("admin.16")}</button></section>`:''}
@@ -816,11 +823,11 @@ V.admin = async () => {
   <h2>${htmlWord("admin.06", { length: resets.length })}</h2><p class="muted">${htmlWord("admin.07")}</p>
   ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>${htmlWord("admin.22")}</button></div>`).join('') || `<div class="muted">${htmlWord("admin.23")}</div>`}
   <h2>${htmlWord("admin.08", { length: pend.length })}</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div></div>
-   <div class="btns">${ME.is_admin?`<button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.24")}</button><button class="btn s r" data-act="reject" data-id="${u.id}">${htmlWord("admin.25")}</button></div></div>`).join('') || `<div class="muted">${htmlWord("admin.27")}</div>`}
+   <div class="btns">${ME.is_admin?`<button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}${parentsButton(u)}<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.24")}</button><button class="btn s r" data-act="reject" data-id="${u.id}">${htmlWord("admin.25")}</button></div></div>`).join('') || `<div class="muted">${htmlWord("admin.27")}</div>`}
   <h2>${htmlWord("admin.09", { length: rest.length })}</h2>${ME.is_admin?`<p>${htmlWord("admin.28")} <b>${htmlWord("admin.29")}</b>${htmlWord("admin.30")}</p>`:''}<table class="t resp"><thead><tr><th>${htmlWord("admin.10")}</th><th>${htmlWord("admin.11")}</th><th>${htmlWord("admin.12")}</th><th>${htmlWord("admin.13")}</th><th></th></tr></thead><tbody>
   ${rest.map((u) => `<tr><td><b>${esc(u.name)}</b>${u.is_admin ? ` <span class="tag y">${htmlWord("admin.32")}</span>` : u.is_family_admin?` <span class="tag y">${htmlWord("admin.33")}</span>`:''}${u.has_password ? '' : ` <span class="tag">${htmlWord("admin.34")}</span>`}</td><td dir="ltr" style="text-align:right">+${esc(u.phone)}</td><td>${sidesBox(u)}${ME.is_admin?`<div>${groups.filter(g=>(u.family_group_ids||[]).includes(g.id)).map(g=>`<span class="tag g">${esc(g.name)}</span>`).join(' ')||`<span class="tag">${htmlWord("admin.35")}</span>`}</div><button class="btn s l" data-act="assignfamilies" data-id="${u.id}">${htmlWord("admin.26")}</button>`:''}</td>
    <td>${u.status === 'active' ? `<span class="tag g">${htmlWord("admin.36")}</span>` : `<span class="tag b">${htmlWord("admin.37")}</span>`}</td>
-   <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.38")}</button>` : ''}
+   <td><div class="btns">${u.status !== 'active' ? `<button class="btn s g" data-act="approve" data-id="${u.id}">${htmlWord("admin.38")}</button>` : ''}${parentsButton(u)}
    ${ME.is_admin && u.status==='active' && !u.is_admin && groups.some(g=>g.id===u.family_group_id)?`<button class="btn s l" data-act="actas" data-id="${u.id}">${htmlWord("admin.39")}</button>`:''}
    ${ME.is_admin && u.id !== ME.id && u.phone !== owner_phone ? `<button class="btn s l" data-act="mkadmin" data-id="${u.id}" data-v="${u.is_admin ? 0 : 1}">${u.is_admin ? htmlWord("admin.40") : htmlWord("admin.41")}</button>` : ''}
    ${!u.is_admin&&u.id!==ME.id&&(ME.is_admin||(u.family_group_ids||[]).length===1)?`<button class="btn s l" data-act="familyadmin" data-id="${u.id}" data-v="${u.is_family_admin?'0':'1'}">${u.is_family_admin?htmlWord("admin.42"):htmlWord("admin.43")}</button>`:''}
@@ -885,8 +892,78 @@ const refresh = () => { STATE.keepScroll = true; return go(); };
 function clearChrome() { $('m').classList.remove('tree-workspace'); $('nav').innerHTML = ''; $('tabs').innerHTML = ''; $('top').innerHTML = ''; }
 async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStopActing=!!r.can_stop_acting; EMAIL_READY = !!r.email_enabled; S = r.settings || {}; document.title = S.family_yi || word("account.load_me.01"); }
 
+async function memberParentsForm(trigger) {
+  const id = Number(trigger.dataset.id);
+  trigger.disabled = true;
+  let profile;
+  try { profile = await api(`/admin/users/${id}/tree-parents`); }
+  finally { trigger.disabled = false; }
+  if (dialogTrigger || !trigger.isConnected) return;
+  const people = new Map(profile.people.map(p => [p.id, p]));
+  const families = new Map(profile.groups.map(g => [g.id, g.name]));
+  const option = p => {
+    const father = people.get(p.father_id), mother = people.get(p.mother_id);
+    const parts = [personName(p), p.known_as, father && word("member_parents.father_name", { name: personName(father) }),
+      mother && word("member_parents.mother_name", { name: personName(mother) })];
+    if (families.size > 1) parts.push(p.groups.map(g => families.get(g)).join(', '));
+    return `<option value="${p.id}">${esc(parts.filter(Boolean).join(' · '))}</option>`;
+  };
+  const current = people.get(profile.person_id);
+  const complete = current?.has_father && current.has_mother;
+  const matchesName = p => personNameKey(p.name) === personNameKey(profile.name);
+  const available = profile.people.filter(p => p.linkable).sort((a,b) => Number(matchesName(b)) - Number(matchesName(a)));
+  modal(`<h2 id="member-parents-title" tabindex="-1">${htmlWord("member_parents.title", { name: profile.name })}</h2>
+    <form id="member-parents-form" data-form="memberparents" data-id="${id}" data-current-person="${current?.id || ''}">
+    ${current ? `<p><b>${esc(personName(current))}</b></p><input type="hidden" name="person_id" value="${current.id}">`
+      : field(word("shared.linkcousin.05"), `<select id="member-tree-person" name="person_id" required><option value="">${htmlWord("shared.linkcousin.06")}</option>
+        <option value="new">${htmlWord("member_parents.create")}</option>${available.map(option).join('')}</select>`)}
+    <div id="member-parents-family" hidden>${field(word("member_parents.family"), `<select id="member-tree-family" name="family_group_id">
+      ${profile.groups.map(g => `<option value="${g.id}" ${g.id === profile.family_group_id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>`)}</div>
+    <div id="member-parents-fields"></div>
+    <div class="err" role="alert"></div><div class="btns">
+      ${complete ? '' : `<button type="submit" class="btn" disabled>${htmlWord("shared.linkcousin.03")}</button>`}
+      <button type="button" class="btn l" data-act="close">${htmlWord("shared.linkcousin.04")}</button>
+    </div></form>`);
+  const form = $('member-parents-form'), save = form.querySelector('button[type="submit"]');
+  const fields = $('member-parents-fields'), selection = form.elements.person_id, family = form.elements.family_group_id;
+  function updateSave() {
+    if (!save) return;
+    const child = people.get(Number(selection.value));
+    const hasParents = child && (child.has_father || child.has_mother || child.has_legacy_parent);
+    save.disabled = !(form.elements.father_id?.value || form.elements.mother_id?.value || (!current && hasParents));
+  }
+  function updateFields() {
+    const child = people.get(Number(selection.value));
+    const isNew = selection.value === 'new';
+    $('member-parents-family').hidden = !isNew || families.size === 1;
+    const groups = child?.groups || [Number(family.value)];
+    const candidates = profile.people.filter(p =>
+      p.groups.some(g => groups.includes(g)) &&
+      (!child || (![child.id, child.spouse_id, child.second_spouse_id, child.father_id, child.mother_id].includes(p.id)
+        && (p.side === 'both' || p.side === child.side))));
+    const parentField = (key, label, isLinked, parent) => isLinked
+      ? `<div class="row"><span>${esc(label)}</span><strong>${parent ? esc(personName(parent)) : htmlWord("member_parents.linked")}</strong></div>`
+      : field(label, `<select id="member-${key}" name="${key}"><option value="">${htmlWord("shared.linkcousin.06")}</option>
+        ${candidates.map(option).join('')}</select>`);
+    fields.innerHTML = selection.value ? `
+      ${parentField('father_id', word("tree.08"), child?.has_father, people.get(child?.father_id))}
+      ${parentField('mother_id', word("tree.09"), child?.has_mother, people.get(child?.mother_id))}
+      ${child?.has_legacy_parent ? parentField('parent_id', word("tree.person_form.17"), true, people.get(child.parent_id)) : ''}
+      ${!candidates.length && !(child?.has_father && child?.has_mother) ? `<p class="muted">${htmlWord("member_parents.no_choices")}</p>` : ''}` : '';
+    updateSave();
+  }
+  form.addEventListener('change', event => {
+    form.querySelector('.err').textContent = '';
+    if (event.target === selection || event.target === family) updateFields();
+    else updateSave();
+  });
+  updateFields();
+  activateDialog(trigger, 'member-parents-title');
+}
+
 // ---------- actions ----------
 const ACT = {
+  linkparents: memberParentsForm,
   linkcousin:async el=>{
     const id=Number(el.dataset.id),profile=await api(`/admin/users/${id}/tree-profile`);
     const options=profile.people.map(p=>`<option value="${p.id}" ${p.id===profile.person_id?'selected':''}>${esc(personName(p))}${p.father_name?` ${htmlWord("shared.linkcousin.01")} `+esc(p.father_name):''}</option>`).join('');
@@ -1117,6 +1194,17 @@ const FORMS = {
     await api(`/admin/users/${f.dataset.id}/tree-profile`,{method:'PUT',body:{person_id:Number(val('cousinperson'))||null}});
     closeModal();toast(word("shared.portionaction.01"));return refresh();
   },
+  memberparents: async f => {
+    const { person_id, family_group_id, father_id, mother_id } = f.elements;
+    const body = person_id.value === 'new' ? { person_id: null, family_group_id: Number(family_group_id.value) }
+      : { person_id: Number(person_id.value) };
+    body.expected_person_id = Number(f.dataset.currentPerson) || null;
+    if (father_id?.value) body.father_id = Number(father_id.value);
+    if (mother_id?.value) body.mother_id = Number(mother_id.value);
+    await api(`/admin/users/${f.dataset.id}/tree-parents`, { method: 'PUT', body });
+    if (!f.isConnected) return;
+    closeModal();toast(word("member_parents.saved"));return refresh();
+  },
   sendlearningemail:async f=>{
     const button=f.querySelector('button[type="submit"]');
     const {listId,request_key,fingerprint}=STATE.learningEmail;
@@ -1183,10 +1271,11 @@ document.addEventListener('pointerdown',()=>{if(curView()==='chat')STATE.chatAct
 document.addEventListener('keydown', (ev) => {
   if(curView()==='chat')STATE.chatActivity=Date.now();
   if (ev.key==='Escape') closeModal();
-  if (ev.key!=='Tab' || !learningDialogTrigger) return;
-  const controls=[...$('mb').querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled)')].filter(el=>el.getClientRects().length);
+  if (ev.key!=='Tab' || !dialogTrigger) return;
+  const box = $('mb'), title = $(box.getAttribute('aria-labelledby'));
+  const controls=[...box.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled)')].filter(el=>el.getClientRects().length);
   const first=controls[0], last=controls.at(-1);
-  if (ev.shiftKey && [first,$('learning-create-title')].includes(document.activeElement)) { ev.preventDefault(); last.focus(); }
+  if (ev.shiftKey && [first,title].includes(document.activeElement)) { ev.preventDefault(); last.focus(); }
   if (!ev.shiftKey && document.activeElement===last) { ev.preventDefault(); first.focus(); }
 });
 window.addEventListener('hashchange', () => { closeModal(); go(); });

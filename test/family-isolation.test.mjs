@@ -376,9 +376,31 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.family_groups WHERE name='Spoof'`)).rows[0].n,0);
   // The multi-family roster deduplicates members and only exposes visible tree relationships.
   const memberId=m.body.user.id,bId=b.body.user.id;
-  const sibling1=ok(await req('/people',{name:'Roster brother one',side:'both',lineage_term:'בן',father_id:pb.id},root.cookie,'POST',gb)).person;
+  const sibling1=ok(await req('/people',{name:'Roster brother one',side:'both',lineage_term:'בן',note:'Existing profile'},root.cookie,'POST',gb)).person;
   const sibling2=ok(await req('/people',{name:'Roster brother two',side:'both',lineage_term:'בן',father_id:pb.id},root.cookie,'POST',gb)).person;
-  ok(await req(`/admin/users/${memberId}/tree-profile`,{person_id:sibling1.id},root.cookie,'PUT'));
+  const mother=ok(await req('/people',{name:'Roster mother',side:'both'},root.cookie,'POST',gb)).person;
+  const descendant=ok(await req('/people',{name:'Roster descendant',side:'both',parent_id:sibling1.id},root.cookie,'POST',gb)).person;
+  const parentsUrl=`/admin/users/${memberId}/tree-parents`;
+  const options=ok(await req(parentsUrl,undefined,root.cookie));
+  assert.equal(options.person_id,null);
+  assert.deepEqual(options.people.find(p=>p.id===sibling1.id).groups,[gb]);
+  assert.equal((await req(parentsUrl,undefined,bAgain.cookie)).status,403,'family admins cannot edit a multi-family account');
+  const memberAgain=await req('/auth/login',{phone:'8455559003',password:'test-password'});ok(memberAgain);
+  assert.equal((await req(parentsUrl,{person_id:sibling1.id,father_id:pb.id},memberAgain.cookie,'PUT')).status,403);
+  assert.equal((await req(parentsUrl,{person_id:sibling1.id,father_id:pa.id},root.cookie,'PUT')).status,400,'parents must share an eligible family with the tree profile');
+  assert.equal((await req(parentsUrl,{person_id:sibling1.id,father_id:descendant.id},root.cookie,'PUT')).status,400,'reject a cycle through a legacy parent');
+  assert.equal(ok(await req(parentsUrl,undefined,root.cookie)).person_id,null,'failed writes leave the account unlinked');
+  ok(await req(parentsUrl,{person_id:sibling1.id,expected_person_id:null,father_id:pb.id},root.cookie,'PUT'));
+  const partial=ok(await req(parentsUrl,undefined,root.cookie)).people.find(p=>p.id===sibling1.id);
+  assert.equal(partial.father_id,pb.id);
+  assert.equal(partial.has_mother,false);
+  assert.equal((await req(parentsUrl,{person_id:sibling1.id,father_id:sibling2.id,mother_id:mother.id},root.cookie,'PUT')).status,409,'a filled parent cannot be replaced by a stale form');
+  ok(await req(parentsUrl,{person_id:sibling1.id,expected_person_id:sibling1.id,mother_id:mother.id},root.cookie,'PUT'));
+  const connected=ok(await req('/people',undefined,root.cookie,'GET',gb)).people.find(p=>p.id===sibling1.id);
+  assert.equal(connected.father_id,pb.id);
+  assert.equal(connected.mother_id,mother.id);
+  assert.equal(connected.note,'Existing profile');
+  assert.equal((await req(`/admin/users/${bId}/tree-parents`,{person_id:sibling1.id},root.cookie,'PUT')).status,400,'a profile can be linked to only one account');
   assert.equal((await req(`/admin/users/${bId}/tree-profile`,{person_id:pa.id},root.cookie,'PUT')).status,400);
   ok(await req(`/admin/users/${bId}/tree-profile`,{person_id:sibling2.id},root.cookie,'PUT'));
   const roster=ok(await req(`/cousins?groups=${ga},${gb}`,undefined,root.cookie,'GET',ga)).members;
@@ -388,6 +410,17 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.equal(roster.find(p=>p.id===bId).father_id,pb.id);
   assert.equal((await req(`/cousins?groups=${ga},${gb}`,undefined,bAgain.cookie)).status,403);
   assert.ok(!ok(await req(`/cousins?groups=${ga}`,undefined,root.cookie,'GET',ga)).members.some(p=>p.father_id===pb.id));
+
+  const ownParentsUrl=`/admin/users/${uid}/tree-parents`;
+  assert.equal((await req(ownParentsUrl,undefined,bAgain.cookie)).status,404);
+  const existingNamesake=ok(await req('/people',{name:reduced.body.user.name,side:'both'},root.cookie,'POST',ga)).person;
+  assert.equal((await req(ownParentsUrl,{person_id:null,family_group_id:ga,father_id:pa.id},reduced.cookie,'PUT')).status,409);
+  ok(await req('/people/'+existingNamesake.id,undefined,root.cookie,'DELETE',ga));
+  const createdProfile=ok(await req(ownParentsUrl,{person_id:null,expected_person_id:null,family_group_id:ga,father_id:pa.id},reduced.cookie,'PUT'));
+  const ownTree=ok(await req('/people',undefined,reduced.cookie)).people;
+  assert.equal(ownTree.find(p=>p.id===createdProfile.person_id).father_id,pa.id);
+  assert.equal(ownTree.find(p=>p.id===createdProfile.person_id).family_group_id,ga);
+  assert.equal(ok(await req(ownParentsUrl,undefined,reduced.cookie)).person_id,createdProfile.person_id);
 
   // Act-as uses a temporary identity and preserves the administrator's selected family.
   assert.equal((await req(`/admin/users/${memberId}/act-as`,{},bAgain.cookie)).status,403);
