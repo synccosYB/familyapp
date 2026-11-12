@@ -1294,7 +1294,7 @@ app.get('/api/home', async (req) => {
   const lists = await q(`SELECT l.id,l.kind,${learningTitleSql(1)} niftar,l.target_date,count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
     WHERE ${sideSql('l.side', 1)} AND (l.target_date IS NULL OR l.target_date >= $2) GROUP BY l.id ORDER BY l.target_date NULLS LAST LIMIT 4`, [mySides(u), todayYmd()]);
   const counts = await q1(`SELECT (SELECT count(*) FROM users WHERE ${familyContext.getStore()!.id}=ANY(family_group_ids) AND status='active')::int members, (SELECT count(*) FROM users WHERE ${familyContext.getStore()!.id}=ANY(family_group_ids) AND status='pending')::int pending`);
-  return { yahrzeits: yz, simchas: sims, messages: msgs, lists, members: counts.members, pending: u.is_admin ? counts.pending : 0, today: hebrewForYmd(todayYmd()) };
+  return { yahrzeits: yz, simchas: sims, messages: msgs, lists, members: (await chatPeers(u)).length, pending: u.is_admin ? counts.pending : 0, today: hebrewForYmd(todayYmd()) };
 });
 
 app.setNotFoundHandler((req, reply) => {
