@@ -42,6 +42,8 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const m=await req('/auth/signup',{name:'Cousin',phone:'8455559003',password:'test-password',invitation_token:token,family_group_id:gb,is_family_admin:true,is_admin:true,create_family:'Spoof'},'');ok(m);
   assert.equal(m.body.user.family_group_id,ga);assert.equal(m.body.user.is_family_admin,false);assert.equal(m.body.user.is_admin,false);
   assert.equal((await req('/admin/users',undefined,m.cookie)).status,403);
+  assert.equal(ok(await req('/home',undefined,m.cookie)).members,ok(await req('/chat-members',undefined,m.cookie)).members.length,'dashboard count matches automatic cousin profiles before a household exists');
+  assert.deepEqual(ok(await req('/directory',undefined,m.cookie)).families,[],'registered members do not require a household');
   const person=async(owner,name)=>ok(await req('/people',{name,side:'both',life_status:'deceased',death_hday:1,death_hmonth:'TISHREI',new_family:name+' label',family_group_id:gb},owner.cookie)).person;
   const pa=await person(a,'A ancestor'),pb=await person(b,'B ancestor');assert.equal(pa.family_group_id,ga,'body group ignored');
   const ya=ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits[0],yb=ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits[0];
@@ -51,7 +53,7 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const sb=ok(await req('/simchas',{kind:'Wedding',whose:'B private',gdate:'2099-01-01',audience:'all'},b.cookie)).simcha;
   const ma=ok(await req('/chat/all',{body:'A private chat'},a.cookie)).message;
   const mb=ok(await req('/chat/all',{body:'B private chat'},b.cookie)).message;
-  for(const endpoint of ['/people','/yahrzeits','/lists','/simchas','/directory','/home','/chat/all','/chat-summary','/chat-members','/directory.csv']){
+  for(const endpoint of ['/people','/yahrzeits','/lists','/simchas','/directory','/directory-people','/home','/chat/all','/chat-summary','/chat-members','/directory.csv']){
    const r=await req(endpoint,undefined,m.cookie);ok(r);assert.doesNotMatch(JSON.stringify(r.body),/B ancestor|B private|Parnes|B ancestor label/,endpoint);
   }
   for(const [url,body,method] of [
