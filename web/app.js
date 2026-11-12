@@ -95,16 +95,20 @@ V.login = () => {
    ${field('וועמענס קינד/אייניקל ביסטו? (כדי דער אדמין זאל וויסן)', '<input id="fnote" placeholder="למשל: א זון פון משה באכנער">')}` : ''}
   <div class="err" id="ferr"></div>
   <button class="btn" style="width:100%">${mode === 'signup' ? 'מאך אן אקאונט' : 'לאג אין'}</button>
-  ${mode === 'login' ? '<div class="muted" style="margin-top:12px">פארגעסן דאס פאסווארט? בעט דעם אדמין, ער שיקט דיר א לינק.</div>' : '<div class="muted" style="margin-top:12px">נאכן רעדזשיסטרירן מוז דער אדמין דיך אפרובירן.</div>'}
+  ${mode === 'login' ? '<div class="muted" style="margin-top:12px"><button type="button" class="btn l" data-act="forgotpw">פארגעסן דאס פאסווארט?</button></div>' : '<div class="muted" style="margin-top:12px">נאכן רעדזשיסטרירן מוז דער אדמין דיך אפרובירן.</div>'}
   </form></div>`;
 };
 V.pending = () => `<div class="login"><div style="font-size:54px">⏳</div><h1>שלום ${esc(ME.name.split(' ')[0])}!</h1>
   <div class="card"><b>${ME.status === 'rejected' ? 'דער אקאונט איז נישט אפרובירט געווארן.' : 'דיין אקאונט ווארט אויף אפרוביישן פון דעם אדמין.'}</b>
   <div class="muted" style="margin-top:8px">${ME.status === 'rejected' ? 'רעד מיט דעם אדמין אויב דאס איז א טעות.' : 'ווען ער אפרובירט, קענסטו אריין. דו קענסט אים שרייבן אז דו האסט זיך רעדזשיסטרירט.'}</div>
   <div class="btns" style="justify-content:center;margin-top:14px"><button class="btn" data-act="recheck">🔄 טשעק נאכאמאל</button><button class="btn l" data-act="logout">לאג אאוט</button></div></div></div>`;
-V.setpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>שטעל איין דיין פאסווארט</h1><div class="cap" id="spn">${STATE.setpwName ? 'שלום ' + esc(STATE.setpwName) + '!' : ''}</div>
+V.forgotpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>פארגעסן דאס פאסווארט?</h1>
+  ${STATE.resetRequested ? '<div class="card" role="status">אויב דער נומער איז רעדזשיסטרירט, איז דיין בקשה געשיקט צום אדמין. רעד מיט דעם אדמין; נאכן באשטעטיגן ווער דו ביסט, קען ער דיר שיקן א פאסווארט לינק. דער לינק ווערט נישט אויטאמאטיש געשיקט.</div>' : `<p class="cap">שרייב דעם טעלעפאן נומער פון דיין אקאונט. דער אדמין וועט באקומען א בקשה פאר א פאסווארט לינק.</p><form data-form="forgotpw" class="card">
+  ${field('טעלעפאן נומער', `<input id="resetphone" type="tel" inputmode="tel" autocomplete="tel" class="ltr" value="${esc(STATE.resetPhone || '')}">`)}<div class="err" role="alert"></div><button class="btn">בעט א פאסווארט לינק</button></form>`}
+  <button class="btn l" style="margin-top:14px" data-act="backlogin">צוריק צו לאג אין</button></div>`;
+V.setpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>שטעל איין דיין פאסווארט</h1><div class="cap" id="spn">מען קאנטראלירט דעם לינק…</div>
   <form data-form="setpw" class="card" style="text-align:right">${field('נייע פאסווארט', '<input id="sp1" type="password" autocomplete="new-password" placeholder="כאטש 6 אותיות">')}${field('נאכאמאל', '<input id="sp2" type="password" autocomplete="new-password">')}
-  <div class="err" id="ferr">${STATE.setpwErr ? esc(STATE.setpwErr) : ''}</div><button class="btn" style="width:100%">סעיוו און לאג אין</button></form></div>`;
+  <div class="err" id="ferr" role="alert"></div><button class="btn" id="setpwsubmit" disabled style="width:100%">סעיוו און לאג אין</button></form><button class="btn l" style="margin-top:14px" data-act="forgotpw">בעט א נייעם לינק</button></div>`;
 
 V.home = async () => {
   const h = await api('/home'); PENDING = h.pending;
@@ -432,9 +436,11 @@ async function dirForm(id, mine) {
 V.admin = async () => {
   if (!ME.is_admin) return '<div class="muted">נאר פאר אדמין</div>';
   const { users, owner_phone } = await api('/admin/users'); STATE.users = users; PENDING = users.filter((u) => u.status === 'pending').length;
-  const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending');
+  const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
   const sidesBox = (u) => ['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
   return `<h1>🛡️ אדמין</h1><div class="cap">אפרובירן נייע קאזינס, טוישן סייד, מאכן אנדערע אדמין.</div>
+  <h2>🔑 פאסווארט בקשות (${resets.length})</h2><p class="muted">באשטעטיג ווער דער מענטש איז איידער דו שיקסט א לינק. דער לינק איז איינמאליג און גוט פאר איין שעה.</p>
+  ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}">🔑 מאך א לינק</button></div>`).join('') || '<div class="muted">נאך קיין בקשות.</div>'}
   <h2>⏳ ווארטן אויף אפרוביישן (${pend.length})</h2>${pend.map((u) => `<div class="row" style="flex-wrap:wrap"><div class="grow"><b>${esc(u.name)}</b> <span class="muted" dir="ltr">+${esc(u.phone)}</span><div class="muted">${u.sides.map((c) => esc(famOf(c) || sideName(c))).join(' + ')}${u.note ? ' · ' + esc(u.note) : ''}</div></div>
    <div class="btns"><button class="btn s g" data-act="approve" data-id="${u.id}">✓ אפרובירן</button><button class="btn s r" data-act="reject" data-id="${u.id}">✗ אפזאגן</button></div></div>`).join('') || '<div class="muted">קיינער ווארט נישט.</div>'}
   <h2>👥 אלע מעמבערס (${rest.length})</h2><table class="t resp"><thead><tr><th>נאמען</th><th>טעלעפאן</th><th>סייד</th><th>סטאטוס</th><th></th></tr></thead><tbody>
@@ -459,7 +465,8 @@ const curView = () => ((location.hash || '#').slice(1).split('/')[0] || 'home');
 let RENDER = 0;
 async function go() {
   const h = (location.hash || '').slice(1);
-  if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(STATE.setpwToken)).then((r) => { STATE.setpwName = r.name; $('spn').textContent = 'שלום ' + r.name + '!'; }).catch((e) => { $('ferr').textContent = e.message; }); return; }
+  if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); const token = STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(token)).then((r) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = 'שלום ' + r.name + '!'; $('setpwsubmit').disabled = false; }).catch((e) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = ''; $('ferr').textContent = e.message; }); return; }
+  if (h === 'forgotpw') { stopPoll(); clearChrome(); $('m').innerHTML = V.forgotpw(); return; }
   if (!ME) { stopPoll(); clearChrome(); $('m').innerHTML = V.login(); return; }
   if (ME.status !== 'active') { stopPoll(); clearChrome(); $('m').innerHTML = V.pending(); return; }
   const [v, arg] = h.split('/'); const view = V[v] && !['login', 'pending', 'setpw'].includes(v) ? v : 'home';
@@ -476,6 +483,8 @@ async function loadMe() { const r = await api('/me'); ME = r.user; S = r.setting
 
 // ---------- actions ----------
 const ACT = {
+  forgotpw: () => { STATE.resetPhone = val('fp'); STATE.resetRequested = false; location.hash = '#forgotpw'; },
+  backlogin: () => { STATE.authMode = 'login'; STATE.resetRequested = false; history.replaceState(null, '', location.pathname + location.search); go(); },
   close: closeModal, more: moreSheet, reload: () => go(),
   logout: async () => { closeModal(); await api('/auth/logout', { method: 'POST' }).catch(() => {}); ME = null; location.hash = ''; go(); },
   recheck: async () => { await loadMe(); go(); if (ME && ME.status !== 'active') toast('נאך נישט אפרובירט'); },
@@ -513,7 +522,8 @@ const ACT = {
   deluser: async (el) => { const u = STATE.users.find((x) => x.id === Number(el.dataset.id)); if (!confirm(`אויסמעקן ${u.name} און אלעס וואס ער האט צוגעלייגט?`)) return; await api('/admin/users/' + u.id, { method: 'DELETE' }); toast('אויסגעמעקט'); refresh(); },
   resetlink: async (el) => { const u = STATE.users.find((x) => x.id === Number(el.dataset.id)); const r = await api(`/admin/users/${u.id}/reset-link`, { method: 'POST', body: {} });
     const msg = `שלום ${u.name}, דא קענסטו איינשטעלן דיין פאסווארט פאר ${S.family_yi}: ${r.link}`;
-    modal(`<h2 style="margin-top:0">🔑 פאסווארט לינק פאר ${esc(u.name)}</h2><p class="muted">איינמאליג, גוט פאר ${r.days} טעג. שיק עס נאר צו אים/איר.</p><input readonly class="ltr" id="rl" value="${esc(r.link)}">
+    await refresh();
+    modal(`<h2 style="margin-top:0">🔑 פאסווארט לינק פאר ${esc(u.name)}</h2><p class="muted">איינמאליג, גוט פאר ${r.hours} שעה. באשטעטיג ווער דער מענטש איז און שיק עס נאר צו אים/איר.</p><input readonly class="ltr" id="rl" value="${esc(r.link)}">
     <div class="btns"><a class="btn g" href="https://wa.me/${esc(u.phone)}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">שיק אויף וואטסעפ</a><button class="btn l" data-act="copy">קאפי</button><button class="btn l" data-act="close">צומאכן</button></div>`); },
   copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast('✓ קאפירט'); },
 };
@@ -524,9 +534,10 @@ const CHANGE = {
     try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast('✓ סייד געטוישט'); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
 };
 const FORMS = {
+  forgotpw: async () => { await api('/auth/forgot-password', { method: 'POST', body: { phone: val('resetphone') } }); STATE.resetRequested = true; go(); },
   login: async () => { const r = await api('/auth/login', { method: 'POST', body: { phone: val('fp'), password: $('fw').value } }); ME = r.user; await loadMe(); toast('ברוך הבא! ✓'); location.hash = '#home'; go(); },
   signup: async () => { const r = await api('/auth/signup', { method: 'POST', body: { name: val('fn'), phone: val('fp'), password: $('fw').value, sides: STATE.pickSides || [], note: val('fnote') } }); ME = r.user; await loadMe(); go(); },
-  setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); location.hash = '#home'; },
+  setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); go(); },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
   person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno')};
@@ -572,3 +583,4 @@ window.addEventListener('hashchange', () => { closeModal(); go(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && ME) checkUnread(); });
 setInterval(checkUnread, 20000);
 (async () => { try { await loadMe(); } catch (e) { $('m').innerHTML = `<div class="empty">⚠️ ${esc(e.message)}</div>`; return; } go(); checkUnread(); })();
+

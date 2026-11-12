@@ -118,6 +118,16 @@ app.get('/api/health', async () => { await q('SELECT 1'); return { ok: true, boo
 
 // ---------------- auth ----------------
 const authLimit = { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } };
+app.post('/api/auth/forgot-password', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
+  const phone = normPhone((req.body as any)?.phone);
+  if (!phone) throw bad('שרייב א ריכטיגן טעלעפאן נומער');
+  await q(`INSERT INTO password_reset_requests(user_id)
+    SELECT id FROM users WHERE phone=$1 AND status <> 'rejected'
+    ON CONFLICT (user_id) DO UPDATE SET requested_at=now(), resolved_at=NULL
+    WHERE password_reset_requests.resolved_at IS NOT NULL
+      AND password_reset_requests.requested_at < now()-interval '15 minutes'`, [phone]);
+  return { ok: true };
+});
 app.post('/api/auth/signup', authLimit, async (req, reply) => {
   const b: any = req.body || {};
   const name = str(b.name, 80), phone = normPhone(b.phone), email = str(b.email, 120) || null;
@@ -161,12 +171,22 @@ app.get('/api/auth/token/:t', authLimit, async (req) => {
 app.post('/api/auth/set-password', authLimit, async (req, reply) => {
   const b: any = req.body || {};
   const p = pwProblem(b.password); if (p) throw bad(p);
-  const r = await q1(`UPDATE password_tokens SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING user_id`, [sha(String(b.token || ''))]);
-  if (!r) throw new HttpError(404, 'דער לינק איז שוין נישט גוט (אדער שוין גענוצט). בעט דעם אדמין פאר א נייעם.');
-  await q('UPDATE users SET password_hash=$1 WHERE id=$2', [await hashPw(b.password), r.user_id]);
-  await q('DELETE FROM sessions WHERE user_id=$1', [r.user_id]);
-  await newSession(reply, r.user_id);
-  const u = await q1('SELECT * FROM users WHERE id=$1', [r.user_id]);
+  const tokenHash = sha(String(b.token || ''));
+  const passwordHash = await hashPw(b.password);
+  const u = await tx(async c => {
+    const candidate = (await c.query('SELECT user_id FROM password_tokens WHERE token_hash=$1', [tokenHash])).rows[0];
+    if (!candidate) throw new HttpError(404, 'דער לינק איז שוין נישט גוט (אדער שוין גענוצט). בעט דעם אדמין פאר א נייעם.');
+    // Share the account lock with reset-link creation: only one concurrent reset can win.
+    await c.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [candidate.user_id]);
+    const r = (await c.query(`UPDATE password_tokens SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING user_id`, [tokenHash])).rows[0];
+    if (!r) throw new HttpError(404, 'דער לינק איז שוין נישט גוט (אדער שוין גענוצט). בעט דעם אדמין פאר א נייעם.');
+    const user = (await c.query('UPDATE users SET password_hash=$1 WHERE id=$2 RETURNING *', [passwordHash, r.user_id])).rows[0];
+    await c.query('UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL', [r.user_id]);
+    await c.query('DELETE FROM sessions WHERE user_id=$1', [r.user_id]);
+    await c.query('UPDATE password_reset_requests SET resolved_at=now() WHERE user_id=$1', [r.user_id]);
+    return user;
+  });
+  await newSession(reply, u.id);
   return { user: publicUser(u) };
 });
 app.post('/api/me/password', authLimit, async (req) => {
@@ -189,7 +209,8 @@ app.patch('/api/me', async (req) => {
 // ---------------- admin ----------------
 app.get('/api/admin/users', async (req) => {
   await admin(req);
-  return { owner_phone: normPhone(config.admin.phone), users: await q(`SELECT id,name,phone,email,sides,status,is_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password FROM users
+  return { owner_phone: normPhone(config.admin.phone), users: await q(`SELECT id,name,phone,email,sides,status,is_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password,
+    (SELECT requested_at FROM password_reset_requests r WHERE r.user_id=users.id AND r.resolved_at IS NULL) reset_requested_at FROM users
     ORDER BY (status='pending') DESC, status, name`) };
 });
 app.patch('/api/admin/users/:id', async (req) => {
@@ -228,11 +249,14 @@ app.delete('/api/admin/users/:id', async (req) => {
 app.post('/api/admin/users/:id/reset-link', async (req) => {
   await admin(req);
   const id = Number((req.params as any).id);
-  if (!(await q1('SELECT 1 FROM users WHERE id=$1', [id]))) throw new HttpError(404, 'נישט געטראפן');
   const t = tok(24);
-  await q(`UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL`, [id]);
-  await q(`INSERT INTO password_tokens(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')`, [sha(t), id]);
-  return { link: `${config.publicUrl}/#setpw=${t}`, days: 7 };
+  await tx(async c => {
+    if (!(await c.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [id])).rows.length) throw new HttpError(404, 'נישט געטראפן');
+    await c.query(`UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL`, [id]);
+    await c.query(`INSERT INTO password_tokens(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')`, [sha(t), id]);
+    await c.query('UPDATE password_reset_requests SET resolved_at=now() WHERE user_id=$1', [id]);
+  });
+  return { link: `${config.publicUrl}/#setpw=${t}`, hours: 1 };
 });
 app.put('/api/admin/settings', async (req) => {
   await admin(req);
@@ -679,3 +703,4 @@ app.setNotFoundHandler((req, reply) => {
 
 startJobs(app.log);
 await app.listen({ port: config.port, host: config.host });
+
