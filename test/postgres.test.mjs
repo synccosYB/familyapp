@@ -107,7 +107,9 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await portion(a,0,{action:'take',chapter:1})).status,200);
   assert.equal((await portion(a,0,{action:'take',chapter:99})).status,400);
   const rangeRace=await Promise.all([portion(a,0,{action:'take',chapter:2}),portion(b,0,{action:'take',chapter:2,mishnah:1})]);assert.deepEqual(rangeRace.map(r=>r.status).sort(),[200,409]);
-  const granularDetail=await request('/lists/'+gl,undefined,a.cookie);assert.ok(granularDetail.body.items[0].parts.taken>0);assert.ok(granularDetail.body.items[0].parts.total>granularDetail.body.items[0].parts.taken);
+  assert.equal((await request('/me/learning-reminders',{on:true},a.cookie)).status,400,'unverified email cannot opt in');
+  assert.equal((await request('/me/learning-reminders',{on:false},a.cookie)).body.user.learning_email_reminders,false);
+  const granularDetail=await request('/lists/'+gl,undefined,a.cookie);assert.ok(granularDetail.body.daily_plan.lines.every(line=>line.startsWith('ברכות')));assert.ok(granularDetail.body.remaining_units>0);assert.equal(granularDetail.body.reminder_timezone,'America/New_York');assert.ok(granularDetail.body.items[0].parts.taken>0);assert.ok(granularDetail.body.items[0].parts.total>granularDetail.body.items[0].parts.taken);
   await adminPool.query(`UPDATE ${schema}.learn_items SET taken_by=$1,done=true WHERE list_id=$2 AND idx=2`,[b.body.user.id,gl]);
   const beforeBreakdown=(await request(`/lists/${gl}/items/2/parts`,undefined,b.cookie)).body.items;assert.ok(beforeBreakdown.every(p=>p.taken_by===b.body.user.id&&p.done));
   assert.equal((await portion(b,2,{action:'undone',chapter:1,mishnah:1})).status,200);

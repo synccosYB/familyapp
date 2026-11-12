@@ -14,6 +14,7 @@ import { nameKey, sameParent } from './person-matches.js';
 import { familyContext, familySql, personSql, personGroupsSql } from './family-scope.js';
 import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
+import { dailyLearning, reminderClock, remainingLearning } from './learning-reminders.js';
 import { startJobs } from './jobs.js';
 import { MASECHTOS } from './masechtos.js';
 import { emailReady, normalizeEmail, sendAccountEmail } from './email.js';
@@ -41,7 +42,7 @@ const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0
 const pwProblem = (pw: unknown) => (typeof pw !== 'string' || pw.length < 6 ? 'דאס פאסווארט דארף האבן כאטש 6 אותיות' : pw.length > 200 ? 'צו לאנג' : null);
 const SIDE3 = ['a', 'b', 'both'];
 
-interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; status: string; is_admin: boolean; is_family_admin: boolean }
+interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; learning_email_reminders: boolean; sides: string[]; family_group_id: number | null; family_group_ids: number[]; primary_family_group_id?: number | null; status: string; is_admin: boolean; is_family_admin: boolean }
 declare module 'fastify' { interface FastifyRequest { user?: User } }
 
 const app = Fastify({ logger: { level: config.logLevel }, trustProxy: config.trustProxy, bodyLimit: 200_000 });
@@ -84,7 +85,7 @@ app.addHook('onRequest', async (req,reply) => {
 async function loadUser(req: FastifyRequest): Promise<User | null> {
   const t = req.cookies[COOKIE];
   if (!t) return null;
-  const u = await q1<User>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin FROM sessions s JOIN users u ON u.id=s.user_id
+  const u = await q1<User>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.learning_email_reminders,u.family_group_id,u.family_group_ids,u.sides,u.status,u.is_admin,u.is_family_admin FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token_hash=$1 AND s.expires_at>now()`, [sha(t)]);
   if(!u)return null;
   u.primary_family_group_id=u.family_group_id;
@@ -173,7 +174,7 @@ async function newSession(reply: FastifyReply, userId: number) {
   await q(`INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3||' days')::interval)`, [sha(t), userId, String(config.sessionDays)]);
   reply.setCookie(COOKIE, t, { path: '/', httpOnly: true, sameSite: 'lax', secure: config.cookieSecure, maxAge: config.sessionDays * 86400 });
 }
-const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin });
+const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, learning_email_reminders: !!u.learning_email_reminders, sides: u.sides, family_group_id: u.family_group_id, family_group_ids:u.family_group_ids, primary_family_group_id:u.primary_family_group_id??u.family_group_id, status: u.status, is_admin: u.is_admin, is_family_admin: u.is_family_admin });
 
 // ---------------- settings ----------------
 const getSettings = () => q1('SELECT family_yi,family_en,side_a_yi,side_a_en,side_a_family_yi,side_a_family_en,side_b_yi,side_b_en,side_b_family_yi,side_b_family_en FROM settings WHERE id=1');
@@ -343,6 +344,13 @@ app.patch('/api/me', async (req) => {
       WHERE id=$3 RETURNING *`, [name, email || null, u0.id, changed])).rows[0];
   });
   return { user: publicUser(u) };
+});
+app.post('/api/me/learning-reminders', async req => {
+  const u = await member(req), on = (req.body as any)?.on;
+  if (typeof on !== 'boolean') throw bad('קלייב אויס יא אדער ניין');
+  if (on && (!emailReady() || !u.email_verified_at || !normalizeEmail(u.email))) throw bad('באשטעטיג קודם דיין אימעיל אדרעס');
+  const updated = await q1('UPDATE users SET learning_email_reminders=$1 WHERE id=$2 RETURNING *',[on,u.id]);
+  return {user:publicUser(updated)};
 });
 app.post('/api/me/email-verification', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
   const me = await member(req);
@@ -916,7 +924,8 @@ app.get('/api/lists/:id', async (req) => {
   const items = await q(`SELECT i.idx,i.taken_by,i.done,tu.name taken_name FROM learn_items i LEFT JOIN users tu ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(tu.family_group_ids) AND tu.id=i.taken_by WHERE list_id=$1 ORDER BY idx`, [l.id]);
   const counts = await q(`SELECT idx,count(*)::int total,count(taken_by)::int taken,count(*) FILTER(WHERE done)::int done FROM learn_portions WHERE list_id=$1 GROUP BY idx`,[l.id]);
   const help = await q(`SELECT h.*,u.name requested_name,v.name helper_name FROM learn_help_requests h LEFT JOIN users u ON u.id=h.requested_by AND nullif(current_setting('familye.family_group_id',true),'')::int=ANY(u.family_group_ids) LEFT JOIN users v ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(v.family_group_ids) AND v.id=h.helper_id WHERE h.list_id=$1 AND h.resolved_at IS NULL ORDER BY h.created_at`,[l.id]);
-  return { list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items: items.map(i=>({...i,parts:counts.find(c=>c.idx===i.idx)||null})), help, masechtos: MASECHTOS };
+  const clock = reminderClock(), units = await remainingLearning(async (sql,params)=>({rows:await q(sql,params)}),l.id,u.id,l.kind);
+  return { daily_plan:dailyLearning(l.kind,units,l.target_date,clock.date), remaining_units:units.length, plan_date:clock.date, reminder_hour:config.learningReminderHour, reminder_timezone:config.timezone, list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items: items.map(i=>({...i,parts:counts.find(c=>c.idx===i.idx)||null})), help, masechtos: MASECHTOS };
 });
 app.post('/api/lists', async (req) => {
   const u = await member(req); const b: any = req.body || {};

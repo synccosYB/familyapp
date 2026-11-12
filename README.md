@@ -103,3 +103,27 @@ Links are stored as hashes and consumed once. Resend credentials remain server-s
 local mocked Resend transport and never send real email. Live acceptance requires a real verified recipient.
 
 Alternatively, build the container with `docker build -t familye .`. Supply the existing configuration variables (`DATABASE_URL`, `PUBLIC_URL`, `COOKIE_SECURE`, `ADMIN_NAME`, `ADMIN_PHONE`, `SETUP_TOKEN_SHA256`) through your host, and mount a persistent writable volume at `/data` for uploads and backups. The container listens on 8080 and checks `/api/health`; use an HTTPS reverse proxy. It runs bootstrap on startup and includes PostgreSQL 15 backup tools. Container creation does not itself deploy the app or connect SMS.
+
+## Daily Mishnayos and Tehillim email reminders
+
+Members enable daily learning emails under **My account** after verifying their email.
+Each learning list also shows today's exact personal portions. The plan divides unfinished
+claimed Mishnayos (including individual mishnayos and legacy whole masechtos) or Tehillim
+chapters over the remaining calendar days, including the deadline. Members mark completed
+portions in the list; missed days increase the next day's portion. Completed or returned
+claims stop generating emails. Past deadlines generate no mail; undated lists honestly show
+all remaining claims without inventing a completion date.
+
+The existing Resend credentials are reused. `FAMILY_TZ` defaults to `America/New_York`;
+`LEARNING_REMINDER_HOUR` defaults to `9` (0–23, in that timezone). An in-process job checks
+every five minutes and after startup, so the host must keep the API running at reminder time.
+`PUBLIC_URL` must be the deployed HTTPS origin so emails link back to the correct app.
+No additional external scheduler or ChatGPT automation is required.
+
+Messages require active membership, current family/side access, verified email and the
+member's enabled preference. A PostgreSQL lock and durable per-user/list/local-date delivery
+record prevent concurrent workers and restarts from duplicating accepted mail. Transient
+provider failures retry using the same persisted body and Resend idempotency key, for at most
+20 hours on that local date (within Resend's idempotency window). Changing an address suppresses
+that day's pending delivery; the new address must be verified. Each email links to account
+settings to disable reminders. Delivery records are retained for 90 days.
