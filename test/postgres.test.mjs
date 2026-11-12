@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -100,6 +100,11 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   const contenders=await Promise.all([['Race 1','a'],['Race 2','a']].map(([name,side])=>createPerson({name,side})));
   const cycleRace=await Promise.all(contenders.map((p,i)=>request('/people/'+p.id,{name:p.name,side:'a',father_id:contenders[1-i].id},admin.cookie,'PUT')));
   assert.deepEqual(cycleRace.map(r=>r.status).sort(),[200,400]);
+  // Replit schema sync can create the DDL before bootstrap records migration 003.
+  // Running the migration SQL again preserves data and completes its backfills.
+  const familyMigration=await readFile(new URL('../db/migrations/003_family_memberships.sql',import.meta.url),'utf8');
+  await adminPool.query(`SET search_path TO ${schema}`);
+  await adminPool.query(familyMigration);
   // Family memberships describe ancestry/marriage and never grant account access.
   const memberA=await request('/people/'+father.id,{new_family:'Family A'},admin.cookie,'PUT');
   assert.equal(memberA.status,200,JSON.stringify(memberA.body));
