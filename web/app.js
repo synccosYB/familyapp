@@ -742,23 +742,33 @@ V.people = async () => {
   const Q = STATE.q.trim(); const L = families.filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
   const hasMine = families.some((d) => d.owner_id === ME.id);
   const groupNames=new Map(groups.map(g=>[g.id,g.name]));
+  const linkedMembers = members.filter(member => member.person_id != null);
+  const unlinkedMembers = members.filter(member => member.person_id == null);
   const memberCard=member=>`<div class="card"><b>${esc(member.name)}</b>${member.id===ME.id?` <span class="tag g">${htmlWord("directory.member_card.01")}</span>`:''}
     <div class="muted">${member.group_ids.map(id=>esc(groupNames.get(id))).join(' · ')}</div><div class="btns">
     ${member.id===ME.id?`<button class="btn s l" data-act="editdir" data-id="${families.find(d=>d.owner_id===member.id)?.id||0}" data-mine="1">${htmlWord("directory.member_card.02")}</button>`:''}
     ${ME.is_admin?`<button class="btn s l" data-act="linkcousin" data-id="${member.id}">${member.person_id?htmlWord("directory.member_card.03"):htmlWord("directory.member_card.04")}</button>`:''}</div></div>`;
   const byFather=new Map();
-  for(const member of members){
+  for(const member of linkedMembers){
     if(!member.father_id)continue;
     if(!byFather.has(member.father_id))byFather.set(member.father_id,[]);
     byFather.get(member.father_id).push(member);
   }
   const siblingSets=[...byFather.values()].filter(set=>set.length>1);
   const siblingIds=new Set(siblingSets.flatMap(set=>set.map(member=>member.id)));
+  const otherLinkedMembers = linkedMembers.filter(member => !siblingIds.has(member.id));
   return `<h1>${htmlWord("directory.people.01")}</h1><div class="cap">${htmlWord("directory.people.02")}</div>${seg()}
   <h2>${htmlWord("directory.people.03", { length: members.length })}</h2>
   ${groups.length>1?`<fieldset class="person-family-picker"><legend>${htmlWord("directory.people.10")}</legend><div class="person-family-options">${groups.map(g=>`<label><input type="checkbox" name="cousin-family" data-change="cousinfamily" value="${g.id}" ${selected.includes(g.id)?'checked':''}><strong>${esc(g.name)}</strong></label>`).join('')}</div></fieldset>`:''}
-  <div id="memberlist">${siblingSets.map(set=>`<section><h3>${set.every(member=>member.lineage_term==='בן')?htmlWord("directory.people.12"):htmlWord("directory.people.13")} ${htmlWord("directory.people.11", { father_name: set[0].father_deceased?withMemorialSuffix(set[0].father_name):set[0].father_name })}</h3><div class="grid g2">${set.map(memberCard).join('')}</div></section>`).join('')}
-  <div class="grid g2">${members.filter(member=>!siblingIds.has(member.id)).map(memberCard).join('')}</div>${members.length?'':`<p class="muted">${htmlWord("directory.people.14")}</p>`}</div><h2>${htmlWord("directory.people.04", { family: S.family_yi })}</h2>
+  <div id="memberlist">
+    ${siblingSets.map(set=>`<section><h3>${set.every(member=>member.lineage_term==='בן')?htmlWord("directory.people.12"):htmlWord("directory.people.13")} ${htmlWord("directory.people.11", { father_name: set[0].father_deceased?withMemorialSuffix(set[0].father_name):set[0].father_name })}</h3><div class="grid g2">${set.map(memberCard).join('')}</div></section>`).join('')}
+    ${otherLinkedMembers.length ? `<div class="grid g2">${otherLinkedMembers.map(memberCard).join('')}</div>` : ''}
+    ${unlinkedMembers.length ? `<section aria-labelledby="unlinked-cousins-heading">
+      <h3 id="unlinked-cousins-heading">${htmlWord("directory.people.18")}</h3>
+      <div class="grid g2">${unlinkedMembers.map(memberCard).join('')}</div>
+    </section>` : ''}
+    ${members.length?'':`<p class="muted">${htmlWord("directory.people.14")}</p>`}
+  </div><h2>${htmlWord("directory.people.04", { family: S.family_yi })}</h2>
   ${hasMine ? '' : `<div class="row" style="background:#eef2ff;border-color:#c7d2fe"><div class="grow"><b>${htmlWord("directory.people.15")}</b><div class="muted">${htmlWord("directory.people.16")}</div></div><button class="btn s" data-act="editdir" data-id="0" data-mine="1">${htmlWord("directory.people.17")}</button></div>`}
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" type="search" placeholder="${htmlWord("directory.people.05")}" value="${esc(STATE.q)}" style="margin:0;max-width:340px" data-input="q"><span class="muted" id="qn">${htmlWord("directory.people.06", { length: L.length })}</span>
   <a class="btn s l" href="/api/directory.csv" download>${htmlWord("directory.people.07")}</a><button class="btn s" data-act="editdir" data-id="0">${htmlWord("directory.people.08")}</button></div>
