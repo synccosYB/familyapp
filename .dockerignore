@@ -1,0 +1,10 @@
+.git
+node_modules
+dist
+.env
+*.env.local
+deploy/admin.env
+deploy/qa.env
+data
+test
+prototype
