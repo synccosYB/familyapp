@@ -532,10 +532,11 @@ async function checkUnread() {
 
 // directory
 V.people = async () => {
-  const { families } = await api('/directory'); STATE.dir = families;
+  const [{ families }, { members }] = await Promise.all([api('/directory'), api('/chat-members')]); STATE.dir = families;
   const Q = STATE.q.trim(); const L = families.filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
   const hasMine = families.some((d) => d.owner_id === ME.id);
   return `<h1>👥 קאזינס · אדרעסן און טעלעפאנען</h1><div class="cap">יעדער קאזין מיט מאן און ווייב, אדרעס און טעלעפאן. יעדער קען עדיטן זיינע אייגענע פרטים.</div>${seg()}
+  <h2>משפחת ${esc(S.family_yi)} · ${members.length} קאזינס אין אפ</h2><div class="grid g2" id="memberlist">${members.map(member => `<div class="card"><b>${esc(member.name)}</b>${member.id === ME.id ? ' <span class="tag g">דו</span>' : ''}${member.id === ME.id ? `<div class="btns"><button class="btn s l" data-act="editdir" data-id="${families.find(d => d.owner_id === member.id)?.id || 0}" data-mine="1">מיין פרטים</button></div>` : ''}</div>`).join('') || '<div class="muted">נאך קיין מעמבערס.</div>'}</div><p class="muted">דאס זענען רעגיסטרירטע מעמבערס אין דער אויסגעקליבענער משפחה. אדרעסן און טעלעפאנען ווערן צוגעלייגט באזונדער אונטן.</p><h2>אדרעס בוך</h2>
   ${hasMine ? '' : `<div class="row" style="background:#eef2ff;border-color:#c7d2fe"><div class="grow"><b>לייג צו דיין משפחה</b><div class="muted">אז די קאזינס זאלן האבן דיין אדרעס און טעלעפאן</div></div><button class="btn s" data-act="editdir" data-id="0" data-mine="1">+ מיין משפחה</button></div>`}
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" type="search" placeholder="🔍 סוירטש נאמען, שטאט, טעלעפאן…" value="${esc(STATE.q)}" style="margin:0;max-width:340px" data-input="q"><span class="muted" id="qn">${L.length} משפחות</span>
   <a class="btn s l" href="/api/directory.csv" download>⬇ דאונלאוד ליסט (Excel)</a><button class="btn s" data-act="editdir" data-id="0">+ לייג צו</button></div>
