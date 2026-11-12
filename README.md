@@ -25,6 +25,8 @@ Live: https://familye.sites.tab.bot/ (Bochner / Biderman — באכנער / בי
   (JPG/PNG/WebP/GIF/HEIC or PDF, max 10 MB, type checked by its bytes), view full size, download; "mazel tov" posts to chat.
 - **Cousins directory** (👥): husband + wife, whose child, side, address (Maps/Waze), phones (tap to call), search,
   side filter, add, edit your own, CSV download with a UTF-8 BOM (Excel shows the Yiddish).
+  Address fields are separate street, apartment/unit, city, state/province, postal code and country. All are
+  optional. Existing free-text addresses are retained; maps and exports use the formatted full address.
 - **Chat** (💬): one group per side + one for all cousins; you only see the groups of your side(s). Polls every 3 s.
 - **Home**: next yahrzeits, learning lists, upcoming simchas, latest messages.
 
@@ -82,5 +84,19 @@ node --check web/app.js
 `npm test` builds the TypeScript entry points and runs the unit/build checks. Set `TEST_DATABASE_URL` to a PostgreSQL test database to also run the API integration test. It creates a fresh temporary schema, bootstraps an administrator, exercises approval, family-side access, tree cycles, competing learning claims, completion, RSVP and session persistence, then removes only that schema. Without a test database that integration test is explicitly skipped. Browser acceptance remains separate; `test/e2e-ui.cjs` requires its own Playwright environment and test accounts.
 
 GitHub Actions runs these checks with PostgreSQL 15, builds the Docker image, and saves the compiled `familye-build` artifact. `dist/` is generated and ignored by Git. The existing box startup script now installs the build dependencies and compiles the current checkout before bootstrap; a compile failure stops startup.
+
+## Resend account recovery
+
+Set `RESEND_API_KEY` in the host's private secrets and `RESEND_FROM_EMAIL` to a sender on a verified Resend domain
+(for example `Our Family <noreply@kobor.it.com>`). Never put a key in source, client assets or Git. Bootstrap applies
+migration 006 before the matching API and web assets start. Sending is disabled when either setting is absent.
+
+Members save an email in My Account, confirm their current password, then follow the one-hour verification link
+sent to that address. Only verified emails receive automatic password-reset links. Changing the email removes
+verification and expires old verification/recovery links. Verified addresses cannot be shared by two accounts.
+Public recovery responses do not disclose membership or email addresses; requests are limited and deduplicated
+for 15 minutes. A provider failure expires the candidate reset link and leaves administrator assistance available.
+Links are stored as hashes and consumed once. Resend credentials remain server-side. Integration tests use a
+local mocked Resend transport and never send real email. Live acceptance requires a real verified recipient.
 
 Alternatively, build the container with `docker build -t familye .`. Supply the existing configuration variables (`DATABASE_URL`, `PUBLIC_URL`, `COOKIE_SECURE`, `ADMIN_NAME`, `ADMIN_PHONE`, `SETUP_TOKEN_SHA256`) through your host, and mount a persistent writable volume at `/data` for uploads and backups. The container listens on 8080 and checks `/api/health`; use an HTTPS reverse proxy. It runs bootstrap on startup and includes PostgreSQL 15 backup tools. Container creation does not itself deploy the app or connect SMS.

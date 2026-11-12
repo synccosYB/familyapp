@@ -3,7 +3,7 @@ import { familyUnits, treeViewportLayout } from './tree-layout.js';
 // Familye client: one file, no framework. All server data is members-only; nothing secret lives here.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-let ME = null, S = {}, STATE = { side: 'all', room: 'all', q: '', treeView: window.innerWidth < 800 ? 'list' : 'tree', treeSide: null };
+let ME = null, EMAIL_READY = false, S = {}, STATE = { side: 'all', room: 'all', q: '', treeView: window.innerWidth < 800 ? 'list' : 'tree', treeSide: null };
 let POLL = null, LASTMSG = 0, SEEN = JSON.parse(localStorage.getItem('fam_seen') || '{}');
 
 function toast(t) { const e = $('ts'); e.textContent = t; e.style.display = 'block'; clearTimeout(e._t); e._t = setTimeout(() => (e.style.display = 'none'), 2600); }
@@ -103,9 +103,10 @@ V.pending = () => `<div class="login"><div style="font-size:54px">⏳</div><h1>�
   <div class="muted" style="margin-top:8px">${ME.status === 'rejected' ? 'רעד מיט דעם אדמין אויב דאס איז א טעות.' : 'ווען ער אפרובירט, קענסטו אריין. דו קענסט אים שרייבן אז דו האסט זיך רעדזשיסטרירט.'}</div>
   <div class="btns" style="justify-content:center;margin-top:14px"><button class="btn" data-act="recheck">🔄 טשעק נאכאמאל</button><button class="btn l" data-act="logout">לאג אאוט</button></div></div></div>`;
 V.forgotpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>פארגעסן דאס פאסווארט?</h1>
-  ${STATE.resetRequested ? '<div class="card" role="status">אויב דער נומער איז רעדזשיסטרירט, איז דיין בקשה געשיקט צום אדמין. רעד מיט דעם אדמין; נאכן באשטעטיגן ווער דו ביסט, קען ער דיר שיקן א פאסווארט לינק. דער לינק ווערט נישט אויטאמאטיש געשיקט.</div>' : `<p class="cap">שרייב דעם טעלעפאן נומער פון דיין אקאונט. דער אדמין וועט באקומען א בקשה פאר א פאסווארט לינק.</p><form data-form="forgotpw" class="card">
+  ${STATE.resetRequested ? '<div class="card" role="status">אויב דער נומער האט אן אקאונט מיט א באשטעטיגטן אימעיל, וועט דארט אנקומען א פאסווארט לינק. קוק אויך אין ספעם. אויב עס קומט נישט אן, רעד מיט דעם אדמין פאר הילף.</div>' : `<p class="cap">שרייב דעם טעלעפאן נומער פון דיין אקאונט. א פאסווארט לינק וועט געשיקט ווערן צו דיין באשטעטיגטן אימעיל. אן א באשטעטיגטן אימעיל קען דער אדמין העלפן.</p><form data-form="forgotpw" class="card">
   ${field('טעלעפאן נומער', `<input id="resetphone" type="tel" inputmode="tel" autocomplete="tel" class="ltr" value="${esc(STATE.resetPhone || '')}">`)}<div class="err" role="alert"></div><button class="btn">בעט א פאסווארט לינק</button></form>`}
   <button class="btn l" style="margin-top:14px" data-act="backlogin">צוריק צו לאג אין</button></div>`;
+V.verifyemail = () => `<div class="login"><h1>באשטעטיג דיין אימעיל</h1><p class="cap">דריק אויפן קנעפל צו באשטעטיגן דעם אימעיל פאר דיין אקאונט.</p><form data-form="verifyemail" class="card"><div class="err" role="alert"></div><button class="btn">באשטעטיג מיין אימעיל</button></form></div>`;
 V.setpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>שטעל איין דיין פאסווארט</h1><div class="cap" id="spn">מען קאנטראלירט דעם לינק…</div>
   <form data-form="setpw" class="card" style="text-align:right">${field('נייע פאסווארט', '<input id="sp1" type="password" autocomplete="new-password" placeholder="כאטש 6 אותיות">')}${field('נאכאמאל', '<input id="sp2" type="password" autocomplete="new-password">')}
   <div class="err" id="ferr" role="alert"></div><button class="btn" id="setpwsubmit" disabled style="width:100%">סעיוו און לאג אין</button></form><button class="btn l" style="margin-top:14px" data-act="forgotpw">בעט א נייעם לינק</button></div>`;
@@ -427,7 +428,10 @@ async function dirForm(id, mine) {
   ${field('וועמענס קינד', `<input id="dp" value="${esc(d.parents)}" placeholder="למשל: זון פון ר׳ משה באכנער">`)}
   </details>
   ${field('סייד', `<select id="ds">${sideOptions(d.side)}</select>`)}
-  ${field('אדרעס', `<input id="da" dir="auto" value="${esc(d.address)}" placeholder="12 Main St, Monsey, NY">`)}
+  <h3>אדרעס</h3>${field('גאס און הויז נומער', `<input id="da" dir="auto" autocomplete="address-line1" value="${esc(d.address_line1 ?? d.address)}" placeholder="12 Main St">`)}
+  ${field('דירה / אפארטמענט', `<input id="da2" dir="auto" autocomplete="address-line2" value="${esc(d.address_line2)}" placeholder="Apt 2B">`)}
+  <div class="grid g2"><div>${field('שטאט', `<input id="dcity" dir="auto" autocomplete="address-level2" value="${esc(d.city)}">`)}</div><div>${field('סטעיט / פראווינץ', `<input id="dstate" dir="auto" autocomplete="address-level1" value="${esc(d.state)}">`)}</div></div>
+  <div class="grid g2"><div>${field('זיפ / פאסט קאוד', `<input id="dzip" class="ltr" autocomplete="postal-code" value="${esc(d.postal_code)}">`)}</div><div>${field('לאנד', `<input id="dcountry" dir="auto" autocomplete="country-name" value="${esc(d.country)}">`)}</div></div>
   <div class="grid g2"><div>${field('טעלעפאן מאן', `<input id="dph" type="tel" class="ltr" value="${esc(d.phone_h)}">`)}</div><div>${field('טעלעפאן ווייב', `<input id="dpw" type="tel" class="ltr" value="${esc(d.phone_w)}">`)}</div></div>
   <div class="err" id="ferr"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button>${id ? `<button type="button" class="btn r" style="margin-right:auto" data-act="deldir" data-id="${id}">🗑</button>` : ''}</div></form>`);
 }
@@ -457,6 +461,7 @@ V.admin = async () => {
 };
 V.me = async () => `<h1>👤 מיין אקאונט</h1><div class="cap">${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ' · אדמין' : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
   <form data-form="me" class="card" style="margin-bottom:14px">${field('נאמען', `<input id="mn" value="${esc(ME.name)}">`)}${field('אימעיל (נישט מוז)', `<input id="mem" type="email" class="ltr" value="${esc(ME.email || '')}">`)}<div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>
+  <section class="card" style="margin-bottom:14px"><h2>אימעיל פאר פאסווארט הילף</h2>${ME.email_verified ? '<p role="status">✓ דיין אימעיל איז באשטעטיגט. דו קענסט באקומען א פאסווארט לינק אויף אימעיל.</p>' : !EMAIL_READY ? '<p class="muted">אימעיל איז נאך נישט פארבונדן. דער אדמין קען דערווייל העלפן מיט א פאסווארט לינק.</p>' : !ME.email ? '<p class="muted">סעיוו קודם דיין אימעיל אדרעס אויבן, און באשטעטיג עס דא.</p>' : `<p class="muted">באשטעטיג דיין געסעיווטן אימעיל: <span dir="ltr">${esc(ME.email)}</span></p><form data-form="emailverifyrequest">${field('פאסווארט פאר אימעיל באשטעטיגונג', '<input id="emailverifypw" type="password" autocomplete="current-password" required>')}<div class="err" role="alert"></div><div id="emailverifystatus" role="status"></div><button class="btn">שיק א באשטעטיגונג אימעיל</button></form>`}</section>
   <form data-form="myphone" class="card" style="margin-bottom:14px"><h2>טויש טעלעפאן נומער</h2><p class="muted">דאס איז דער נומער צו לאג אין. פאר אן אויסלענדישן נומער, לייג צו דעם לאנד קאוד.</p>${field('טעלעפאן נומער', `<input id="mphone" type="tel" class="ltr" autocomplete="tel" value="+${esc(ME.phone)}" required>`)}${field('יעצטיגע פאסווארט', '<input id="mphonepw" type="password" autocomplete="current-password" required>')}<div class="err" id="phoneerr"></div><button class="btn">סעיוו טעלעפאן נומער</button></form>
   <form data-form="mypw" class="card">${field('אלטע פאסווארט', '<input id="mo" type="password" autocomplete="current-password">')}${field('נייע פאסווארט', '<input id="mp" type="password" autocomplete="new-password" placeholder="כאטש 6 אותיות">')}<div class="err" id="ferr2"></div><button class="btn">טויש פאסווארט</button></form>
   <div class="muted" style="margin-top:12px">צו טוישן דיין סייד, רעד מיט דעם אדמין.</div><button class="btn l" style="margin-top:14px" data-act="logout">↩ לאג אאוט</button>`;
@@ -466,6 +471,8 @@ const curView = () => ((location.hash || '#').slice(1).split('/')[0] || 'home');
 let RENDER = 0;
 async function go() {
   const h = (location.hash || '').slice(1);
+  if (h.startsWith('verifyemail=')) { stopPoll(); clearChrome(); STATE.verifyEmailToken = h.slice(12); $('m').innerHTML = V.verifyemail(); return; }
+  if (h === 'emailverified') { stopPoll(); clearChrome(); $('m').innerHTML = `<div class="login"><h1>✓ אימעיל באשטעטיגט</h1><p>דו קענסט יעצט באקומען א פאסווארט לינק אויף דיין אימעיל.</p><a class="btn" href="${ME ? '#me' : '#home'}">${ME ? 'מיין אקאונט' : 'לאג אין'}</a></div>`; return; }
   if (h.startsWith('setpw=')) { stopPoll(); clearChrome(); const token = STATE.setpwToken = h.slice(6); $('m').innerHTML = V.setpw(); api('/auth/token/' + encodeURIComponent(token)).then((r) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = 'שלום ' + r.name + '!'; $('setpwsubmit').disabled = false; }).catch((e) => { if (location.hash !== '#setpw=' + token) return; $('spn').textContent = ''; $('ferr').textContent = e.message; }); return; }
   if (h === 'forgotpw') { stopPoll(); clearChrome(); $('m').innerHTML = V.forgotpw(); return; }
   if (!ME) { stopPoll(); clearChrome(); $('m').innerHTML = V.login(); return; }
@@ -480,7 +487,7 @@ async function go() {
 }
 const refresh = () => { STATE.keepScroll = true; return go(); };
 function clearChrome() { $('m').classList.remove('tree-workspace'); $('nav').innerHTML = ''; $('tabs').innerHTML = ''; $('top').innerHTML = ''; }
-async function loadMe() { const r = await api('/me'); ME = r.user; S = r.settings || {}; document.title = S.family_yi || 'משפחה'; }
+async function loadMe() { const r = await api('/me'); ME = r.user; EMAIL_READY = !!r.email_enabled; S = r.settings || {}; document.title = S.family_yi || 'משפחה'; }
 
 // ---------- actions ----------
 const ACT = {
@@ -553,11 +560,13 @@ const FORMS = {
       closeModal(); toast(id ? '✓ געסעיווט' : '✓ אינוויטעישן געשיקט צו ' + sideName(b.audience)); STATE.simPast = false; if (curView() === 'sim') refresh(); else location.hash = '#sim'; }
     finally { if ($('simsave')) $('simsave').disabled = false; } },
   chat: async () => { const e = $('ci'), t = e.value.trim(); if (!t) return; e.value = ''; try { await api('/chat/' + STATE.room, { method: 'POST', body: { body: t } }); const { messages } = await api(`/chat/${STATE.room}?after=${LASTMSG}`); appendMsgs(messages); const c = $('cb'); c.scrollTop = c.scrollHeight; } catch (er) { e.value = t; throw er; } e.focus(); },
-  dir: async (f) => { const id = Number(f.dataset.id); const b = { husband: val('dh'), wife: val('dw'), parents: val('dp'), side: val('ds'), address: val('da'), phone_h: val('dph'), phone_w: val('dpw'), mine: f.dataset.mine === '1',husband_person_id:val('dhperson'),wife_person_id:val('dwperson') };
+  dir: async (f) => { const id = Number(f.dataset.id); const b = { husband: val('dh'), wife: val('dw'), parents: val('dp'), side: val('ds'), address_line1: val('da'), address_line2: val('da2'), city: val('dcity'), state: val('dstate'), postal_code: val('dzip'), country: val('dcountry'), phone_h: val('dph'), phone_w: val('dpw'), mine: f.dataset.mine === '1',husband_person_id:val('dhperson'),wife_person_id:val('dwperson') };
     await api(id ? '/directory/' + id : '/directory', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
   settings: async () => { const b = {}; document.querySelectorAll('[id^=st_]').forEach((e) => { b[e.id.slice(3)] = e.value.trim(); }); const r = await api('/admin/settings', { method: 'PUT', body: b }); S = r.settings; toast('✓ געסעיווט'); refresh(); },
   me: async () => { const r = await api('/me', { method: 'PATCH', body: { name: val('mn'), email: val('mem') } }); ME = r.user; toast('✓ געסעיווט'); refresh(); },
   myphone: async () => { const r = await api('/me/phone', { method: 'POST', body: { phone: val('mphone'), password: $('mphonepw').value } }); ME = r.user; toast('✓ טעלעפאן נומער געסעיווט'); refresh(); },
+  emailverifyrequest: async () => { await api('/me/email-verification', { method: 'POST', body: { password: $('emailverifypw').value } }); $('emailverifypw').value = ''; $('emailverifystatus').textContent = '✓ געשיקט. קוק אין דיין אימעיל און דריק אויפן באשטעטיגונג לינק.'; },
+  verifyemail: async () => { await api('/auth/verify-email', { method: 'POST', body: { token: STATE.verifyEmailToken } }); STATE.verifyEmailToken = null; history.replaceState(null, '', location.pathname + location.search + '#emailverified'); await loadMe(); go(); },
   mypw: async () => { await api('/me/password', { method: 'POST', body: { old: $('mo').value, password: $('mp').value } }); $('mo').value = $('mp').value = ''; toast('✓ פאסווארט געטוישט'); },
 };
 document.addEventListener('click', async (ev) => {

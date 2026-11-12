@@ -14,6 +14,7 @@ import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
 import { startJobs } from './jobs.js';
 import { MASECHTOS } from './masechtos.js';
+import { emailReady, normalizeEmail, sendAccountEmail } from './email.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(__dirname, '../web');
@@ -38,7 +39,7 @@ const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0
 const pwProblem = (pw: unknown) => (typeof pw !== 'string' || pw.length < 6 ? 'דאס פאסווארט דארף האבן כאטש 6 אותיות' : pw.length > 200 ? 'צו לאנג' : null);
 const SIDE3 = ['a', 'b', 'both'];
 
-interface User { id: number; name: string; phone: string; email: string | null; sides: string[]; status: string; is_admin: boolean }
+interface User { id: number; name: string; phone: string; email: string | null; email_verified_at: string | null; sides: string[]; status: string; is_admin: boolean }
 declare module 'fastify' { interface FastifyRequest { user?: User } }
 
 const app = Fastify({ logger: { level: config.logLevel }, trustProxy: config.trustProxy, bodyLimit: 200_000 });
@@ -76,7 +77,7 @@ app.addHook('onRequest', async (req) => {
 async function loadUser(req: FastifyRequest): Promise<User | null> {
   const t = req.cookies[COOKIE];
   if (!t) return null;
-  const u = await q1<User>(`SELECT u.id,u.name,u.phone,u.email,u.sides,u.status,u.is_admin FROM sessions s JOIN users u ON u.id=s.user_id
+  const u = await q1<User>(`SELECT u.id,u.name,u.phone,u.email,u.email_verified_at,u.sides,u.status,u.is_admin FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token_hash=$1 AND s.expires_at>now()`, [sha(t)]);
   return u || null;
 }
@@ -108,7 +109,7 @@ async function newSession(reply: FastifyReply, userId: number) {
   await q(`INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3||' days')::interval)`, [sha(t), userId, String(config.sessionDays)]);
   reply.setCookie(COOKIE, t, { path: '/', httpOnly: true, sameSite: 'lax', secure: config.cookieSecure, maxAge: config.sessionDays * 86400 });
 }
-const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, sides: u.sides, status: u.status, is_admin: u.is_admin });
+const publicUser = (u: any) => ({ id: u.id, name: u.name, phone: u.phone, email: u.email, email_verified: !!u.email_verified_at, sides: u.sides, status: u.status, is_admin: u.is_admin });
 
 // ---------------- settings ----------------
 const getSettings = () => q1('SELECT family_yi,family_en,side_a_yi,side_a_en,side_a_family_yi,side_a_family_en,side_b_yi,side_b_en,side_b_family_yi,side_b_family_en FROM settings WHERE id=1');
@@ -121,11 +122,30 @@ const authLimit = { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }
 app.post('/api/auth/forgot-password', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
   const phone = normPhone((req.body as any)?.phone);
   if (!phone) throw bad('שרייב א ריכטיגן טעלעפאן נומער');
-  await q(`INSERT INTO password_reset_requests(user_id)
+  const request = await q1(`INSERT INTO password_reset_requests(user_id)
     SELECT id FROM users WHERE phone=$1 AND status <> 'rejected'
     ON CONFLICT (user_id) DO UPDATE SET requested_at=now(), resolved_at=NULL
-    WHERE password_reset_requests.resolved_at IS NOT NULL
-      AND password_reset_requests.requested_at < now()-interval '15 minutes'`, [phone]);
+    WHERE password_reset_requests.requested_at < now()-interval '15 minutes'
+    RETURNING user_id`, [phone]);
+  if (request && emailReady()) {
+    const token = tok(24), tokenHash = sha(token);
+    const recipient = await tx(async c => {
+      const u = (await c.query('SELECT id,email,email_verified_at,status FROM users WHERE id=$1 FOR UPDATE', [request.user_id])).rows[0];
+      if (!u?.email_verified_at || !normalizeEmail(u.email) || u.status === 'rejected') return null;
+      await c.query('UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL', [u.id]);
+      await c.query("INSERT INTO password_tokens(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')", [tokenHash, u.id]);
+      return u.email;
+    });
+    if (recipient) {
+      try {
+        await sendAccountEmail(recipient, 'reset', `${config.publicUrl}/#setpw=${token}`, tokenHash);
+        await q('UPDATE password_reset_requests SET resolved_at=now() WHERE user_id=$1', [request.user_id]);
+      } catch {
+        await q('UPDATE password_tokens SET expires_at=now() WHERE token_hash=$1', [tokenHash]);
+        req.log.error({ userId: request.user_id }, 'Recovery email failed; administrator assistance remains available');
+      }
+    }
+  }
   return { ok: true };
 });
 app.post('/api/auth/signup', authLimit, async (req, reply) => {
@@ -161,7 +181,7 @@ app.post('/api/auth/logout', async (req, reply) => {
 });
 app.get('/api/me', async (req) => {
   const u = await loadUser(req);
-  return { user: u ? publicUser(u) : null, settings: await getSettings() };
+  return { user: u ? publicUser(u) : null, settings: await getSettings(), email_enabled: emailReady() };
 });
 app.get('/api/auth/token/:t', authLimit, async (req) => {
   const r = await q1(`SELECT u.name FROM password_tokens p JOIN users u ON u.id=p.user_id WHERE p.token_hash=$1 AND p.used_at IS NULL AND p.expires_at>now()`, [sha((req.params as any).t)]);
@@ -202,8 +222,59 @@ app.patch('/api/me', async (req) => {
   const u0 = await loadUser(req); if (!u0) throw new HttpError(401, 'לאג אין');
   const b: any = req.body || {};
   const name = str(b.name, 80); if (!name) throw bad('שרייב דיין נאמען');
-  const u = await q1('UPDATE users SET name=$1,email=$2 WHERE id=$3 RETURNING *', [name, str(b.email, 120) || null, u0.id]);
+  const email = normalizeEmail(b.email);
+  if (b.email && !email) throw bad('שרייב א ריכטיגן אימעיל אדרעס');
+  const u = await tx(async c => {
+    const previous = (await c.query('SELECT email FROM users WHERE id=$1 FOR UPDATE', [u0.id])).rows[0];
+    const changed = normalizeEmail(previous.email) !== email;
+    if (changed) {
+      await c.query('UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL', [u0.id]);
+      await c.query('UPDATE email_verification_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL', [u0.id]);
+    }
+    return (await c.query(`UPDATE users SET name=$1,email=$2,
+      email_verified_at=CASE WHEN $4 THEN NULL ELSE email_verified_at END
+      WHERE id=$3 RETURNING *`, [name, email || null, u0.id, changed])).rows[0];
+  });
   return { user: publicUser(u) };
+});
+app.post('/api/me/email-verification', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
+  const me = await member(req);
+  if (!emailReady()) throw new HttpError(503, 'אימעיל איז נאך נישט פארבונדן');
+  const token = tok(24), tokenHash = sha(token);
+  const email = await tx(async c => {
+    const u = (await c.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [me.id])).rows[0];
+    if (!(await verify(u.password_hash || '', String((req.body as any)?.password || '')).catch(() => false))) throw bad('דאס פאסווארט איז נישט ריכטיג');
+    const recipient = normalizeEmail(u.email);
+    if (!recipient) throw bad('סעיוו קודם דיין אימעיל אדרעס אויבן');
+    if ((await c.query('SELECT 1 FROM users WHERE lower(email)=$1 AND email_verified_at IS NOT NULL AND id<>$2', [recipient, me.id])).rowCount) throw new HttpError(409, 'דער אימעיל איז שוין באשטעטיגט אויף אן אנדער אקאונט');
+    await c.query('UPDATE email_verification_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL', [me.id]);
+    await c.query("INSERT INTO email_verification_tokens(token_hash,user_id,email,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')", [tokenHash, me.id, recipient]);
+    return recipient;
+  });
+  try { await sendAccountEmail(email, 'verify', `${config.publicUrl}/#verifyemail=${token}`, tokenHash); }
+  catch {
+    await q('UPDATE email_verification_tokens SET expires_at=now() WHERE token_hash=$1', [tokenHash]);
+    throw new HttpError(503, 'דער אימעיל איז נישט געשיקט געווארן. פרוביר שפעטער נאכאמאל.');
+  }
+  return { ok: true };
+});
+app.post('/api/auth/verify-email', authLimit, async (req) => {
+  const tokenHash = sha(String((req.body as any)?.token || ''));
+  try {
+    await tx(async c => {
+      const candidate = (await c.query('SELECT user_id FROM email_verification_tokens WHERE token_hash=$1', [tokenHash])).rows[0];
+      if (!candidate) throw bad('דער לינק איז שוין נישט גוט. בעט א נייעם אין מיין אקאונט.');
+      const u = (await c.query('SELECT email FROM users WHERE id=$1 FOR UPDATE', [candidate.user_id])).rows[0];
+      const t = (await c.query(`UPDATE email_verification_tokens SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL
+        AND expires_at>now() AND email=$2 RETURNING user_id`, [tokenHash, normalizeEmail(u?.email)])).rows[0];
+      if (!t) throw bad('דער לינק איז שוין נישט גוט. בעט א נייעם אין מיין אקאונט.');
+      await c.query('UPDATE users SET email_verified_at=now() WHERE id=$1', [t.user_id]);
+    });
+  } catch (e: any) {
+    if (e.code === '23505') throw new HttpError(409, 'דער אימעיל איז שוין באשטעטיגט אויף אן אנדער אקאונט');
+    throw e;
+  }
+  return { ok: true };
 });
 app.post('/api/me/phone', authLimit, async (req) => {
   const me = await member(req);
@@ -646,6 +717,9 @@ async function saveDirectory(u:User,b:any,id?:number) {
     const old=id?(await c.query('SELECT * FROM directory WHERE id=$1 FOR UPDATE',[id])).rows[0]:null;
     if (id && (!old || !canSee(u,old.side))) throw new HttpError(404,'נישט געטראפן');
     if (old && !mayEditDir(u,old)) throw new HttpError(403,'דו קענסט עדיטן נאר דיין אייגענע משפחה');
+    const addressKeys=['address_line1','address_line2','city','state','postal_code','country'];
+    const structuredAddress=addressKeys.some(key=>b[key]!==undefined);
+    const legacyAddress=b.address!==undefined && !structuredAddress;
     b={...(old||{}),...b};
     const hp=personId(b.husband_person_id),wp=personId(b.wife_person_id),side=okSide(u,b.side);
     if(hp && hp===wp) throw bad('קלייב אויס צוויי באזונדערע מענטשן');
@@ -657,10 +731,14 @@ async function saveDirectory(u:User,b:any,id?:number) {
     }
     const husband=hp?linked.get(hp).name:str(b.husband,120),wife=wp?linked.get(wp).name:str(b.wife,120);
     if(!husband && !wife) throw bad('שרייב כאטש איין נאמען');
-    const values=[husband,wife,str(b.parents,1000),side,str(b.address,200),str(b.phone_h,30),str(b.phone_w,30),hp,wp];
-    if(id) return (await c.query(`UPDATE directory SET husband=$1,wife=$2,parents=$3,side=$4,address=$5,phone_h=$6,phone_w=$7,husband_person_id=$8,wife_person_id=$9,updated_at=now() WHERE id=$10 RETURNING *`,[...values,id])).rows[0];
+    const parts=addressKeys.map(key=>legacyAddress?null:(structuredAddress?str(b[key],160):(old?.[key]??null)));
+    const address=structuredAddress
+      ? [parts[0],parts[1],[parts[2],parts[3],parts[4]].filter(Boolean).join(' '),parts[5]].filter(Boolean).join(', ')
+      : str(b.address,1000);
+    const values=[husband,wife,str(b.parents,1000),side,address,str(b.phone_h,30),str(b.phone_w,30),hp,wp,...parts];
+    if(id) return (await c.query(`UPDATE directory SET husband=$1,wife=$2,parents=$3,side=$4,address=$5,phone_h=$6,phone_w=$7,husband_person_id=$8,wife_person_id=$9,address_line1=$10,address_line2=$11,city=$12,state=$13,postal_code=$14,country=$15,updated_at=now() WHERE id=$16 RETURNING *`,[...values,id])).rows[0];
     const mine=!!b.mine && !(await c.query('SELECT 1 FROM directory WHERE owner_id=$1',[u.id])).rows.length;
-    return (await c.query(`INSERT INTO directory(husband,wife,parents,side,address,phone_h,phone_w,husband_person_id,wife_person_id,owner_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,[...values,mine?u.id:null,u.id])).rows[0];
+    return (await c.query(`INSERT INTO directory(husband,wife,parents,side,address,phone_h,phone_w,husband_person_id,wife_person_id,address_line1,address_line2,city,state,postal_code,country,owner_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,[...values,mine?u.id:null,u.id])).rows[0];
   });
 }
 app.post('/api/directory',async req=>({family:await saveDirectory(await member(req),req.body)}));
