@@ -137,8 +137,46 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/people/'+father.id,{name:'Renamed father',side:'a',death_hday:null,death_hmonth:null},admin.cookie,'PUT')).status,200);
   assert.equal((await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits.length,0);
 
+  // Public recovery never reveals account existence or creates a reset token.
+  assert.equal((await request('/auth/forgot-password',{phone:'123'})).status,400);
+  const recovery=await request('/auth/forgot-password',{phone:'(845) 555-0101'});
+  assert.deepEqual(recovery.body,{ok:true});
+  assert.deepEqual((await request('/auth/forgot-password',{phone:'8455550999'})).body,recovery.body);
+  assert.deepEqual((await request('/auth/forgot-password',{phone:'+1 845 555 0101'})).body,recovery.body);
+  assert.equal((await request('/admin/users',undefined,a.cookie)).status,401);
+  assert.equal((await request('/admin/users',undefined,b.cookie)).status,403);
+  const recoveryUsers=(await request('/admin/users',undefined,admin.cookie)).body.users;
+  assert.ok(recoveryUsers.find(u=>u.id===a.body.user.id).reset_requested_at);
+  assert.equal((await adminPool.query('SELECT count(*)::int n FROM password_reset_requests')).rows[0].n,1);
+  assert.equal((await request(`/admin/users/${a.body.user.id}/reset-link`,{},b.cookie)).status,403);
+  const first=await request(`/admin/users/${a.body.user.id}/reset-link`,{},admin.cookie);
+  assert.equal(first.status,200);assert.equal(first.body.hours,1);
+  const firstToken=first.body.link.split('#setpw=')[1];
+  const second=await request(`/admin/users/${a.body.user.id}/reset-link`,{},admin.cookie);
+  const secondToken=second.body.link.split('#setpw=')[1];
+  assert.equal((await request('/auth/token/'+firstToken)).status,404,'issuing another link invalidates the previous one');
+  assert.equal((await request('/auth/token/'+secondToken)).status,200);
+  assert.equal((await request('/auth/set-password',{token:secondToken,password:'short'})).status,400);
+  const resetRace=await Promise.all([1,2].map(()=>request('/auth/set-password',{token:secondToken,password:'new-member-password'})));
+  assert.deepEqual(resetRace.map(r=>r.status).sort(),[200,404],'one reset may consume the token');
+  const winner=resetRace.find(r=>r.status===200);
+  assert.equal((await request('/people',undefined,winner.cookie)).status,200);
+  assert.equal((await request('/people',undefined,again.cookie)).status,401,'previous sessions revoked');
+  assert.equal((await request('/auth/login',{phone:'8455550101',password:'build-member-password'})).status,401);
+  assert.equal((await request('/auth/login',{phone:'8455550101',password:'new-member-password'})).status,200);
+  assert.equal((await request('/auth/token/'+secondToken)).status,404);
+  assert.equal((await request('/admin/users',undefined,admin.cookie)).body.users.find(u=>u.id===a.body.user.id).reset_requested_at,null);
+  const expired=await request(`/admin/users/${a.body.user.id}/reset-link`,{},admin.cookie);
+  const expiredToken=expired.body.link.split('#setpw=')[1];
+  await adminPool.query("UPDATE password_tokens SET expires_at=now()-interval '1 minute' WHERE user_id=$1",[a.body.user.id]);
+  assert.equal((await request('/auth/token/'+expiredToken)).status,404);
+  assert.equal((await request('/auth/set-password',{token:expiredToken,password:'must-not-change'})).status,404);
+  assert.equal((await request('/auth/forgot-password',{phone:'8455550101'})).status,200);
+  assert.equal((await request('/auth/forgot-password',{phone:'8455550101'})).status,429,'public requests are rate limited');
+
  }finally{
   if(child&&child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}
   await adminPool.query(`DROP SCHEMA ${schema} CASCADE`);await adminPool.end();await rm(data,{recursive:true,force:true});
  }
 });
+
