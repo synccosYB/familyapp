@@ -8,11 +8,16 @@ import { reminderClock } from './learning-reminders.js';
 import { word } from './wording.js';
 import type { EmailMessage } from './email.js';
 import type { Occurrence } from './hebrew.js';
+import type { PoolClient } from 'pg';
 
 export const YAHRZEIT_REMINDER_DAYS = 3;
+export function whatsappRemindersReady() {
+  const { token, sender, version, template, language } = config.whatsapp;
+  return !!(token && /^\d+$/.test(sender) && /^v\d+\.\d+$/.test(version) && template && language);
+}
 
 function reminderScopesSql(where: string) {
-  return `SELECT u.id AS user_id, u.email, u.family_group_id AS primary_group_id, g.id AS family_group_id,
+  return `SELECT u.id AS user_id, u.email, u.phone, u.family_group_id AS primary_group_id, g.id AS family_group_id,
     CASE WHEN u.yahrzeit_ancestor_emails AND g.id=ANY(u.family_group_ids) THEN u.person_id END AS profile_id,
     CASE WHEN u.is_admin OR (u.is_family_admin AND u.family_group_id=g.id) THEN ARRAY['a','b'] ELSE u.sides END AS sides
     FROM users u JOIN family_groups g ON u.is_admin OR g.id=ANY(u.family_group_ids)
@@ -35,15 +40,19 @@ export function yahrzeitAncestorIdsSql(userId: string) {
 }
 
 interface YahrzeitDate { id: number; hday: number; hmonth: string; death_year: number | null }
-interface Recipient extends YahrzeitDate { user_id: number; family_group_id: number; email: string; name: string; father_name: string | null; list_id: number | null }
+interface Recipient extends YahrzeitDate { user_id: number; family_group_id: number; email: string; phone: string; name: string; father_name: string | null; list_id: number | null }
 
-const recipientSql = `WITH due AS (SELECT * FROM unnest($1::int[], $2::date[]) AS x(id,occurrence_date)),
+function recipientSql(channel: 'email' | 'whatsapp') {
+  const email = channel === 'email';
+  const contact = email ? 'u.email_verified_at IS NOT NULL' : 'u.yahrzeit_whatsapp_phone=u.phone';
+  const sent = email ? 'AND d.sent_at IS NOT NULL' : '';
+  return `WITH due AS (SELECT * FROM unnest($1::int[], $2::date[]) AS x(id,occurrence_date)),
   scopes AS MATERIALIZED (
     SELECT s.*, ARRAY(${ancestorIds}) AS ancestors FROM (${reminderScopesSql(
-      'u.email_verified_at IS NOT NULL AND ($4::int IS NULL OR u.id=$4) AND (u.yahrzeit_ancestor_emails OR EXISTS (SELECT 1 FROM yahrzeit_reminders r JOIN due ON due.id=r.yahrzeit_id WHERE r.user_id=u.id AND r.enabled))'
+      `${contact} AND ($4::int IS NULL OR u.id=$4) AND (u.yahrzeit_ancestor_emails OR EXISTS (SELECT 1 FROM yahrzeit_reminders r JOIN due ON due.id=r.yahrzeit_id WHERE r.user_id=u.id AND r.enabled))`
     )}) s
   )
-  SELECT DISTINCT ON (s.user_id,y.id) s.user_id,s.family_group_id,s.email,y.id,y.hday,y.hmonth,y.death_year,
+  SELECT DISTINCT ON (s.user_id,y.id) s.user_id,s.family_group_id,s.email,s.phone,y.id,y.hday,y.hmonth,y.death_year,
     CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END AS name,
     CASE WHEN p.id IS NULL THEN y.father_name
       WHEN father.id IS NOT NULL THEN concat_ws(' ',nullif(p.lineage_term,''),nullif(father.title,''),father.name)
@@ -61,9 +70,10 @@ const recipientSql = `WITH due AS (SELECT * FROM unnest($1::int[], $2::date[]) A
   WHERE y.archived_at IS NULL AND ${sideVisible('y')}
     AND ((p.id IS NULL AND y.family_group_id=s.family_group_id) OR (p.id IS NOT NULL AND ${personVisible('p')}))
     AND coalesce(r.enabled, y.person_id=ANY(s.ancestors), false)
-    AND NOT EXISTS (SELECT 1 FROM yahrzeit_email_deliveries d WHERE d.user_id=s.user_id
-      AND d.yahrzeit_id=y.id AND d.occurrence_date=due.occurrence_date AND d.sent_at IS NOT NULL)
+    AND NOT EXISTS (SELECT 1 FROM yahrzeit_${channel}_deliveries d WHERE d.user_id=s.user_id
+      AND d.yahrzeit_id=y.id AND d.occurrence_date=due.occurrence_date ${sent})
   ORDER BY s.user_id,y.id,(learning.id IS NOT NULL) DESC,(s.family_group_id=s.primary_group_id) DESC,s.family_group_id`;
+}
 
 function yahrzeitEmail(recipient: Recipient, email: string, occurrence: Occurrence): EmailMessage {
   const stripSuffix = (name: string) => name.replace(/\s+/g,' ').trim().replace(/(?:(?:^|\s+)ז(?:[״"“”]|['׳’]{2})ל[.!?]?)+$/u,'');
@@ -86,8 +96,37 @@ function yahrzeitEmail(recipient: Recipient, email: string, occurrence: Occurren
 const occurrenceFor = (row: YahrzeitDate, today: string) => Object.hasOwn(MONTH_YI,row.hmonth)
   ? nextYahrzeit(row.hday,row.hmonth,row.death_year,today) : null;
 
+async function sendWhatsAppReminder(c: PoolClient, sql: string, row: Recipient, occurrence: Occurrence, today: string, send: typeof fetch) {
+  const current = (await c.query<Recipient>(sql, [[row.id],[occurrence.ymd],today,row.user_id])).rows[0];
+  if (!current || current.phone !== row.phone || occurrenceFor(current,today)?.ymd !== occurrence.ymd) return;
+  const { token, sender, version, template, language } = config.whatsapp;
+  const path = current.list_id ? `learn/${current.list_id}` : `yz/${current.id}`;
+  const link = `${config.publicUrl}/#${path}/${current.family_group_id}`;
+  const key = [row.user_id,row.id,occurrence.ymd];
+  // Meta has no request idempotency key. Reserve the send before calling it so
+  // a timeout or interrupted worker cannot deliver the same reminder twice.
+  const reserved = await c.query(`INSERT INTO yahrzeit_whatsapp_deliveries(user_id,yahrzeit_id,occurrence_date)
+    VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING user_id`, key);
+  if (!reserved.rowCount) return;
+  const response = await send(`https://graph.facebook.com/${version}/${sender}/messages`, {
+    method:'POST', signal:AbortSignal.timeout(8000),
+    headers:{ Authorization:`Bearer ${token}`, 'Content-Type':'application/json' },
+    body: JSON.stringify({ messaging_product:'whatsapp',to:current.phone,type:'template',template:{
+      name:template, language:{ code:language }, components:[{ type:'body',parameters:[occurrence.hebrew,link].map(text=>({type:'text',text})) }],
+    } }),
+  });
+  if (!response.ok) {
+    if (response.status === 429) await c.query('DELETE FROM yahrzeit_whatsapp_deliveries WHERE user_id=$1 AND yahrzeit_id=$2 AND occurrence_date=$3 AND sent_at IS NULL',key);
+    throw new Error(`WhatsApp provider returned ${response.status}`);
+  }
+  const result = await response.json() as { messages?: { id?: string }[] };
+  const providerId = result.messages?.[0]?.id;
+  if (!providerId) throw new Error('WhatsApp provider did not return a message ID');
+  await c.query('UPDATE yahrzeit_whatsapp_deliveries SET sent_at=now(),provider_id=$4 WHERE user_id=$1 AND yahrzeit_id=$2 AND occurrence_date=$3',[...key,providerId]);
+}
+
 export async function runYahrzeitReminders(log: { error: (o: object,m: string) => void }, now = new Date(), send: typeof fetch = fetch) {
-  if (!emailReady()) return;
+  if (!emailReady() && !whatsappRemindersReady()) return;
   const clock = reminderClock(now);
   if (clock.hour < config.learningReminderHour) return;
   const c = await pool.connect();
@@ -102,7 +141,9 @@ export async function runYahrzeitReminders(log: { error: (o: object,m: string) =
       if (occurrence && occurrence.days > 0 && occurrence.days <= YAHRZEIT_REMINDER_DAYS) upcoming.set(row.id,occurrence);
     }
     if (!upcoming.size) return;
-    const recipients = (await c.query<Recipient>(recipientSql,[[...upcoming.keys()],[...upcoming.values()].map(o=>o.ymd),clock.date,null])).rows;
+    const args = [[...upcoming.keys()],[...upcoming.values()].map(o=>o.ymd),clock.date,null];
+    const emailSql = recipientSql('email');
+    const recipients = emailReady() ? (await c.query<Recipient>(emailSql,args)).rows : [];
     for (const row of recipients) {
       try {
         const email = normalizeEmail(row.email);
@@ -116,13 +157,21 @@ export async function runYahrzeitReminders(log: { error: (o: object,m: string) =
           FROM yahrzeit_email_deliveries WHERE user_id=$1 AND yahrzeit_id=$2 AND occurrence_date=$3 AND recipient=$4
             AND sent_at IS NULL AND created_at > now()-interval '20 hours'`,[row.user_id,row.id,occurrence.ymd,email])).rows[0];
         if (!delivery) continue;
-        const current = (await c.query<Recipient>(recipientSql,[[row.id],[occurrence.ymd],clock.date,row.user_id])).rows[0];
+        const current = (await c.query<Recipient>(emailSql,[[row.id],[occurrence.ymd],clock.date,row.user_id])).rows[0];
         if (!current || normalizeEmail(current.email)!==email || current.family_group_id!==delivery.family_group_id
           || occurrenceFor(current,clock.date)?.ymd!==occurrence.ymd) continue;
         const id = await sendEmail(delivery.payload,`familye/yahrzeit/${delivery.id}`,send);
         await c.query('UPDATE yahrzeit_email_deliveries SET sent_at=now(),provider_id=$2 WHERE id=$1',[delivery.id,id]);
       } catch (error) {
         log.error({user_id:row.user_id,yahrzeit_id:row.id,error:String(error)},'Yahrzeit reminder failed');
+      }
+    }
+    if (whatsappRemindersReady()) {
+      const sql = recipientSql('whatsapp');
+      const { rows: whatsappRecipients } = await c.query<Recipient>(sql,args);
+      for (const row of whatsappRecipients) {
+        try { await sendWhatsAppReminder(c,sql,row,upcoming.get(row.id)!,clock.date,send); }
+        catch (error) { log.error({user_id:row.user_id,yahrzeit_id:row.id,error:String(error)},'WhatsApp yahrzeit reminder failed'); }
       }
     }
   } finally {

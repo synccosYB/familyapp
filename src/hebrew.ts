@@ -28,11 +28,11 @@ const ymdToDate = (s: string) => { const [y, m, d] = s.split('-').map(Number); r
 const dateToYmd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** A real death date with this day/month, so hebcal's yahrzeit rules (Adar, 30 Cheshvan/Kislev) apply. */
-function syntheticDeath(day: number, code: string, deathYear?: number | null): HDate {
+function originalHebrewDate(day: number, code: string, originalYear?: number | null): HDate {
   const month = NUM[code];
   const wantLeap = code === 'ADAR_I' || code === 'ADAR_II' ? true : code === 'ADAR' ? false : null;
   const candidates: number[] = [];
-  if (deathYear && deathYear > 3000) candidates.push(deathYear);
+  if (originalYear && originalYear > 3000) candidates.push(originalYear);
   for (let y = 5700; y < 5800; y++) candidates.push(y);
   for (const y of candidates) {
     const leap = HDate.isLeapYear(y);
@@ -43,11 +43,28 @@ function syntheticDeath(day: number, code: string, deathYear?: number | null): H
   return new HDate(Math.min(day, 29), month, 5785);
 }
 
+export function isHebrewDate(day: number, code: string, year: number | null): boolean {
+  if (!Number.isInteger(day) || day < 1 || day > 30 || !Object.hasOwn(MONTH_YI, code)) return false;
+  if (year !== null && (!Number.isInteger(year) || year < 5001 || year > 5999)) return false;
+  const date = originalHebrewDate(day, code, year);
+  return date.getDate() === day && (year === null || date.getFullYear() === year);
+}
+
+export function hebrewAnniversary(year: number, day: number, code: string, originalYear: number | null): HDate | undefined {
+  const original = originalHebrewDate(day, code, originalYear);
+  return year < original.getFullYear() ? undefined : HebrewCalendar.getBirthdayOrAnniversary(year, original);
+}
+
+export function yahrzeitInYear(year: number, day: number, code: string, deathYear?: number | null): HDate | undefined {
+  const death = originalHebrewDate(day, code, deathYear);
+  return year <= death.getFullYear() ? undefined : HebrewCalendar.getYahrzeit(year, death);
+}
+
 export interface Occurrence { ymd: string; days: number; hebrew: string }
 /** Next yahrzeit on or after today (in the family's time zone). */
-export function nextYahrzeit(day: number, code: string, deathYear?: number | null, ymd = todayYmd()): Occurrence | null {
-  const today = ymdToDate(ymd);
-  const death = syntheticDeath(day, code, deathYear);
+export function nextYahrzeit(day: number, code: string, deathYear?: number | null, localDate = todayYmd()): Occurrence | null {
+  const today = ymdToDate(localDate);
+  const death = originalHebrewDate(day, code, deathYear);
   const hy = new HDate(today).getFullYear();
   for (const y of [hy - 1, hy, hy + 1, hy + 2]) {
     if (y <= death.getFullYear()) continue;
@@ -61,10 +78,12 @@ export function nextYahrzeit(day: number, code: string, deathYear?: number | nul
   return null;
 }
 
-export function hebrewText(h: HDate): string {
-  const mname = h.getMonth() === months.ADAR_I ? (HDate.isLeapYear(h.getFullYear()) ? 'אדר א' : 'אדר')
+export function hebrewMonth(h: HDate): string {
+  return h.getMonth() === months.ADAR_I ? (HDate.isLeapYear(h.getFullYear()) ? 'אדר א' : 'אדר')
     : h.getMonth() === months.ADAR_II ? 'אדר ב' : MONTH_YI[Object.keys(months).find((k) => (months as any)[k] === h.getMonth()) as string];
-  return `${gem(h.getDate())} ${mname} ${gem(h.getFullYear() % 1000)}`;
 }
+export function hebrewText(h: HDate): string { return `${gem(h.getDate())} ${hebrewMonth(h)} ${gem(h.getFullYear() % 1000)}`; }
+export const hebrewDateForYmd = (ymd: string) => new HDate(ymdToDate(ymd));
+export const ymdForHebrewDate = (date: HDate) => dateToYmd(date.greg());
 export function hebrewForYmd(ymd: string): string { return hebrewText(new HDate(ymdToDate(ymd))); }
 export function daysUntil(ymd: string): number { return Math.round((ymdToDate(ymd).getTime() - ymdToDate(todayYmd()).getTime()) / 86400000); }

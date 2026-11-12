@@ -20,6 +20,13 @@ export const config = {
   pgDumpBin: env.PG_DUMP_BIN || 'pg_dump',
   resendApiKey: env.RESEND_API_KEY || '',
   resendFromEmail: env.RESEND_FROM_EMAIL || '',
+  whatsapp: {
+    token: env.WHATSAPP_ACCESS_TOKEN || '',
+    sender: env.WHATSAPP_PHONE_NUMBER_ID || '',
+    version: env.WHATSAPP_GRAPH_API_VERSION || '',
+    template: env.WHATSAPP_YAHRZEIT_TEMPLATE || '',
+    language: env.WHATSAPP_YAHRZEIT_LANGUAGE || '',
+  },
   wordingSyncToken: env.KOBOR_WORDING_SYNC_TOKEN || '',
   // first admin, created by bootstrap if missing
   admin: {
