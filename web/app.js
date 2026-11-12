@@ -157,18 +157,20 @@ V.tree = async () => {
   const { people } = await api('/people'); STATE.people = people;
   const sides = mySides(); if (!STATE.treeSide || !sides.includes(STATE.treeSide)) STATE.treeSide = sides[0];
   const s = STATE.treeSide, P = people.filter((p) => p.side === s || p.side === 'both');
-  const {units,edges}=familyUnits(P); STATE.treeEdges=edges;
+  const {units,edges,generationConflicts}=familyUnits(P); STATE.treeEdges=edges;
+  const graphMode=STATE.treeView==='tree' && !generationConflicts.length;
   const node = p => `<button class="pn family-person ${p.niftar?'d':''}" data-tree-person="${p.id}" data-act="editp" data-id="${p.id}"><strong>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.niftar?' ז״ל':''}</strong>${p.father_name?`<span class="muted tree-relation">טאטע: ${esc(p.father_name)}</span>`:''}${p.mother_name?`<span class="muted tree-relation">מאמע: ${esc(p.mother_name)}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">מאן / ווייב: ${esc(p.spouse)}</span>`:''}</button>`;
   const couple = unit => `<section class="family-unit ${unit.members.length===2?'married':''}" aria-label="${unit.members.length===2?'פארהייראטע פארפאלק':'מענטש'}">${unit.members.length===2?'<div class="marriage-label">פארהייראט</div>':''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
-  const treeHtml=STATE.treeView==='tree'
-    ? `<div class="tree-toolbar" aria-label="בוים פארגרעסערונג"><button class="btn s l" data-act="treezoom" data-v="fit">פאס צום עקראַן</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="פארקלענערן בוים">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="פארגרעסערן בוים">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
+  const treeHtml=graphMode
+    ? `<div class="tree-toolbar" aria-label="בוים פארגרעסערונג"><button class="btn s l" data-act="treezoom" data-v="fit">פאס צום עקראַן</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="פארקלענערן בוים">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="פארגרעסערן בוים">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">+ לייג צו אין בוים</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
     : `<div class="family-list">${units.map(couple).join('')}</div>`;
   return `<h1>🌳 פעמילי טרי</h1><div class="cap">דריק אויף א נאמען צו עדיטן אדער צולייגן קינדער.</div>
   <div class="btns" style="margin-bottom:6px">${sides.length > 1 ? `<div class="seg">${sides.map((c) => `<button class="${s === c ? 'on' : ''}" data-act="treeside" data-v="${c}">${esc(sideLong(c))}</button>`).join('')}</div>` : `<b style="margin-bottom:14px">${esc(sideLong(s))}</b>`}
   <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">בוים</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">ליסט</button></div></div>
+  ${generationConflicts.length ? '<p class="err" role="alert">די משפחה לינקס שטימען נישט מיט די דורות. מען ווייזט א ליסט ביז די לינקס ווערן איבערגעקוקט.</p>' : ''}
   ${units.length ? `<div class="card">${treeHtml}</div>` : empty('🌳','דער בוים איז נאך ליידיג. הייב אן מיט די זיידע און באבע.')}
-  <button class="btn" style="margin-top:12px" data-act="editp" data-id="0">+ לייג צו אין בוים</button>`;
+  ${graphMode && units.length ? '' : '<button class="btn" style="margin-top:12px" data-act="editp" data-id="0">+ לייג צו אין בוים</button>'}`;
 };
 let treeObserver;
 function drawFamilyLines() {
@@ -191,12 +193,14 @@ function drawFamilyLines() {
 function updateFamilyViewport() {
   const map=$('family-map'),viewport=$('family-viewport'),stage=$('family-stage'); if(!map||!viewport||!stage) return;
   const width=map.offsetWidth,height=map.offsetHeight;
-  const availableHeight=Math.max(220,window.innerHeight-viewport.getBoundingClientRect().top-90);
+  const availableHeight=Math.max(220,window.innerHeight-viewport.getBoundingClientRect().top-(window.innerWidth<=800?88:24));
   const scale=STATE.treeZoom ?? fitTreeScale(width,height,viewport.clientWidth,availableHeight);
   STATE.treeScale=scale;
+  viewport.style.height=availableHeight+'px';
   viewport.style.maxHeight=availableHeight+'px';
   stage.style.width=Math.max(viewport.clientWidth,Math.ceil(width*scale))+'px';
-  stage.style.height=Math.ceil(height*scale)+'px';
+  stage.style.height=Math.max(availableHeight,Math.ceil(height*scale))+'px';
+  map.style.top=Math.max(0,(availableHeight-height*scale)/2)+'px';
   map.style.right=Math.max(0,(viewport.clientWidth-width*scale)/2)+'px';
   map.style.transform=`scale(${scale})`;
   if($('tree-scale')) $('tree-scale').textContent=Math.round(scale*100)+'%';
@@ -441,6 +445,7 @@ async function go() {
   if (!ME) { stopPoll(); clearChrome(); $('m').innerHTML = V.login(); return; }
   if (ME.status !== 'active') { stopPoll(); clearChrome(); $('m').innerHTML = V.pending(); return; }
   const [v, arg] = h.split('/'); const view = V[v] && !['login', 'pending', 'setpw'].includes(v) ? v : 'home';
+  $('m').classList.toggle('tree-workspace',view==='tree' && STATE.treeView==='tree');
   if (view !== 'chat') stopPoll();
   renderNav(view);
   const my = ++RENDER;
@@ -448,7 +453,7 @@ async function go() {
   catch (e) { if (my === RENDER) { if (e.status === 401 || e.status === 403) { await loadMe(); if (!ME || ME.status !== 'active') return go(); } $('m').innerHTML = `<div class="empty"><div class="e">⚠️</div>${esc(e.message)}<div style="margin-top:10px"><button class="btn s" data-act="reload">פרוביר נאכאמאל</button></div></div>`; } }
 }
 const refresh = () => { STATE.keepScroll = true; return go(); };
-function clearChrome() { $('nav').innerHTML = ''; $('tabs').innerHTML = ''; $('top').innerHTML = ''; }
+function clearChrome() { $('m').classList.remove('tree-workspace'); $('nav').innerHTML = ''; $('tabs').innerHTML = ''; $('top').innerHTML = ''; }
 async function loadMe() { const r = await api('/me'); ME = r.user; S = r.settings || {}; document.title = S.family_yi || 'משפחה'; }
 
 // ---------- actions ----------

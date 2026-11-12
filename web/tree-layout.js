@@ -11,28 +11,47 @@ export function familyUnits(people) {
     units.push(unit);
     for (const member of members) byPerson.set(member.id, unit);
   }
-  const edges = [];
+  const edges = [], intraUnitConflicts = [];
   for (const person of people) {
     for (const parentId of new Set([person.father_id, person.mother_id, person.parent_id].filter(Boolean))) {
       const from = byPerson.get(parentId), to = byPerson.get(person.id);
-      if (!from || from === to) continue;
+      if (!from) continue;
+      if (from === to) {intraUnitConflicts.push({parentId,childId:person.id});continue;}
       to.parents.add(from.id);
       edges.push({ parentId, childId: person.id });
     }
   }
-  const byUnit = new Map(units.map(u => [u.id, u]));
-  const resolved = new Set(), visiting = new Set();
-  function rank(unit) {
-    if (resolved.has(unit.id)) return unit.level;
-    // Defensive guard for invalid legacy data; never recurse indefinitely.
-    if (visiting.has(unit.id)) return 0;
-    visiting.add(unit.id);
-    unit.level = Math.max(0, ...[...unit.parents].map(id => rank(byUnit.get(id)) + 1));
-    visiting.delete(unit.id);
-    resolved.add(unit.id);
-    return unit.level;
+  // Parent edges impose a one-generation difference in BOTH directions.
+  // Solving the connected family together aligns co-parents/in-laws even when
+  // only one branch has known ancestors. Missing parents never become roots
+  // at a different generation merely because their records are incomplete.
+  const neighbours = new Map(units.map(unit => [unit.id, []]));
+  for (const edge of edges) {
+    const parent = byPerson.get(edge.parentId), child = byPerson.get(edge.childId);
+    neighbours.get(parent.id).push({ id: child.id, delta: 1, edge });
+    neighbours.get(child.id).push({ id: parent.id, delta: -1, edge });
   }
-  units.forEach(rank);
+  const byUnit = new Map(units.map(unit => [unit.id, unit]));
+  const assigned = new Map(), generationConflicts = [...intraUnitConflicts];
+  for (const seed of units) {
+    if (assigned.has(seed.id)) continue;
+    assigned.set(seed.id, 0);
+    const queue = [seed.id];
+    for (let index = 0; index < queue.length; index++) {
+      const current = queue[index];
+      for (const next of neighbours.get(current)) {
+        const expected = assigned.get(current) + next.delta;
+        if (!assigned.has(next.id)) {
+          assigned.set(next.id, expected);
+          queue.push(next.id);
+        } else if (assigned.get(next.id) !== expected) {
+          generationConflicts.push(next.edge);
+        }
+      }
+    }
+    const firstGeneration = queue.reduce((min,id)=>Math.min(min,assigned.get(id)),Infinity);
+    for (const id of queue) byUnit.get(id).level = assigned.get(id) - firstGeneration;
+  }
   // Member order follows the visual parent branches, not creation order.
   // The same order is used by RTL rows and the two spouse cards.
   const positions = new Map(units.map((unit, index) => [unit.id, index]));
@@ -46,7 +65,7 @@ export function familyUnits(people) {
       return first === second ? a.id - b.id : first < second ? -1 : 1;
     });
   }
-  return { units, edges };
+  return { units, edges, generationConflicts };
 }
 
 

@@ -40,3 +40,48 @@ test('fit keeps a wide multi-generation tree inside the available screen',()=>{
   assert.equal(fitTreeScale(0,0,400,500),1);
   assert.equal(fitTreeScale(100000,100000,400,500),0.2,'very large trees remain scrollable at a readable lower bound');
 });
+
+
+const sparseFamily = [
+  {id:1,father_id:26,mother_id:27},{id:2},{id:3},{id:4},
+  {id:5,father_id:3,mother_id:4,spouse_id:6},
+  {id:6,father_id:1,mother_id:2,spouse_id:5},
+  {id:7,father_id:6,mother_id:5,spouse_id:8},{id:8},
+  {id:9,father_id:7,mother_id:8},{id:26},{id:27}
+];
+const levelsFor = result => new Map(result.units.flatMap(u=>u.members.map(p=>[p.id,u.level])));
+function assertGenerations(result) {
+  assert.equal(result.generationConflicts.length,0);
+  const levels=levelsFor(result);
+  for(const edge of result.edges) assert.equal(levels.get(edge.childId),levels.get(edge.parentId)+1,JSON.stringify(edge));
+  for(const unit of result.units) for(const person of unit.members) assert.equal(levels.get(person.id),unit.level);
+}
+test('missing in-law ancestors cannot put in-laws above the other parents',()=>{
+  const result=familyUnits(sparseFamily);assertGenerations(result);const levels=levelsFor(result);
+  for(const id of [1,2,3,4]) assert.equal(levels.get(id),1);
+  for(const id of [26,27]) assert.equal(levels.get(id),0);
+  assert.equal(levels.get(5),2);assert.equal(levels.get(6),2);
+  assert.equal(levels.get(7),3);assert.equal(levels.get(8),3);assert.equal(levels.get(9),4);
+});
+test('adding ancestors and changing record order preserves generation constraints',()=>{
+  const variants=[sparseFamily,[...sparseFamily].reverse(),[...sparseFamily.slice(4),...sparseFamily.slice(0,4)]];
+  const expected=levelsFor(familyUnits(sparseFamily));
+  for(const input of variants) {
+    const result=familyUnits(input);assertGenerations(result);
+    assert.deepEqual([...levelsFor(result)].sort((a,b)=>a[0]-b[0]),[...expected].sort((a,b)=>a[0]-b[0]));
+  }
+  const extended=sparseFamily.map(p=>p.id===3?{...p,father_id:30}:p);
+  assertGenerations(familyUnits([...extended,{id:30}]));
+  const deeper=extended.map(p=>p.id===26?{...p,mother_id:40}:p);
+  assertGenerations(familyUnits([...deeper,{id:30},{id:40}]));
+});
+test('contradictory legacy generations are flagged instead of claiming a valid hierarchy',()=>{
+  const result=familyUnits([{id:1,parent_id:2},{id:2,parent_id:1}]);
+  assert.ok(result.generationConflicts.length);assert.equal(result.units.length,2);
+});
+
+
+test('a parent link hidden inside a spouse unit is never silently dropped',()=>{
+  const result=familyUnits([{id:1,spouse_id:2},{id:2,spouse_id:1,father_id:1}]);
+  assert.ok(result.generationConflicts.length);
+});
