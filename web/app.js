@@ -39,15 +39,15 @@ function dayLabel(ts) { const d = new Date(ts), t = new Date(); const diff = Mat
 const famOf = (c) => (c === 'a' ? S.side_a_family_yi : c === 'b' ? S.side_b_family_yi : '');
 const sideName = (c) => (c === 'a' ? S.side_a_yi : c === 'b' ? S.side_b_yi : c === 'all' ? 'אלע קאזינס' : 'ביידע סיידס');
 const sideLong = (c) => sideName(c) + (famOf(c) ? ' · משפחת ' + famOf(c) : '');
-const sideTag = (c) => `<span class="tag ${c === 'a' || c === 'b' ? c : 'g'}">${esc(c === 'a' || c === 'b' ? (famOf(c) || sideName(c)) : sideName(c))}</span>`;
-const familyTags = (p) => (p.families || []).map(f=>`<span class="tag g">${esc(f.name)}</span>`).join(' ');
+const sideTag = (c) => `<span class="tag ${c === 'a' || c === 'b' ? c : 'g'}">צוטריט: ${esc(c === 'a' || c === 'b' ? sideLong(c) : 'אלע אין דער משפחה')}</span>`;
+const familyTags = (p) => (p.families || []).map(f=>`<span class="tag g family-connection">משפחה: ${esc(f.name)}</span>`).join(' ');
 const familyChoices = (rows) => [...new Map(rows.flatMap(p=>p.families || []).map(f=>[f.id,f])).values()].sort((a,b)=>a.name.localeCompare(b.name));
 const familySelector = (rows,key,label) => field(label,`<select data-change="familyfilter" data-key="${key}"><option value="">אלע משפחות</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`);
 const isManager = () => ME && (ME.is_admin || ME.is_family_admin);
 const both = () => ME && (isManager() || (ME.sides.includes('a') && ME.sides.includes('b')));
 const mySides = () => (isManager() ? ['a', 'b'] : ME.sides);
 const vis = (s) => STATE.side === 'all' || s === STATE.side || s === 'both' || s === 'all';
-function seg() { if (!both()) return ''; return `<div class="seg">${[['all', 'ביידע סיידס'], ['a', famOf('a') || sideName('a')], ['b', famOf('b') || sideName('b')]].map(([k, t]) => `<button class="${STATE.side === k ? 'on' : ''}" data-act="side" data-v="${k}">${esc(t)}</button>`).join('')}</div>`; }
+function seg() { if (!both()) return ''; return `<div class="seg">${[['all', 'אלע גרופעס'], ['a', famOf('a') || sideName('a')], ['b', famOf('b') || sideName('b')]].map(([k, t]) => `<button class="${STATE.side === k ? 'on' : ''}" data-act="side" data-v="${k}">${esc(t)}</button>`).join('')}</div>`; }
 function sideOptions(sel, withBoth = true, allLabel) {
   const o = mySides().map((c) => [c, sideLong(c)]);
   if (withBoth && both()) o.push([allLabel ? 'all' : 'both', allLabel || 'ביידע סיידס']);
@@ -67,13 +67,13 @@ const PAGES = [['home', '🏠', 'היים'], ['yz', '🕯️', 'יארצייטן
 let PENDING = 0, UNREAD = false;
 function renderNav(v) {
   const extra = [['me', '👤', 'מיין אקאונט']]; if (isManager()) extra.unshift(['admin', '🛡️', 'אדמין']);
-  $('nav').innerHTML = `<div class="lg">${esc(S.family_yi)}</div><div class="sd">${esc(ME.name)} · ${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}</div>` +
+  $('nav').innerHTML = `<div class="lg">${esc(S.family_yi)}</div><div class="sd">${esc(ME.name)} · ${esc(S.family_yi)}</div>` +
     [...PAGES, ...extra].map(([k, i, t]) => `<a class="${v === k ? 'on' : ''}" href="#${k}">${i} ${t}${k === 'admin' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}</a>`).join('') +
     `<a data-act="logout" style="margin-top:14px;opacity:.7">↩ לאג אאוט</a>`;
   const tb = [['home', '🏠', 'היים'], ['yz', '🕯️', 'יארצייטן'], ['sim', '🎉', 'שמחות'], ['chat', '💬', 'טשעט'], ['more', '☰', 'מער']];
   const inMore = !['home', 'yz', 'sim', 'chat'].includes(v);
   $('tabs').innerHTML = tb.map(([k, i, t]) => `<a class="${(k === v || (k === 'more' && inMore)) ? 'on' : ''}" ${k === 'more' ? 'data-act="more"' : `href="#${k}"`}><span class="i">${i}</span>${t}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}${k === 'more' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}</a>`).join('');
-  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>${(ME.family_groups||[]).length>1?`<label class="family-switch">משפחה וואס דו קוקסט יעצט<select aria-label="משפחה וואס דו קוקסט יעצט" data-change="viewgroup">${ME.family_groups.map(g=>`<option value="${g.id}" ${g.id===ME.selected_family_group_id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label>`:''}`;
+  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>${(ME.family_groups||[]).length>1?`<label class="family-switch">משפחה וואס דו קוקסט<select aria-label="משפחה וואס דו קוקסט" data-change="viewgroup">${ME.family_groups.map(g=>`<option value="${g.id}" ${g.id===ME.selected_family_group_id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label>`:''}`;
 }
 function moreSheet() {
   const L = [['tree', '🌳', 'פעמילי טרי'], ['learn', '📖', 'משניות און תהילים'], ['people', '👥', 'קאזינס / אדרעסן'], ...(isManager() ? [['admin', '🛡️', 'אדמין' + (PENDING ? ` (${PENDING} ווארטן)` : '')]] : []), ['me', '👤', 'מיין אקאונט']];
@@ -113,7 +113,7 @@ V.setpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>ש
 V.home = async () => {
   const h = await api('/home'); PENDING = h.pending;
   const nx = h.yahrzeits[0];
-  return `<h1>שלום ${esc(ME.name.split(' ')[0])} 👋</h1><div class="cap">היינט: ${esc(h.today)} · ${both() ? 'דו זעסט ביידע סיידס פון די משפחה' : esc(sideLong(ME.sides[0]))}</div>
+  return `<h1>שלום ${esc(ME.name.split(' ')[0])} 👋</h1><div class="cap">היינט: ${esc(h.today)} · משפחה וואס דו קוקסט: ${esc(S.family_yi)}</div>
   ${h.pending ? `<a class="row" href="#admin" style="text-decoration:none;color:inherit;background:#fffbeb;border-color:#fcd34d"><div class="grow"><b>🛡️ ${h.pending} נייע קאזינס ווארטן אויף אפרוביישן</b></div><span class="btn s">קוק</span></a>` : ''}
   <div class="grid g4"><a class="card" href="#yz" style="text-decoration:none;color:inherit"><div class="muted">נעקסטע יארצייט</div><div class="big" style="font-size:20px">${nx ? esc(nx.hebrew) : '—'}</div><div class="muted">${nx ? inDays(nx.next.days) : 'נאך נישטא'}</div></a>
   <a class="card" href="#sim" style="text-decoration:none;color:inherit"><div class="muted">שמחות וואס קומען</div><div class="big">${h.simchas.length}</div></a>
@@ -267,7 +267,7 @@ document.addEventListener('wheel',ev=>{
 async function personProfile(id) {
   const {people}=await api('/people'),p=people.find(p=>p.id===id);if(!p)throw new Error('נישט געטראפן');
   const linked=(key,label)=>p[key]?`<div class="row"><span class="muted">${label}</span><button type="button" class="btn l" data-act="viewperson" data-id="${p[key]}">${esc([p[key.replace('_id','_title')],p[key.replace('_id','_name')]].filter(Boolean).join(' '))}</button></div>`:'';
-  modal(`<h2>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.life_status==='deceased'?' ז״ל':''}</h2><div class="btns">${familyTags(p)}${sideTag(p.side)}</div>
+  modal(`<h2>${esc([p.title,p.name].filter(Boolean).join(' '))}${p.life_status==='deceased'?' ז״ל':''}</h2><div class="btns">${familyTags(p)}</div>
     <p class="muted">${p.life_status==='deceased'?'נפטר / נפטרת':p.life_status==='living'?'לעבט':'לעבנס סטאטוס נישט באקאנט'}</p>
     ${linked('father_id','טאטע')}${linked('mother_id','מאמע')}${linked('spouse_id','זיווג ראשון')}${linked('second_spouse_id','זיווג שני')}
     ${people.some(c=>c.father_id===id||c.mother_id===id)?`<h3>קינדער</h3>${people.filter(c=>c.father_id===id||c.mother_id===id).map(c=>`<div class="row"><button class="btn l" data-act="viewperson" data-id="${c.id}">${esc(c.name)}</button><span class="muted">טאטע: ${esc(c.father_name||'נישט באקאנט')} · מאמע: ${esc(c.mother_name||'נישט באקאנט')}</span></div>`).join('')}`:''}
@@ -304,7 +304,7 @@ async function personForm(id, parentId, defaults={}) {
   ${p.parent_id ? choice('parent_id','פריערדיגער עלטערן לינק (נאכנישט באשטימט טאטע / מאמע)') : '<input type="hidden" id="pparent_id" value="">'}
   ${p.spouse && !p.spouse_id ? `<p class="muted">פריערדיגער מאן / ווייב נאמען: ${esc(p.spouse)}. קלייב דעם מענטש אויבן צו פארבינדן.</p>` : ''}
   ${field('ייחוס',`<select id="plineage"><option value="">נישט באקאנט</option><option value="בן" ${p.lineage_term==='בן'?'selected':''}>בן</option><option value="בת" ${p.lineage_term==='בת'?'selected':''}>בת</option></select>`)}
-  <fieldset><legend>משפחות (מען קען אויסקלייבן מער ווי איינס)</legend>${familyChoices(P).map(f=>`<label style="display:inline-flex;gap:6px;margin:6px"><input type="checkbox" name="person_family" value="${f.id}" ${(p.families || []).some(x=>x.id===f.id)?'checked':''}>${esc(f.name)}</label>`).join('')}
+  <fieldset><legend>צו וועלכע משפחות איז דער מענטש פארבונדן?</legend><p class="muted">קלייב די משפחה פארבינדונגען פון דעם מענטש. מען קען אויסקלייבן מער ווי איינס. דאס איז נישט דער פאמיליע נאמען און טוישט נישט ווער קען זען.</p>${familyChoices(P).map(f=>`<label style="display:inline-flex;gap:6px;margin:6px"><input type="checkbox" name="person_family" value="${f.id}" ${(p.families || []).some(x=>x.id===f.id)?'checked':''}>${esc(f.name)}</label>`).join('')}
   ${field('צולייגן א נייע משפחה',`<input id="pnewfamily" maxlength="80" placeholder="משפחה נאמען">`)}</fieldset>
   ${field('ווער קען זען (צוטריט גרופע)',`<select id="pside">${sideOptions(p.side)}</select>`)}
   ${field('לעבנס סטאטוס',`<select id="plife"><option value="unknown" ${!p.life_status||p.life_status==='unknown'?'selected':''}>נישט באקאנט</option><option value="living" ${p.life_status==='living'?'selected':''}>לעבט</option><option value="deceased" ${p.life_status==='deceased'?'selected':''}>נפטר / נפטרת</option></select>`)}
@@ -325,8 +325,8 @@ async function personForm(id, parentId, defaults={}) {
 V.learn = async (arg) => {
   if (arg) return learnDetail(Number(arg));
   const [{ lists },{people}] = await Promise.all([api('/lists'),api('/people')]); STATE.learningLists=lists; const L = lists.filter(l => vis(l.side) && (!STATE.learnFamily || (l.families||[]).some(f=>f.id===Number(STATE.learnFamily))));
-  return `<h1>📖 משניות און תהילים</h1><div class="cap">נעם א מסכתא, פרק אדער משנה לעילוי נשמת.</div><div class="cap">צוטריט סייד</div>${seg()}${familySelector([...lists,...people],'learnFamily','משפחה')}
-  ${L.map((l) => `<a class="card" href="#learn/${l.id}" style="display:block;text-decoration:none;color:inherit;margin-bottom:10px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:18px">${l.kind === 'tehillim' ? '📜 תהילים' : '📚 משניות'} · לעילוי נשמת ${esc(l.niftar)}</b>${sideTag(l.side)}${familyTags(l)}</div>
+  return `<h1>📖 משניות און תהילים</h1><div class="cap">נעם א מסכתא, פרק אדער משנה לעילוי נשמת.</div><div class="cap">פילטער לויט צוטריט גרופע</div>${seg()}${familySelector([...lists,...people],'learnFamily','משפחה')}
+  ${L.map((l) => `<a class="card" href="#learn/${l.id}" style="display:block;text-decoration:none;color:inherit;margin-bottom:10px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:18px">${l.kind === 'tehillim' ? '📜 תהילים' : '📚 משניות'} · לעילוי נשמת ${esc(l.niftar)}</b>${familyTags(l)}</div>
   <div class="muted">${l.target_date ? `ביז ${gdate(l.target_date)} (${inDays(l.days)})` : 'קיין דאטום'}${l.mine ? ` · דו האסט ${l.mine}` : ''}</div>
   <div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${l.taken} פון ${l.total} אינגאנצן גענומען${l.partial?` · ${l.partial} טיילווייז`: ''} · ${l.done} געענדיגט</div></a>`).join('') || empty('📖', 'נאך קיין ליסטס. מאך איינס פאר א יארצייט.')}
   <button class="btn" data-act="newlist" data-yz="0">+ נייע ליסט</button>`;
@@ -580,7 +580,7 @@ V.admin = async () => {
   const pend = users.filter((u) => u.status === 'pending'), rest = users.filter((u) => u.status !== 'pending'), resets = users.filter((u) => u.reset_requested_at);
   const sidesBox = (u) => !ME.is_admin&&(u.family_group_ids||[]).length>1?'<span class="muted">מערערע משפחות — נאר דער הויפט אדמין קען עדיטן</span>':['a', 'b'].map((c) => `<label style="display:inline-flex;align-items:center;font-weight:600;margin-left:10px"><input type="checkbox" data-change="usides" data-id="${u.id}" data-v="${c}" ${u.sides.includes(c) ? 'checked' : ''}>${esc(famOf(c) || sideName(c))}</label>`).join('');
   return `<a class="btn l" href="#personreviews">מענטשן איבערזיכט</a><h1>🛡️ אדמין</h1><div class="cap">אפרובירן נייע קאזינס, טוישן סייד, מאכן אנדערע אדמין.</div>
-  ${ME.is_admin?`<section class="card"><h2>משפחה צוטריט</h2>${groups.length?field('משפחה וואס דו קוקסט יעצט',`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):'<p role="status">נאך נישטא קיין צוטריט משפחות. מאך קודם די משפחות אונטן, דערנאך קלייב ביי יעדן מעמבער איינס ביז פיר משפחות.</p>'}<form data-form="newgroup">${field('מאך א נייע משפחה','<input id="groupname" maxlength="120" required>')}<button class="btn">מאך משפחה</button></form><button class="btn l" data-act="unassigned">צוטיילן אלטע רעקארדס</button></section>`:''}
+  ${ME.is_admin?`<section class="card"><h2>משפחה צוטריט</h2>${groups.length?field('משפחה וואס דו קוקסט',`<select data-change="viewgroup">${options(ME.selected_family_group_id)}</select>`):'<p role="status">נאך נישטא קיין צוטריט משפחות. מאך קודם די משפחות אונטן, דערנאך קלייב ביי יעדן מעמבער איינס ביז פיר משפחות.</p>'}<form data-form="newgroup">${field('מאך א נייע משפחה','<input id="groupname" maxlength="120" required>')}<button class="btn">מאך משפחה</button></form><button class="btn l" data-act="unassigned">צוטיילן אלטע רעקארדס</button></section>`:''}
   <form class="card" data-form="renamegroup">${field('עדיט משפחה נאמען',`<select id="renamegroupid" required>${options(ME.is_admin?ME.selected_family_group_id:ME.family_group_id)}</select><input id="renamegroupname" maxlength="120" placeholder="דער ריכטיגער משפחה נאמען" required>`)}<button class="btn">סעיוו משפחה נאמען</button><div class="err"></div></form>
   <h2>🔑 פאסווארט בקשות (${resets.length})</h2><p class="muted">באשטעטיג ווער דער מענטש איז איידער דו שיקסט א לינק. דער לינק איז איינמאליג און גוט פאר איין שעה.</p>
   ${resets.map(u => `<div class="row"><div class="grow"><b>${esc(u.name)}</b> <span dir="ltr">+${esc(u.phone)}</span><div class="muted">${esc(new Date(u.reset_requested_at).toLocaleString())}</div></div><button class="btn s" data-act="resetlink" data-id="${u.id}" ${!ME.is_admin&&(u.family_group_ids||[]).length>1?'disabled':''}>🔑 מאך א לינק</button></div>`).join('') || '<div class="muted">נאך קיין בקשות.</div>'}
