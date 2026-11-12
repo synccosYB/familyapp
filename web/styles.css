@@ -100,4 +100,14 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
 .family-switch{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 16px;background:#fff;color:#1e1b4b;font-size:14px}.family-switch select{flex:1 1 180px;min-width:0;max-width:100%;margin:0}
 .family-connection{display:inline-flex;max-width:100%;white-space:normal;overflow-wrap:anywhere;vertical-align:middle}
 .family-switch,.family-connection{line-height:1.5}
+.person-family-picker{min-width:0;margin:16px 0;padding:12px;border:1px solid #d1d5db;border-radius:12px}
+.person-family-picker legend{padding-inline:6px;font-weight:700}
+.person-family-picker .muted{margin:0 0 10px}
+.person-family-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.person-family-options label{display:flex;align-items:center;gap:10px;min-height:44px;padding:8px 12px;margin:0;border:1px solid #d1d5db;border-radius:8px;cursor:pointer}
+.person-family-options input{margin:0;accent-color:#4338ca}
+.person-family-options label:has(input:checked){border-color:#4338ca;background:#eef2ff;color:#312e81}
+.person-family-picker details{margin-top:12px}
+.person-family-picker summary{cursor:pointer;color:#3730a3}
+.yahrzeit-families{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
 

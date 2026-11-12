@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {createHash,randomBytes} from 'node:crypto';
 import pg from 'pg';
@@ -95,6 +95,87 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.yahrzeits WHERE person_id=$1`,[memorialPerson.id])).rows[0].n,1);
   // Unrelated groups still cannot manufacture cross-family memorial links directly.
   await assert.rejects(db.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,person_id,family_group_id) VALUES('Invalid memorial','both',1,'ELUL',$1,$2)`,[memorialFather.id,gb]),/foreign key/);
+  // A checked label resolves to its assigned access group even while another family is open.
+  const aLabel=pa.families[0].id,bLabel=pb.families[0].id;
+  assert.notEqual(bLabel,gb,'label IDs and access group IDs are independent');
+  const fatherBody={name:'Checked family father',side:'both',family_ids:[bLabel],life_status:'deceased',death_hday:5,death_hmonth:'ELUL',request_key:randomBytes(16).toString('hex')};
+  const checkedFather=ok(await req('/people',fatherBody,root.cookie,'POST',ga)).person;
+  assert.equal(checkedFather.family_group_id,gb);
+  assert.deepEqual(checkedFather.families.map(f=>f.id),[bLabel]);
+  assert.equal(ok(await req('/people',fatherBody,root.cookie,'POST',ga)).person.id,checkedFather.id,'cross-view retries reuse the person');
+  const checkedMother=ok(await req('/people',{name:'Checked family mother',side:'both',family_ids:[bLabel]},root.cookie,'POST',ga)).person;
+  const daughter=ok(await req('/people',{name:'Checked family daughter',side:'both',family_ids:[bLabel]},b.cookie)).person;
+  const linked=ok(await req('/people/'+daughter.id,{father_id:checkedFather.id,mother_id:checkedMother.id,family_ids:[bLabel]},root.cookie,'PUT',ga)).person;
+  assert.equal(linked.father_id,checkedFather.id);
+  assert.equal(linked.mother_id,checkedMother.id);
+  assert.ok(!ok(await req('/people',undefined,a.cookie)).people.some(p=>p.id===checkedFather.id));
+  assert.equal(ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits.find(y=>y.person_id===checkedFather.id).family_group_id,gb);
+  assert.ok(!ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits.some(y=>y.person_id===checkedFather.id));
+  assert.equal((await req('/people',{name:'Forbidden family label',side:'both',family_ids:[bLabel]},a.cookie)).status,404);
+  assert.equal((await req('/people/'+daughter.id,{father_id:pa.id},root.cookie,'PUT',ga)).status,400,'unrelated families still cannot link');
+
+  const spouse=ok(await req('/people',{name:'Checked family first spouse',side:'both',family_ids:[bLabel]},root.cookie,'POST',ga)).person;
+  const remarried=ok(await req('/people/'+checkedMother.id,{family_ids:[bLabel],spouse_id:spouse.id,new_relatives:{second_spouse_id:{name:'Checked family second spouse'}}},root.cookie,'PUT',ga)).person;
+  assert.equal(remarried.spouse_id,spouse.id);
+  const familyB=ok(await req('/people',undefined,b.cookie)).people;
+  assert.equal(familyB.find(p=>p.id===remarried.second_spouse_id).family_group_id,gb);
+  assert.equal(familyB.find(p=>p.id===remarried.second_spouse_id).spouse_id,checkedMother.id);
+  assert.equal(familyB.find(p=>p.id===daughter.id).mother_id,checkedMother.id);
+
+  const sharedParent=ok(await req('/people',{name:'Checked shared parent',side:'both',family_ids:[bLabel,aLabel],life_status:'deceased',death_hday:5,death_hmonth:'ELUL'},root.cookie,'POST',ga)).person;
+  assert.equal(sharedParent.family_group_id,ga);
+  const sharedDaughter=ok(await req('/people',{name:'Checked shared daughter',side:'both',family_ids:[bLabel],father_id:sharedParent.id},b.cookie)).person;
+  assert.equal(sharedDaughter.father_id,sharedParent.id,'a shared access group allows links across primary owners');
+  const adminMemorials=ok(await req('/yahrzeits',undefined,root.cookie,'GET',ga)).yahrzeits;
+  assert.deepEqual(adminMemorials.find(y=>y.person_id===sharedParent.id).families.map(f=>f.id),[aLabel,bLabel],'show both permitted checked labels');
+  assert.ok(!adminMemorials.some(y=>y.person_id===checkedFather.id),'the other family still has its own yahrzeit list');
+  assert.deepEqual(ok(await req('/yahrzeits',undefined,a.cookie)).yahrzeits.find(y=>y.person_id===sharedParent.id).families.map(f=>f.id),[aLabel]);
+  assert.deepEqual(ok(await req('/yahrzeits',undefined,b.cookie)).yahrzeits.find(y=>y.person_id===sharedParent.id).families.map(f=>f.id),[bLabel]);
+  assert.equal((await req('/people/'+sharedParent.id,{family_ids:[aLabel]},root.cookie,'PUT',ga)).status,400,'grant removal that would break a link rolls back');
+  assert.ok(ok(await req('/people',undefined,b.cookie)).people.some(p=>p.id===sharedParent.id));
+
+  // Exercise the migration on records with the old owner's exact shape.
+  const [wrong,protectedByGrant,protectedByLink,ambiguous]=(await db.query(`INSERT INTO ${schema}.people(name,side,family_group_id,life_status)
+    VALUES('Wrong viewing owner','both',$1,'deceased'),('Recovered grant','both',$1,'unknown'),('Existing family link','both',$1,'unknown'),('Two checked groups','both',$1,'unknown') RETURNING id`,[ga])).rows.map(r=>r.id);
+  await db.query(`INSERT INTO ${schema}.person_families(person_id,family_id) SELECT unnest($1::int[]),$2`,[[wrong,protectedByGrant,protectedByLink,ambiguous],bLabel]);
+  await db.query(`INSERT INTO ${schema}.person_families(person_id,family_id) VALUES($1,$2)`,[ambiguous,aLabel]);
+  await db.query(`INSERT INTO ${schema}.person_family_access(person_id,family_group_id) VALUES($1,$2)`,[protectedByGrant,ga]);
+  await db.query(`UPDATE ${schema}.people SET father_id=$1 WHERE id=$2`,[pa.id,protectedByLink]);
+  const wrongMemorial=(await db.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,person_id,family_group_id) VALUES('Wrong viewing owner','both',5,'ELUL',$1,$2) RETURNING id`,[wrong,ga])).rows[0].id;
+  const archivedMemorial=(await db.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,canonical_id,family_group_id,archived_at) VALUES('Archived memorial','both',5,'ELUL',$1,$2,now()) RETURNING id`,[wrongMemorial,ga])).rows[0].id;
+  assert.equal((await req('/people/'+daughter.id,{father_id:wrong},root.cookie,'PUT',ga)).status,400);
+  const qaGroup=ok(await req('/admin/family-groups',{name:'QA זיווגים 2026-11-12'},root.cookie)).group.id;
+  const qaPerson=ok(await req('/people',{name:'QA marriage fixture',side:'both'},root.cookie,'POST',qaGroup)).person;
+  const qaInvite=ok(await req('/family-invitations',{sides:['a','b']},root.cookie,'POST',qaGroup)).link.split('#join=')[1];
+  const archive=await readFile(new URL('../db/migrations/022_archive_marriage_qa_family.sql',import.meta.url),'utf8');
+  const migration=await readFile(new URL('../db/migrations/023_repair_person_family_owners.sql',import.meta.url),'utf8');
+  const repair=await db.connect();
+  try {
+   await repair.query('BEGIN');
+   await repair.query(`SET LOCAL search_path TO ${schema}`);
+   await repair.query(archive);
+   await repair.query(migration);
+   await repair.query('COMMIT');
+  } catch(error) {
+   await repair.query('ROLLBACK');
+   throw error;
+  } finally {
+   repair.release();
+  }
+  const repaired=ok(await req('/people/'+daughter.id,{father_id:wrong},root.cookie,'PUT',ga)).person;
+  assert.equal(repaired.father_id,wrong);
+  const owners=(await db.query(`SELECT id,family_group_id FROM ${schema}.people WHERE id=ANY($1) ORDER BY id`,[[wrong,protectedByGrant,protectedByLink,ambiguous]])).rows;
+  assert.deepEqual(owners.map(p=>p.family_group_id),[gb,ga,ga,ga]);
+  const memorialOwners=(await db.query(`SELECT family_group_id FROM ${schema}.yahrzeits WHERE id=ANY($1)`,[[wrongMemorial,archivedMemorial]])).rows;
+  assert.deepEqual(memorialOwners.map(y=>y.family_group_id),[gb,gb]);
+  const correction=ok(await req('/people/'+ambiguous,{family_ids:[bLabel]},root.cookie,'PUT',ga)).person;
+  assert.equal(correction.family_group_id,gb,'explicit admin edit can correct a previous assignment');
+  assert.ok(!ok(await req('/me',undefined,root.cookie)).user.family_groups.some(g=>g.id===qaGroup));
+  assert.ok(!ok(await req('/admin/family-groups',undefined,root.cookie)).groups.some(g=>g.id===qaGroup));
+  assert.equal((await req('/me/family-group',{family_group_id:qaGroup},root.cookie)).status,400);
+  assert.equal((await req('/people',undefined,root.cookie,'GET',qaGroup)).status,403);
+  assert.equal((await req('/family-invitations/'+qaInvite)).status,404);
+  assert.equal((await db.query(`SELECT family_group_id FROM ${schema}.people WHERE id=$1`,[qaPerson.id])).rows[0].family_group_id,qaGroup,'QA fixture is recoverable');
   // Legacy records remain hidden; explicit assignment is atomic and checked for cross-family edges.
   const legacy=(await db.query(`INSERT INTO ${schema}.people(name,side) VALUES('Legacy hidden','a') RETURNING id`)).rows[0];
   assert.ok(!JSON.stringify(ok(await req('/people',undefined,a.cookie))).includes('Legacy hidden'));

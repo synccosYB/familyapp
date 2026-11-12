@@ -140,7 +140,8 @@ V.yz = async () => {
   const { yahrzeits } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
   const L = yahrzeits.filter(y => !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
   return `<h1>🕯️ יארצייטן</h1><div class="cap">אלע זיידעס, באבעס און משפחה. דער דאטום פאר דעם יאר ווערט אויסגערעכנט פונעם אידישן דאטום.</div>${familySelector(yahrzeits,'yzFamily','משפחה')}
-  ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(y.name)} ${esc(y.father_name)}</b> ${familyTags(y)}
+  ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(y.name)} ${esc(y.father_name)}</b>
+   ${y.families?.length?`<div class="yahrzeit-families">${familyTags(y)}</div>`:''}
    <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` · דעם יאר: ${gdate(y.next.ymd)} · <b style="color:#4338ca">${inDays(y.next.days)}</b>` : ''}</div>
    ${y.kever ? `<div class="muted">🪦 ${esc(y.kever)}</div>` : ''}${y.kever_address?`<div class="muted" dir="auto">📍 ${esc(y.kever_address)}</div><div class="btns">${navBtns(y.kever_address)}</div>`:''}${y.note ? `<div class="muted">${esc(y.note)}</div>` : ''}</div>
    <div class="btns"><button class="btn s ${y.remind ? 'g' : 'l'}" data-act="remind" data-id="${y.id}" data-on="${y.remind ? 0 : 1}">${y.remind ? '🔔 מען דערמאנט דיך' : '🔔 רימיינד מיר'}</button>
@@ -308,12 +309,14 @@ async function personForm(id, parentId, defaults={}) {
   <label><input id="pdistinct" type="checkbox"> דאס איז א צווייטער מענטש</label>
   ${field('פארוואס איז דאס א צווייטער מענטש? (אויב עס איז דא דער זעלבער נאמען)', '<textarea id="pdistinctreason" maxlength="500"></textarea>')}
   <p class="muted">דער זעלבער נאמען מיט דעם זעלבן טאטע אדער מאמע דארף אדמין איבערזיכט.</p>
+  <fieldset class="person-family-picker"><legend>משפחות</legend>
+  <p class="muted">קלייב איין משפחה אדער מער.${ME.is_admin?' די בחירה באשטימט וואו מען קען זען דעם מענטש.':''}</p>
+  <div class="person-family-options">${familyChoices(P).map(f=>`<label><input type="checkbox" name="person_family" value="${f.id}" ${(p.families || []).some(x=>x.id===f.id)?'checked':''}><strong>${esc(f.name)}</strong></label>`).join('')}</div>
+  <details><summary>צולייגן א משפחה נאמען</summary>${field('משפחה נאמען',`<input id="pnewfamily" maxlength="80">`)}</details></fieldset>
   ${choice('father_id','טאטע')}${choice('mother_id','מאמע')}${choice('spouse_id','זיווג ראשון')}${choice('second_spouse_id','זיווג שני')}<p class="muted">ביי יעדן קינד קלייב דעם ריכטיגן טאטע און מאמע. א צווייטער זיווג טוישט נישט די עלטערן פון עקזיסטירנדיקע קינדער. די זיווג סדר איז פאר דעם מענטש; מען קען עדיטן דעם סדר ביים אנדערן פראפיל.</p>
   ${p.parent_id ? choice('parent_id','פריערדיגער עלטערן לינק (נאכנישט באשטימט טאטע / מאמע)') : '<input type="hidden" id="pparent_id" value="">'}
   ${p.spouse && !p.spouse_id ? `<p class="muted">פריערדיגער מאן / ווייב נאמען: ${esc(p.spouse)}. קלייב דעם מענטש אויבן צו פארבינדן.</p>` : ''}
   ${field('ייחוס',`<select id="plineage"><option value="">נישט באקאנט</option><option value="בן" ${p.lineage_term==='בן'?'selected':''}>בן</option><option value="בת" ${p.lineage_term==='בת'?'selected':''}>בת</option></select>`)}
-  <fieldset><legend>צו וועלכע משפחות איז דער מענטש פארבונדן?</legend><p class="muted">קלייב די משפחה פארבינדונגען פון דעם מענטש. מען קען אויסקלייבן מער ווי איינס. דאס איז נישט דער פאמיליע נאמען און טוישט נישט ווער קען זען.</p>${familyChoices(P).map(f=>`<label style="display:inline-flex;gap:6px;margin:6px"><input type="checkbox" name="person_family" value="${f.id}" ${(p.families || []).some(x=>x.id===f.id)?'checked':''}>${esc(f.name)}</label>`).join('')}
-  ${field('צולייגן א נייע משפחה',`<input id="pnewfamily" maxlength="80" placeholder="משפחה נאמען">`)}</fieldset>
   ${field('ווער קען זען (צוטריט גרופע)',`<select id="pside">${sideOptions(p.side)}</select>`)}
   ${field('לעבנס סטאטוס',`<select id="plife"><option value="unknown" ${!p.life_status||p.life_status==='unknown'?'selected':''}>נישט באקאנט</option><option value="living" ${p.life_status==='living'?'selected':''}>לעבט</option><option value="deceased" ${p.life_status==='deceased'?'selected':''}>נפטר / נפטרת</option></select>`)}
   <details ${p.niftar||p.life_status==='deceased'?'open':''}><summary>אידישער פטירה דאטום (אויב באקאנט)</summary>
@@ -817,7 +820,13 @@ const FORMS = {
     const fingerprint=JSON.stringify(b);if(f._saveFingerprint!==fingerprint){f._saveKey=crypto.randomUUID();f._saveFingerprint=fingerprint;}b.request_key=f._saveKey;
     let result;try{result=await api(id ? '/people/' + id : '/people', { method: id ? 'PUT' : 'POST', body: b });}
     catch(e){if(e.details?.code==='person_matches')renderPersonMatches(e.details.field,e.details.matches);throw e;}
-    closeModal();if(result.pending_review){toast('געשיקט צום אדמין — נאך נישט צוגעלייגט');location.hash='#personreviews';}else{toast('✓ ' + b.name + ' געסעיווט');refresh();} },
+    closeModal();if(result.pending_review){
+      if(result.review_family_group_id){
+        await api('/me/family-group',{method:'POST',body:{family_group_id:result.review_family_group_id}});
+        await loadMe();
+      }
+      toast('געשיקט צום אדמין — נאך נישט צוגעלייגט');location.hash='#personreviews';
+    }else{toast('✓ ' + b.name + ' געסעיווט');refresh();} },
   list: async () => { const r = await api('/lists', { method: 'POST', body: { kind: val('lk'), yahrzeit_id: val('lyz') || null, niftar: val('ln'), target_date: val('ld'), side: val('ls') } }); closeModal(); toast('✓ ליסט געמאכט'); location.hash = '#learn/' + r.list.id; },
   sim: async (f) => { const id = Number(f.dataset.id); const kind = val('sk') === 'אנדערע' ? (val('sko') || 'שמחה') : val('sk');
     const b = { kind, whose: val('sw'), gdate: val('sd'), time_text: val('stt'), hdate_text: val('sh'), hall: val('sp'), address: val('sa'), note: val('sn'), audience: val('ss') };

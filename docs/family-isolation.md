@@ -1,8 +1,16 @@
 # Family isolation and rollout
 
 Every account has one to four explicitly assigned access families (`family_groups`), with one primary family and one selected viewing family. This is separate from
-surname/lineage tags (`families`) and the A/B sides within that family. A tag never
-grants permission. “All” and “both” mean all/both sides of the selected family only.
+surname/lineage tags (`families`) and the A/B sides within that family. Account
+permissions come from membership assignments. “All” and “both” mean all/both
+sides of the selected family only.
+
+The global administrator can assign a person's tree access by checking that
+person's family labels. Each checked label maps to an access group. New people
+without a checked label use the viewing family. Relationships require a shared
+access group. Migration 023 corrects unambiguous mismatched owners where existing
+grants and dependent records permit the move, and records each correction in the
+family assignment audit.
 
 ## Joining and creating
 
