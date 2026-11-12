@@ -1,6 +1,6 @@
 # Family isolation and rollout
 
-Every account belongs to one access family (`family_groups`). This is separate from
+Every account has one to four explicitly assigned access families (`family_groups`), with one primary family and one selected viewing family. This is separate from
 surname/lineage tags (`families`) and the A/B sides within that family. A tag never
 grants permission. “All” and “both” mean all/both sides of the selected family only.
 
@@ -27,9 +27,9 @@ or create global administrators.
 The existing main/global administrator retains access to all administration. In
 Admin → family access, select the family to view its content. This also scopes
 images and downloads via a validated HttpOnly cookie. No content endpoint provides
-an unfiltered all-family view. Global admins can change a member's family; doing so
+an unfiltered all-family view. Global admins can change a member's one-to-four family assignments; doing so
 revokes that member's sessions and presence. Family-owned historical content stays
-in its original family. A moved account loses its former family-admin role; the main admin can explicitly
+in its original family. An account whose primary family changes loses its former family-admin role; the main admin can explicitly
 appoint it in the new family if appropriate. Global administration can also correct user roles and records.
 
 ## Existing data: explicit assignment required
@@ -101,3 +101,11 @@ Migration 018 preserves existing spouse links as the first recorded marriage and
 Children keep their explicit father_id and mother_id. Adding, removing or reordering a spouse never reassigns existing children. Profiles list children with both parents; tree cards and table show both marriage labels. The tree groups reciprocal marriage links but renders each person once and retains individual parent-child edges. Cross-family spouse links are rejected by API checks and a composite foreign key.
 
 Validation: 20 tests pass, including real PostgreSQL tests for both marriages, independent spouse order, admin corrections, unchanged children, duplicate prevention and family isolation. Browser visual QA and production deployment have not been performed.
+
+
+## Assigning up to four families (migration 019)
+In Admin → All members, choose **בחר משפחות (ביז 4)** on the user's row, check one to four families, and save. The dialog can create missing family groups without closing or losing selections. An empty catalogue explains that groups must first be created; creating a group at the top selects it automatically for the global admin. No surnames or existing labels silently grant membership.
+
+The header selector switches the current view between assigned families; it does not grant memberships. Each content request stays scoped to one validated family. Account memberships never copy or merge tree records, and relationships still cannot cross access-family boundaries. The API and database reject zero, duplicate, nonexistent or more-than-four assignments. Existing assignments survive migration unchanged.
+
+Family administration is restricted to the primary family. A shared member does not inherit admin rights in secondary families. Only the global admin manages shared accounts' roles, account status, and password reset grants, preventing one family's admin from taking over access to another. Changed assignments invalidate sessions, chat presence and outstanding password tokens; invitations from removed families become invalid. Side permissions are account-wide across assigned families; a global admin manages them for shared accounts.

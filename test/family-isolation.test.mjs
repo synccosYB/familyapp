@@ -158,6 +158,49 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   assert.equal((await req('/family-invitations/'+memberInvite)).status,404);
   const moved=await req('/auth/login',{phone:'8455559003',password:'test-password'});ok(moved);assert.equal(moved.body.user.is_family_admin,false);
   assert.doesNotMatch(JSON.stringify(ok(await req('/people',undefined,moved.cookie))),/A ancestor|Corrected child|Legacy hidden/);
+  // Explicit one-to-four memberships, with one selected family per request.
+  const extra=[];for(const name of ['Third access family','Fourth access family','Fifth access family'])extra.push(ok(await req('/admin/family-groups',{name},root.cookie)).group.id);
+  const assigned=[ga,gb,extra[0],extra[1]], uid=a.body.user.id;
+  const rowsBefore=(await db.query(`SELECT count(*)::int n FROM ${schema}.people`)).rows[0].n;
+  const oldReset=ok(await req('/admin/users/'+uid+'/reset-link',{},root.cookie)).link.split('#setpw=')[1];
+  ok(await req('/admin/users/'+uid+'/family-group',{family_group_ids:assigned},root.cookie,'PUT'));
+  assert.equal((await req('/auth/token/'+oldReset)).status,404,'membership changes revoke earlier recovery grants');
+  assert.equal((await req('/people',undefined,a.cookie)).status,401);
+  const multi=await req('/auth/login',{phone:'8455559001',password:'test-password'});ok(multi);
+  const profile=ok(await req('/me',undefined,multi.cookie)).user;
+  assert.deepEqual(profile.family_group_ids,assigned);assert.equal(profile.family_groups.length,4);
+  assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.people`)).rows[0].n,rowsBefore,'membership changes never copy people');
+  for(const group of assigned)ok(await req('/people',undefined,multi.cookie,'GET',group));
+  assert.equal((await req('/people',undefined,multi.cookie,'GET',extra[2])).status,403);
+  assert.equal((await req('/admin/users',undefined,multi.cookie,'GET',gb)).status,403,'primary-family admin is an ordinary member in secondary families');
+  assert.equal((await req('/admin/users/'+uid+'/family-group',{family_group_ids:[ga,gb]},multi.cookie,'PUT')).status,403,'members cannot grant themselves access');
+  for(const ids of [[],[...assigned,extra[2]],[ga,ga],[ga,9999999]])assert.equal((await req('/admin/users/'+uid+'/family-group',{family_group_ids:ids},root.cookie,'PUT')).status,400);
+  const switchResult=await req('/me/family-group',{family_group_id:gb},multi.cookie);ok(switchResult);
+  const switched=multi.cookie+'; '+switchResult.cookie;
+  assert.equal(ok(await req('/me',undefined,switched)).user.selected_family_group_id,gb);
+  assert.ok(ok(await req('/people',undefined,switched)).people.some(p=>p.id===pb.id));
+  assert.ok(!ok(await req('/people',undefined,switched)).people.some(p=>p.id===pa.id));
+  assert.equal((await req('/people/'+pa.id,{note:'wrong view'},switched,'PUT')).status,404);
+  const multiPeers=ok(await req('/chat-members',undefined,b.cookie)).members;assert.ok(multiPeers.some(p=>p.id===uid),'secondary members appear in chat');
+  const secondaryInvite=ok(await req('/family-invitations',{sides:['a']},switched)).link.split('#join=')[1];
+  assert.equal(ok(await req('/family-invitations/'+secondaryInvite)).family_name,'Parnes');
+  assert.equal((await req('/me/family-group',{family_group_id:extra[2]},multi.cookie)).status,403);
+  await assert.rejects(db.query(`UPDATE ${schema}.users SET family_group_ids=$1 WHERE id=$2`,[[...assigned,extra[2]],uid]));
+  await assert.rejects(db.query(`UPDATE ${schema}.users SET family_group_ids=$1 WHERE id=$2`,[[ga,ga],uid]));
+  await assert.rejects(db.query(`DELETE FROM ${schema}.family_groups WHERE id=$1`,[extra[0]]),/assigned members/);
+  // A primary-family admin cannot recover or alter a shared account's credentials/roles.
+  ok(await req('/admin/users/'+m.body.user.id+'/family-group',{family_group_ids:[ga,gb]},root.cookie,'PUT'));
+  ok(await req('/admin/users/'+b.body.user.id+'/family-group',{family_group_ids:[gb,extra[0]]},root.cookie,'PUT'));
+  const bAgain=await req('/auth/login',{phone:'8455559002',password:'test-password'});ok(bAgain);
+  assert.equal((await req('/admin/users/'+m.body.user.id+'/reset-link',{},bAgain.cookie)).status,403);
+  assert.equal((await req('/admin/users/'+m.body.user.id,{is_family_admin:true},bAgain.cookie,'PATCH')).status,403);
+  // Removing membership revokes sessions and invites; stale cookies cannot restore it.
+  ok(await req('/admin/users/'+uid+'/family-group',{family_group_ids:[ga]},root.cookie,'PUT'));
+  assert.equal((await req('/people',undefined,switched)).status,401);
+  assert.equal((await req('/family-invitations/'+secondaryInvite)).status,404);
+  const reduced=await req('/auth/login',{phone:'8455559001',password:'test-password'});ok(reduced);
+  assert.equal((await req('/people',undefined,reduced.cookie,'GET',gb)).status,403);
+  assert.equal(ok(await req('/me',undefined,reduced.cookie+'; '+switchResult.cookie)).user.selected_family_group_id,ga);
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.users WHERE family_group_id IS NULL`)).rows[0].n,0);
   assert.equal((await db.query(`SELECT count(*)::int n FROM ${schema}.family_groups WHERE name='Spoof'`)).rows[0].n,0);
  }finally{
