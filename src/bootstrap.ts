@@ -55,6 +55,10 @@ if (config.qaPhonePrefix && normPhoneB(process.env.QA_ADMIN_PHONE) && process.en
 }
 // orphaned uploads
 const up = path.resolve(config.dataDir, 'uploads'); mkdirSync(up, { recursive: true });
+// Preserve existing filesystem uploads in database backups before republishing.
+for(const f of await q('SELECT id FROM files WHERE content IS NULL')) {
+  const local=path.join(up,f.id);if(existsSync(local))await q('UPDATE files SET content=$1 WHERE id=$2 AND content IS NULL',[readFileSync(local),f.id]);
+}
 await q(`DELETE FROM files f WHERE NOT EXISTS (SELECT 1 FROM simchas s WHERE s.file_id=f.id)
   AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.file_id=f.id) AND f.created_at<now()-interval '1 day'`);
 const known = new Set((await q('SELECT id FROM files')).map((r: any) => r.id));
