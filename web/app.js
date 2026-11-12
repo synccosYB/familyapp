@@ -150,19 +150,23 @@ V.yz = async () => {
   <div class="muted" style="margin-top:10px">🔔 "רימיינד מיר" ווערט געהאלטן פאר דיר; מעסעדזשעס/נאטיפיקעישנס קומען שפעטער.</div>`;
 };
 async function yzForm(id) {
-  const y = (STATE.yzs || []).find((x) => x.id === id) || { side: mySides()[0], hday: 1, hmonth: 'TISHREI' };
-  if(y.person_id) return personForm(y.person_id);
-  modal(`<h2 style="margin-top:0">${id ? '✏️ עדיט יארצייט' : '+ נייער יארצייט'}</h2><form data-form="yz" data-id="${id}">
-  ${field('נאמען', `<input id="yn" value="${esc(y.name)}" placeholder="ר׳ אברהם באכנער">`)}
-  ${field('טאטנס נאמען', `<input id="yf" value="${esc(y.father_name)}" placeholder="בן ר׳ יצחק ז״ל / בת ר׳ …">`)}
-  ${field('ווער איז ער/זי', `<input id="yr" value="${esc(y.relation)}" placeholder="זיידע, באבע, פעטער…">`)}
-  <div class="grid g2" style="grid-template-columns:1fr 2fr"><div>${field('טאג', `<select id="yd">${Array.from({ length: 30 }, (_, i) => `<option value="${i + 1}" ${y.hday === i + 1 ? 'selected' : ''}>${hebD(i + 1)}</option>`).join('')}</select>`)}</div>
-  <div>${field('חודש', `<select id="ym">${HMONTHS.map(([k, t]) => `<option value="${k}" ${y.hmonth === k ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}</div></div>
-  ${field('יאר פון פטירה (אויב מען ווייסט, למשל 5770)', `<input id="yy" inputmode="numeric" class="ltr" value="${esc(y.death_year || '')}" placeholder="5770">`)}
-  ${field('סייד', `<select id="ys">${sideOptions(y.side)}</select>`)}
-  ${field('קבר (וואו ער/זי ליגט)', `<input id="yk" value="${esc(y.kever)}" placeholder="למשל: מאנסי, ביה״ק …">`)}
-  ${field('נאטיץ', `<input id="yo" value="${esc(y.note)}">`)}
-  <div class="err" id="ferr"></div><div class="btns"><button class="btn">סעיוו</button><button type="button" class="btn l" data-act="close">קענסל</button>${id ? `<button type="button" class="btn r" style="margin-right:auto" data-act="delyz" data-id="${id}">🗑 אויסמעקן</button>` : ''}</div></form>`);
+  const y=(STATE.yzs||[]).find(x=>x.id===id);
+  if(y?.person_id)return personForm(y.person_id);
+  const {people}=await api('/people');STATE.yzLegacy=y||null;
+  modal(`<h2>${y?'פארבינד דעם יארצייט צום מענטש':'נייער יארצייט · אויסקלייבן א מענטש'}</h2><p class="muted">די משפחה, מקום קבורה און פטירה דאטום ווערן געהאלטן אין איין מענטשס פראפיל.</p>
+    ${field('א מענטש וואס איז שוין אין פעמילי טרי',`<select id="yzperson"><option value="">— קלייב אויס —</option>${people.map(p=>`<option value="${p.id}">${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
+    <div class="btns"><button class="btn" data-act="yzexisting">עפן דעם פראפיל</button><button class="btn l" data-act="yznew">+ נייער מענטש</button><button class="btn l" data-act="close">קענסל</button></div>`);
+}
+async function yahrzeitPerson(id) {
+  const y=STATE.yzLegacy,defaults={life_status:'deceased'};
+  if(y) {
+    const {people}=await api('/people'),p=people.find(p=>p.id===id);
+    defaults.legacy_yahrzeit_id=y.id;
+    if(!id)Object.assign(defaults,{name:y.name,side:y.side,note:y.note,kever:y.kever});
+    if(!p?.death_hday||!p?.death_hmonth)Object.assign(defaults,{death_hday:y.hday,death_hmonth:y.hmonth,death_year:y.death_year});
+    if(!p?.kever)defaults.kever=y.kever;
+  }
+  return personForm(id,undefined,defaults);
 }
 
 // family tree
@@ -239,11 +243,11 @@ function observeFamilyTree() {
   scheduleFamilyViewport();document.fonts?.ready.then(scheduleFamilyViewport);
 }
 window.addEventListener('resize',scheduleFamilyViewport);
-async function personForm(id, parentId) {
+async function personForm(id, parentId, defaults={}) {
   const {people:P}=await api('/people'); STATE.people=P;
-  const p = P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null};
+  const p = {...(P.find(x=>x.id===id) || {side:STATE.treeSide || mySides()[0],parent_id:parentId || null}),...defaults};
   const choice=(key,label)=>field(label,`<select id="p${key}" data-change="newrelative" data-key="${key}"><option value="">— נישט באקאנט / קיין לינק —</option><option value="new">+ לייג צו א נייעם מענטש</option>${P.filter(x=>x.id!==id).map(x=>`<option value="${x.id}" ${p[key]===x.id?'selected':''}>${esc([x.title,x.name].filter(Boolean).join(' '))}</option>`).join('')}</select><div id="new_${key}" hidden class="card" style="margin-top:8px"><p class="muted">ווערט צוגעלייגט און פארבונדן ווען דו סעיווסט.</p>${field('טיטל', `<input id="new_${key}_title" dir="auto">`)}${field('נאמען', `<input id="new_${key}_name" dir="auto">`)}</div>`);
-  modal(`<h2 style="margin-top:0">${id ? '✏️ ' + esc(p.name) : '+ מענטש אין פעמילי טרי'}</h2><form data-form="person" data-id="${id}">
+  modal(`<h2 style="margin-top:0">${id ? '✏️ ' + esc(p.name) : '+ מענטש אין פעמילי טרי'}</h2><form data-form="person" data-id="${id}" data-legacyid="${p.legacy_yahrzeit_id||''}">${p.legacy_yahrzeit_id?'<p class="muted">סעיוון וועט פארבינדן דעם אלטן יארצייט צו דעם פראפיל. די אלטע אינפארמאציע בלייבט געהאלטן.</p>':''}
   <div class="grid g2"><div>${field('טיטל',`<input id="ptitle" value="${esc(p.title)}" placeholder="הרב / מרת">`)}</div><div>${field('נאמען',`<input id="pn" value="${esc(p.name)}">`)}</div></div>
   ${choice('father_id','טאטע')}${choice('mother_id','מאמע')}${choice('spouse_id','מאן / ווייב')}
   ${p.parent_id ? choice('parent_id','פריערדיגער עלטערן לינק (נאכנישט באשטימט טאטע / מאמע)') : '<input type="hidden" id="pparent_id" value="">'}
@@ -253,7 +257,7 @@ async function personForm(id, parentId) {
   ${field('צולייגן א נייע משפחה',`<input id="pnewfamily" maxlength="80" placeholder="משפחה נאמען">`)}</fieldset>
   ${field('ווער קען זען (צוטריט גרופע)',`<select id="pside">${sideOptions(p.side)}</select>`)}
   ${field('לעבנס סטאטוס',`<select id="plife"><option value="unknown" ${!p.life_status||p.life_status==='unknown'?'selected':''}>נישט באקאנט</option><option value="living" ${p.life_status==='living'?'selected':''}>לעבט</option><option value="deceased" ${p.life_status==='deceased'?'selected':''}>נפטר / נפטרת</option></select>`)}
-  <details ${p.niftar?'open':''}><summary>אידישער פטירה דאטום (אויב באקאנט)</summary>
+  <details ${p.niftar||p.life_status==='deceased'?'open':''}><summary>אידישער פטירה דאטום (אויב באקאנט)</summary>
   <div class="grid g2"><div>${field('טאג פון פטירה',`<select id="pday"><option value="">— נישט באקאנט —</option>${Array.from({length:30},(_,i)=>`<option value="${i+1}" ${p.death_hday===i+1?'selected':''}>${hebD(i+1)}</option>`).join('')}</select>`)}</div>
   <div>${field('חודש פון פטירה',`<select id="pmonth"><option value="">— נישט באקאנט —</option>${HMONTHS.map(([k,t])=>`<option value="${k}" ${p.death_hmonth===k?'selected':''}>${t}</option>`).join('')}</select>`)}</div></div>
   ${field('יאר פון פטירה',`<input id="pyear" type="number" min="5001" max="5999" value="${esc(p.death_year||'')}">`)}
@@ -514,6 +518,8 @@ async function loadMe() { const r = await api('/me'); ME = r.user; EMAIL_READY =
 
 // ---------- actions ----------
 const ACT = {
+  yzexisting: ()=>{const id=Number(val('yzperson'));if(!id)throw new Error('קלייב אויס א מענטש');return yahrzeitPerson(id);},
+  yznew: ()=>yahrzeitPerson(0),
   familyinvite: familyInviteForm,
   forgotpw: () => { STATE.resetPhone = val('fp'); STATE.resetRequested = false; location.hash = '#forgotpw'; },
   backlogin: () => { STATE.authMode = 'login'; STATE.resetRequested = false; history.replaceState(null, '', location.pathname + location.search); go(); },
@@ -580,7 +586,7 @@ const FORMS = {
   setpw: async () => { if ($('sp1').value !== $('sp2').value) throw new Error('די צוויי פאסווארטס זענען נישט די זעלבע'); await api('/auth/set-password', { method: 'POST', body: { token: STATE.setpwToken, password: $('sp1').value } }); STATE.setpwToken = null; history.replaceState(null, '', location.pathname + location.search + '#home'); await loadMe(); toast('✓ פאסווארט איינגעשטעלט'); go(); },
   yz: async (f) => { const id = Number(f.dataset.id); const b = { name: val('yn'), father_name: val('yf'), relation: val('yr'), hday: Number(val('yd')), hmonth: val('ym'), death_year: val('yy'), side: val('ys'), kever: val('yk'), note: val('yo') };
     await api(id ? '/yahrzeits/' + id : '/yahrzeits', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
-  person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno'),kever:val('pkever')};
+  person: async (f) => { const id = Number(f.dataset.id); const b = {family_ids:[...f.querySelectorAll('[name=person_family]:checked')].map(el=>Number(el.value)),new_family:val('pnewfamily'),lineage_term:val('plineage'),name:val('pn'),title:val('ptitle'),father_id:val('pfather_id'),mother_id:val('pmother_id'),spouse_id:val('pspouse_id'),parent_id:val('pparent_id'),side:val('pside'),life_status:val('plife'),death_hday:val('pday'),death_hmonth:val('pmonth'),death_year:val('pyear'),note:val('pno'),kever:val('pkever'),legacy_yahrzeit_id:f.dataset.legacyid||undefined};
     b.new_relatives = {};
     for (const key of ['father_id','mother_id','spouse_id']) if (b[key] === 'new') {
       b.new_relatives[key] = { name: val('new_' + key + '_name'), title: val('new_' + key + '_title') }; b[key] = null;

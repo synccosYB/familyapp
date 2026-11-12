@@ -189,6 +189,18 @@ test('PostgreSQL app starts and persists member workflows with side access', {sk
   assert.equal((await request('/people/'+father.id,{name:'Renamed father',side:'a',death_hday:null,death_hmonth:null},admin.cookie,'PUT')).status,200);
   assert.equal((await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits.length,0);
 
+  // One canonical person drives family membership, burial and the yahrzeit projection.
+  const legacy=(await adminPool.query(`INSERT INTO ${schema}.yahrzeits(name,side,hday,hmonth,kever,created_by) VALUES('Old memorial','a',12,'KISLEV','Old cemetery',$1) RETURNING id`,[admin.body.user.id])).rows[0];
+  const legacyList=await request('/lists',{kind:'tehillim',yahrzeit_id:legacy.id},admin.cookie);assert.equal(legacyList.status,200);
+  assert.equal((await request('/people/'+father.id,{legacy_yahrzeit_id:legacy.id,life_status:'deceased',death_hday:12,death_hmonth:'KISLEV',kever:'Har Hazeisim'},admin.cookie,'PUT')).status,200);
+  const canonicalCalendar=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits;
+  assert.equal(canonicalCalendar.length,1,'archived standalone entry must not be displayed twice');
+  assert.equal(canonicalCalendar[0].person_id,father.id);assert.equal(canonicalCalendar[0].kever,'Har Hazeisim');assert.equal(canonicalCalendar[0].families.length,2);
+  assert.equal((await request('/lists/'+legacyList.body.list.id,undefined,admin.cookie)).body.list.yahrzeit_id,canonicalCalendar[0].id);
+  assert.ok((await adminPool.query(`SELECT archived_at FROM ${schema}.yahrzeits WHERE id=$1`,[legacy.id])).rows[0].archived_at,'keep legacy provenance');
+  await request('/people/'+father.id,{name:'Canonical name',kever:'Updated cemetery'},admin.cookie,'PUT');
+  const synced=(await request('/yahrzeits',undefined,admin.cookie)).body.yahrzeits[0];assert.equal(synced.id,canonicalCalendar[0].id);assert.equal(synced.kever,'Updated cemetery');assert.match(synced.name,/Canonical name/);
+
   // Public recovery never reveals account existence or creates a reset token.
   assert.equal((await request('/auth/forgot-password',{phone:'123'})).status,400);
   const recovery=await request('/auth/forgot-password',{phone:'(845) 555-0101'});

@@ -398,9 +398,9 @@ function yzOut(r: any) {
   return { ...r, hebrew: `${gem(r.hday)} ${MONTH_YI[r.hmonth] || r.hmonth}`, next: n };
 }
 async function listYahrzeits(u: User) {
-  const rows = await q(`SELECT y.*, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y
+  const rows = await q(`SELECT y.*,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
     LEFT JOIN yahrzeit_reminders r ON r.yahrzeit_id=y.id AND r.user_id=$1 LEFT JOIN users cu ON cu.id=y.created_by
-    WHERE ${sideSql('y.side', 2)}`, [u.id, mySides(u)]);
+    WHERE y.archived_at IS NULL AND ${sideSql('y.side', 2)}`, [u.id, mySides(u)]);
   return rows.map(yzOut).sort((a, b) => (a.next?.days ?? 9999) - (b.next?.days ?? 9999));
 }
 function yzBody(u: User, b: any) {
@@ -411,19 +411,15 @@ function yzBody(u: User, b: any) {
   return [name, str(b.father_name, 120), str(b.relation, 80), okSide(u, b.side), hday, b.hmonth, dy && dy > 5000 && dy < 6000 ? dy : null, str(b.kever, 200), str(b.note, 500)];
 }
 app.get('/api/yahrzeits', async (req) => ({ yahrzeits: await listYahrzeits(await member(req)) }));
-app.post('/api/yahrzeits', async (req) => {
-  const u = await member(req);
-  const r = await q1(`INSERT INTO yahrzeits(name,father_name,relation,side,hday,hmonth,death_year,kever,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [...yzBody(u, req.body), u.id]);
-  return { yahrzeit: yzOut(r) };
+app.post('/api/yahrzeits',async req=>{
+  const u=await member(req),b:any=req.body||{};
+  yzBody(u,b);
+  const person=await savePerson(u,{name:b.name,side:b.side,life_status:'deceased',death_hday:b.hday,death_hmonth:b.hmonth,death_year:b.death_year,kever:b.kever,note:b.note,family_ids:b.family_ids||[]},b.person_id?Number(b.person_id):undefined);
+  const y=await q1('SELECT * FROM yahrzeits WHERE person_id=$1',[person.id]);
+  if(!y) throw bad('לייג צו א טאג און חודש אין דעם מענטשס פראפיל');
+  return {yahrzeit:yzOut(y)};
 });
-app.put('/api/yahrzeits/:id', async (req) => {
-  const u = await member(req); const id = Number((req.params as any).id);
-  const old = await q1('SELECT side,person_id FROM yahrzeits WHERE id=$1', [id]);
-  if (old?.person_id) throw bad('עדיט דעם מענטש אין פעמילי טרי');
-  if (!old || !canSee(u, old.side)) throw new HttpError(404, 'נישט געטראפן');
-  const r = await q1(`UPDATE yahrzeits SET name=$1,father_name=$2,relation=$3,side=$4,hday=$5,hmonth=$6,death_year=$7,kever=$8,note=$9 WHERE id=$10 RETURNING *`, [...yzBody(u, req.body), id]);
-  return { yahrzeit: yzOut(r) };
-});
+app.put('/api/yahrzeits/:id',async()=>{throw bad('עדיט דעם זעלבן מענטשס פראפיל; פארבינד קודם אן אלטן יארצייט צום מענטש');});
 app.delete('/api/yahrzeits/:id', async (req) => {
   const u = await member(req); const id = Number((req.params as any).id);
   const r = await q1('SELECT created_by,person_id FROM yahrzeits WHERE id=$1', [id]);
@@ -459,6 +455,9 @@ async function savePerson(u: User, b: any, id?: number) {
     await c.query("SELECT pg_advisory_xact_lock(68427301)");
     const old = id ? (await c.query('SELECT * FROM people WHERE id=$1 FOR UPDATE',[id])).rows[0] : null;
     if (id && (!old || !canSee(u,old.side))) throw new HttpError(404,'נישט געטראפן');
+    const legacy=b.legacy_yahrzeit_id ? (await c.query('SELECT * FROM yahrzeits WHERE id=$1 FOR UPDATE',[Number(b.legacy_yahrzeit_id)])).rows[0] : null;
+    if(b.legacy_yahrzeit_id && (!legacy || legacy.archived_at || (legacy.person_id && legacy.person_id!==id) || !canSee(u,legacy.side))) throw bad('דער אלטער יארצייט איז נישט פאר דעם מענטש');
+    if(legacy&&!u.is_admin&&legacy.created_by!==u.id)throw new HttpError(403,'נאר דער באשעפער אדער אדמין קען פארבינדן דעם אלטן רעקארד');
     b = {...(old || {}),...b};
     const name = str(b.name,120); if (!name) throw bad('שרייב א נאמען');
     const side = okSide(u,b.side);
@@ -480,6 +479,7 @@ async function savePerson(u: User, b: any, id?: number) {
     if (!['unknown','living','deceased'].includes(status)) throw bad('קלייב אויס א סטאטוס');
     const day = b.death_hday === '' || b.death_hday == null ? null : Number(b.death_hday);
     const month = str(b.death_hmonth,20) || null;
+    if(legacy && (status!=='deceased'||!day||!month))throw bad('צו פארבינדן דעם יארצייט דארף דער מענטש האבן א פטירה טאג און חודש');
     const year = b.death_year === '' || b.death_year == null ? null : Number(b.death_year);
     if ((day !== null && (!Number.isInteger(day)||day<1||day>30)) || (month && !(MONTH_CODES as readonly string[]).includes(month)) || (year!==null && (!Number.isInteger(year)||year<=5000||year>=6000))) throw bad('דער אידישער דאטום איז נישט ריכטיג');
     if (status!=='deceased' && (day||month||year)) throw bad('א פטירה דאטום איז נאר פאר א נפטר');
@@ -534,6 +534,15 @@ async function savePerson(u: User, b: any, id?: number) {
       await c.query(`INSERT INTO yahrzeits(name,side,hday,hmonth,death_year,person_id,created_by,kever)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(person_id) DO UPDATE SET name=excluded.name,side=excluded.side,hday=excluded.hday,hmonth=excluded.hmonth,death_year=excluded.death_year,kever=excluded.kever`,[[row.title,row.name].filter(Boolean).join(' '),side,day,month,year,row.id,u.id,row.kever]);
     } else await c.query('DELETE FROM yahrzeits WHERE person_id=$1',[row.id]);
+    if(legacy) {
+      const canonical=(await c.query('SELECT id FROM yahrzeits WHERE person_id=$1',[row.id])).rows[0];
+      if(canonical && canonical.id!==legacy.id) {
+        await c.query('UPDATE learn_lists SET yahrzeit_id=$1 WHERE yahrzeit_id=$2',[canonical.id,legacy.id]);
+        await c.query('INSERT INTO yahrzeit_reminders(user_id,yahrzeit_id) SELECT user_id,$1 FROM yahrzeit_reminders WHERE yahrzeit_id=$2 ON CONFLICT DO NOTHING',[canonical.id,legacy.id]);
+        await c.query("UPDATE yahrzeits SET relation=CASE WHEN relation='' THEN $1 ELSE relation END,note=CASE WHEN note='' THEN $2 ELSE note END WHERE id=$3",[legacy.relation,legacy.note,canonical.id]);
+        await c.query('UPDATE yahrzeits SET canonical_id=$1,archived_at=now() WHERE id=$2',[canonical.id,legacy.id]);
+      }
+    }
     // Keep a linked yahrzeit name in sync when its person's father is renamed too.
     await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(p.lineage_term,''),nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=ANY($1::int[]) OR p.father_id=$2)`,[[row.id,father,mother].filter(Boolean),row.id]);
     return row;
