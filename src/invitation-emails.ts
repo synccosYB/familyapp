@@ -1,16 +1,20 @@
+import { word, htmlWord } from './wording.js';
 import { config } from './config.js';
 import { pool } from './db.js';
 import { emailReady } from './email.js';
 
-export interface InvitationMail { title:string; lines:string[]; link:string }
+export interface InvitationMail { title:string; lines:string[]; link:string; content?: ReturnType<typeof renderInvitationEmail> }
 const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
+export function renderInvitationEmail(mail: InvitationMail) {
+  return {subject:mail.title,
+      text:[mail.title,...mail.lines,`${word("email_invitation.send_invitation_email.01")} `+mail.link,word("email_invitation.send_invitation_email.02")].join('\n'),
+      html:`<!doctype html><html lang="yi" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f4f6f5;color:#19362d"><main style="max-width:540px;margin:24px auto;background:white;padding:28px;border-radius:16px"><p>${htmlWord("email_invitation.send_invitation_email.03")}</p><h1 style="font-size:24px">${escape(mail.title)}</h1>${mail.lines.map(l=>`<p>${escape(l)}</p>`).join('')}<p><a href="${escape(mail.link)}" style="display:inline-block;background:#28634e;color:white;padding:14px 22px;border-radius:9px;text-decoration:none">${htmlWord("email_invitation.send_invitation_email.04")}</a></p><p style="font-size:13px">${htmlWord("email_invitation.send_invitation_email.02")}</p></main></body></html>`};
+}
 export async function sendInvitationEmail(to:string, mail:InvitationMail, key:string, send:typeof fetch=fetch) {
   if(!emailReady())throw new Error('Email is not configured');
   const response=await send('https://api.resend.com/emails',{
     method:'POST',signal:AbortSignal.timeout(8000),headers:{Authorization:`Bearer ${config.resendApiKey}`,'Content-Type':'application/json','Idempotency-Key':key},
-    body:JSON.stringify({from:config.resendFromEmail,to:[to],subject:mail.title,
-      text:[mail.title,...mail.lines,'עפן די אינוויטעישן: '+mail.link,'דער לינק פארלאנגט לאגין און צוטריט צו דער משפחה.'].join('\n'),
-      html:`<!doctype html><html lang="yi" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f4f6f5;color:#19362d"><main style="max-width:540px;margin:24px auto;background:white;padding:28px;border-radius:16px"><p>אונזער משפחה · אינוויטעישן</p><h1 style="font-size:24px">${escape(mail.title)}</h1>${mail.lines.map(l=>`<p>${escape(l)}</p>`).join('')}<p><a href="${escape(mail.link)}" style="display:inline-block;background:#28634e;color:white;padding:14px 22px;border-radius:9px;text-decoration:none">עפן די אינוויטעישן</a></p><p style="font-size:13px">דער לינק פארלאנגט לאגין און צוטריט צו דער משפחה.</p></main></body></html>`})
+    body:JSON.stringify({from:config.resendFromEmail,to:[to],...(mail.content ?? renderInvitationEmail(mail))})
   });
   if(!response.ok)throw new Error(`Email provider returned ${response.status}`);
   const result=await response.json() as {id?:string};if(!result.id)throw new Error('Email provider did not accept the message');return result.id;

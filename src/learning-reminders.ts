@@ -1,3 +1,4 @@
+import { word, htmlWord } from './wording.js';
 import { config } from './config.js';
 import { pool } from './db.js';
 import { emailReady, normalizeEmail } from './email.js';
@@ -16,6 +17,8 @@ export interface LearningMail {
   link: string;
   sender?: string;
   settingsLink?: string;
+  units?: LearningUnit[];
+  content?: ReturnType<typeof renderLearningEmail>;
 }
 const escape = (s: string) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 export function reminderClock(now = new Date()) {
@@ -29,7 +32,7 @@ export function dailyLearning(kind: string, units: LearningUnit[], target: strin
   if (!units.length || (days !== null && days < 1)) return null;
   const count = days === null ? units.length : Math.ceil(units.length/days);
   const selected = [...units].sort((a,b)=>a.idx-b.idx || a.chapter-b.chapter || a.mishnah-b.mishnah).slice(0,count);
-  const lines = selected.map(u => kind === 'tehillim' ? `תהילים — קאפיטל ${u.idx}` : `${MASECHTOS[u.idx].name} — פרק ${u.chapter}, משנה ${u.mishnah}`);
+  const lines = selected.map(u => kind === 'tehillim' ? word("email_learning.daily_learning.01", { idx: u.idx }) : word("email_learning.daily_learning.02", { name: MASECHTOS[u.idx].name, chapter: u.chapter, mishnah: u.mishnah }));
   return { lines, selected, days, remaining: units.length };
 }
 
@@ -45,28 +48,38 @@ function readingContent(lines: string[], texts: string[]) {
     sections.push(section);
   }
   const attached = sections.length < texts.length;
-  const notice = 'דער גאנצער טעקסט פון היינטיגן לימוד איז אויך אינעם בייגעלייגטן פייל.';
+  const notice = word("email_learning.reading_content.01");
   return {
     text: (attached ? [notice,...plain.slice(0,sections.length)] : plain).join('\n\n'),
-    html: (attached ? `<p>${notice}</p>` : '') + sections.join(''),
+    html: (attached ? `<p>${escape(notice)}</p>` : '') + sections.join(''),
     attachments: attached ? [{filename:'daily-learning.txt',content:Buffer.from('\uFEFF'+plain.join('\n\n')).toString('base64')}] : undefined
   };
 }
 
+function renderLearningEmail(mail: LearningMail) {
+  const subject = `${word("email_learning.send_learning_email.01")} `+mail.title;
+  const note = mail.target ? word("email_learning.send_learning_email.02", { target: mail.target, days: mail.days }) : word("email_learning.send_learning_email.03");
+  const settings = mail.settingsLink || config.publicUrl+'/#me';
+  const reading = mail.texts ? readingContent(mail.lines, mail.texts) : null;
+  return { subject,
+      text:`${mail.title}
+${note}
+
+${word("email_learning.send_learning_email.04")}
+${reading?.text ?? mail.lines.join('\n')}
+
+${word("email_learning.send_learning_email.05", { link: mail.link })}
+${word("email_learning.send_learning_email.06", { settings: settings })}`,
+      html:`<!doctype html><html lang="yi" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f4f6f5;color:#19362d"><main style="max-width:540px;margin:24px auto;padding:24px;background:white;border-radius:16px"><p>${htmlWord("email_learning.send_learning_email.07")}</p><h1 style="font-size:24px">${escape(mail.title)}</h1><p>${escape(note)}</p><h2>${htmlWord("email_learning.send_learning_email.08")}</h2>${reading?.html ?? `<ul>${mail.lines.map(l=>`<li>${escape(l)}</li>`).join('')}</ul>`}<p>${htmlWord("email_learning.send_learning_email.09")}</p><p><a href="${escape(mail.link)}">${htmlWord("email_learning.send_learning_email.10")}</a></p><p><a href="${escape(settings)}">${htmlWord("email_learning.send_learning_email.11")}</a></p></main></body></html>`,
+      attachments:reading?.attachments };
+}
+
 export async function sendLearningEmail(to: string, mail: LearningMail, key: string, send: typeof fetch = fetch) {
   if (!emailReady()) throw new Error('Email is not configured');
-  const subject = 'דיין טעגליכער לימוד — '+mail.title;
-  const note = mail.target ? `ביז ${mail.target} · נאך ${mail.days} טעג (מיט היינט)` : 'קיין ענד דאטום איז נישט באשטימט. דאס זענען אלע דיינע איבעריגע חלקים.';
-  const settings = mail.settingsLink || config.publicUrl+'/#me';
-  // Existing pending deliveries keep their original request body for the same Resend key.
-  const reading = mail.texts ? readingContent(mail.lines, mail.texts) : null;
   const response = await send('https://api.resend.com/emails', {
     method:'POST',signal:AbortSignal.timeout(8000),
     headers:{Authorization:`Bearer ${config.resendApiKey}`,'Content-Type':'application/json','Idempotency-Key':key},
-    body:JSON.stringify({from:mail.sender || config.resendFromEmail,to:[to],subject,
-      text:`${mail.title}\n${note}\n\nהיינט לערנען:\n${reading?.text ?? mail.lines.join('\n')}\n\nעפן דיין ליסט און צייכן אפ וואס דו האסט געענדיגט: ${mail.link}\nאויסלעשן טעגליכע אימעילס: ${settings}`,
-      html:`<!doctype html><html lang="yi" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f4f6f5;color:#19362d"><main style="max-width:540px;margin:24px auto;padding:24px;background:white;border-radius:16px"><p>אונזער משפחה</p><h1 style="font-size:24px">${escape(mail.title)}</h1><p>${escape(note)}</p><h2>היינט לערנען</h2>${reading?.html ?? `<ul>${mail.lines.map(l=>`<li>${escape(l)}</li>`).join('')}</ul>`}<p>צייכן אפ אין דער ליסט וואס דו האסט געענדיגט, כדי דער קומענדיגער פלאן זאל זיין ריכטיג.</p><p><a href="${escape(mail.link)}">עפן מיין ליסט</a></p><p><a href="${escape(settings)}">אימעיל איינשטעלונגען / אויסלעשן</a></p></main></body></html>`,
-      attachments:reading?.attachments})
+    body:JSON.stringify({from:mail.sender || config.resendFromEmail,to:[to],...(mail.content ?? renderLearningEmail(mail))})
   });
   if (!response.ok) throw new Error(`Email provider returned ${response.status}`);
   const result = await response.json() as {id?:string};
@@ -109,14 +122,20 @@ export async function runLearningReminders(log: {error:(o:object,m:string)=>void
         const units = await remainingLearning((sql,params)=>c.query(sql,params),row.id,row.user_id,row.kind);
         const plan = dailyLearning(row.kind,units,row.target_date,clock.date); if (!plan) continue;
         const {selected,...summary} = plan;
-        const mail:LearningMail = {...summary,texts:selected.map(unit=>learningText(row.kind,unit)),title:`${row.kind==='tehillim'?'תהילים':'משניות'} — לעילוי נשמת ${row.niftar}`,target:row.target_date,link:`${config.publicUrl}/#learn/${row.id}/${row.family_group_id}`,sender:config.resendFromEmail,settingsLink:config.publicUrl+'/#me'};
-        // Commit the immutable request before sending. Retry with the same provider key after a crash.
+        const mail:LearningMail = {...summary,texts:selected.map(unit=>learningText(row.kind,unit)),title:word("email_learning.run_learning_reminders.03", { value: row.kind==='tehillim'?word("email_learning.run_learning_reminders.01"):word("email_learning.run_learning_reminders.02"), name: row.niftar }),target:row.target_date,link:`${config.publicUrl}/#learn/${row.id}/${row.family_group_id}`,sender:config.resendFromEmail,settingsLink:config.publicUrl+'/#me'};
+        mail.units = selected;
+        mail.content = renderLearningEmail(mail);
+        delete mail.texts;
+        // Commit the rendered request before sending so a wording edit cannot change a retry.
         await c.query(`INSERT INTO learning_email_deliveries(user_id,list_id,local_date,recipient,payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,[row.user_id,row.id,clock.date,email,JSON.stringify(mail)]);
         const delivery = (await c.query(`SELECT * FROM learning_email_deliveries WHERE user_id=$1 AND list_id=$2 AND local_date=$3 AND sent_at IS NULL
           AND created_at > now()-interval '20 hours' AND recipient=$4`,[row.user_id,row.id,clock.date,email])).rows[0];
         if (!delivery) continue;
         // Do not email obsolete portions after a failed send if the claim/progress changed.
-        if (JSON.stringify(delivery.payload.lines) !== JSON.stringify(mail.lines)) continue;
+        const portions = (units: LearningUnit[]) => units.map(u => [u.idx, u.chapter, u.mishnah]);
+        if (delivery.payload.units
+          ? JSON.stringify(portions(delivery.payload.units)) !== JSON.stringify(portions(selected))
+          : JSON.stringify(delivery.payload.lines) !== JSON.stringify(mail.lines)) continue;
         const eligible = (await c.query(`SELECT 1 FROM users u JOIN learn_lists l ON l.id=$2
           WHERE u.id=$1 AND u.status='active' AND u.learning_email_reminders AND u.email_verified_at IS NOT NULL
           AND lower(trim(u.email))=$3 AND l.family_group_id=ANY(u.family_group_ids)

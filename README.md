@@ -136,3 +136,16 @@ provider failures retry using the same persisted body and Resend idempotency key
 20 hours on that local date (within Resend's idempotency window). Changing an address suppresses
 that day's pending delivery; the new address must be verified. Each email links to account
 settings to disable reminders. Delivery records are retained for 90 days.
+
+## Live Yiddish wording
+
+In the private Kobor wording spreadsheet, edit column B on the Wording tab. Keep the
+placeholders shown in braces. Clearing an edit restores the built-in wording. A note
+on B2 shows the last sync and flags rows with missing or changed placeholders.
+
+For setup, add the same random `KOBOR_WORDING_SYNC_TOKEN` to the production runtime
+secrets and to the spreadsheet's bound Apps Script properties. Copy
+`deploy/wording-apps-script.gs` into that project and run `installKoborWording` once
+as the sheet owner. This installs an edit trigger and a five-minute retry trigger.
+The webhook writes only wording overrides. Kobor keeps the last accepted edits in
+PostgreSQL, and open pages check for new wording every ten seconds.
