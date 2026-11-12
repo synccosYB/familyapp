@@ -549,17 +549,16 @@ function dirCards(L) {
   <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">✏️ עדיט</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || '<div class="muted">גארנישט געטראפן</div>';
 }
 async function dirForm(id, mine) {
-  const {people}=await api('/people');
+  const {people}=await api('/directory-people');
   const d = (STATE.dir || []).find((x) => x.id === id) || { side: mySides()[0], husband: mine ? ME.name : '' };
   modal(`<h2 style="margin-top:0">${id ? '✏️ עדיט' : mine ? '+ מיין משפחה' : '+ לייג צו א משפחה'}</h2><form data-form="dir" data-id="${id}" data-mine="${mine ? 1 : 0}">
   <p class="muted">קלייב באזונדערע מענטשן פון פעמילי טרי. זייערע עלטערן און פרטים ווערן גענוצט אין ביידע ערטער.</p>
   ${field('מאן — מענטש אין בוים',`<select id="dhperson"><option value="">— נאכנישט פארבונדן —</option>${people.map(p=>`<option value="${p.id}" ${d.husband_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
   ${field('ווייב — מענטש אין בוים',`<select id="dwperson"><option value="">— נאכנישט פארבונדן —</option>${people.map(p=>`<option value="${p.id}" ${d.wife_person_id===p.id?'selected':''}>${esc([p.title,p.name].filter(Boolean).join(' '))}</option>`).join('')}</select>`)}
   <a href="#tree">🌳 לייג צו / עדיט א מענטש אין פעמילי טרי</a>
-  <details><summary>פריערדיגע פרטים (ביז מען פארבינדט מענטשן)</summary>
+  <p class="muted">מען קען אויך אריינשרייבן נעמען אן א פארבינדונג צום בוים.</p>
   ${field('מאן', `<input id="dh" value="${esc(d.husband)}">`)}${field('ווייב', `<input id="dw" value="${esc(d.wife)}">`)}
   ${field('וועמענס קינד', `<input id="dp" value="${esc(d.parents)}" placeholder="למשל: זון פון ר׳ משה באכנער">`)}
-  </details>
   ${field('סייד', `<select id="ds">${sideOptions(d.side)}</select>`)}
   <h3>אדרעס</h3>${field('גאס און הויז נומער', `<input id="da" dir="auto" autocomplete="address-line1" value="${esc(d.address_line1 ?? d.address)}" placeholder="12 Main St">`)}
   ${field('דירה / אפארטמענט', `<input id="da2" dir="auto" autocomplete="address-line2" value="${esc(d.address_line2)}" placeholder="Apt 2B">`)}
