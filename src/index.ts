@@ -1027,6 +1027,9 @@ async function simchaFor(u: User, id: number) {
 app.get('/api/simchas', async (req) => {
   const u = await member(req);
   const past = (req.query as any).past === '1';
+  const requestedId = (req.query as any).id;
+  const id = requestedId === undefined ? null : Number(requestedId);
+  if (id !== null && (!Number.isSafeInteger(id) || id < 1)) throw bad('אינוויטעישן נישט גילטיג');
   const rows = await q(`SELECT s.*, f.filename file_name, f.mime file_mime, cu.name created_by_name,
       coalesce(sum(r.people) FILTER (WHERE r.answer='yes'),0)::int yes_people, count(*) FILTER (WHERE r.answer='yes')::int yes_count,
       count(*) FILTER (WHERE r.answer='no')::int no_count,
@@ -1034,8 +1037,8 @@ app.get('/api/simchas', async (req) => {
       coalesce(json_agg(json_build_object('name',ru.name,'answer',r.answer,'people',r.people) ORDER BY ru.name) FILTER (WHERE r.user_id IS NOT NULL),'[]') rsvps
     FROM simchas s LEFT JOIN files f ON f.id=s.file_id LEFT JOIN users cu ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(cu.family_group_ids) AND cu.id=s.created_by
     LEFT JOIN rsvps r ON r.simcha_id=s.id LEFT JOIN users ru ON nullif(current_setting('familye.family_group_id',true),'')::int=ANY(ru.family_group_ids) AND ru.id=r.user_id
-    WHERE ${sideSql('s.audience', 1)} AND ${past ? 's.gdate < $3' : 's.gdate >= $3'}
-    GROUP BY s.id, f.filename, f.mime, cu.name ORDER BY s.gdate ${past ? 'DESC' : 'ASC'}, s.id LIMIT 200`, [mySides(u), u.id, todayYmd()]);
+    WHERE ${sideSql('s.audience', 1)} AND ($4::int IS NULL AND ${past ? 's.gdate < $3' : 's.gdate >= $3'} OR s.id=$4)
+    GROUP BY s.id, f.filename, f.mime, cu.name ORDER BY s.gdate ${past ? 'DESC' : 'ASC'}, s.id LIMIT 200`, [mySides(u), u.id, todayYmd(), id]);
   return { simchas: rows.map((s) => ({ ...s, hebrew: s.hdate_text || hebrewForYmd(s.gdate), days: daysUntil(s.gdate) })) };
 });
 function simBody(u: User, b: any) {
