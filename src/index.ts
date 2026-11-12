@@ -205,11 +205,42 @@ app.patch('/api/me', async (req) => {
   const u = await q1('UPDATE users SET name=$1,email=$2 WHERE id=$3 RETURNING *', [name, str(b.email, 120) || null, u0.id]);
   return { user: publicUser(u) };
 });
+app.post('/api/me/phone', authLimit, async (req) => {
+  const me = await member(req);
+  const b: any = req.body || {}, phone = normPhone(b.phone);
+  if (!phone) throw bad('שרייב א ריכטיגן טעלעפאן נומער');
+  let user;
+  try {
+    user = await tx(async c => {
+      const u = (await c.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [me.id])).rows[0];
+      if (!(await verify(u.password_hash || '', String(b.password || '')).catch(() => false)))
+        throw bad('דאס פאסווארט איז נישט ריכטיג');
+      if (u.phone === phone) return u;
+      const changed = (await c.query('UPDATE users SET phone=$1 WHERE id=$2 RETURNING *', [phone, me.id])).rows[0];
+      // Retain this browser session; old recovery links and other sessions expire.
+      await c.query('DELETE FROM sessions WHERE user_id=$1 AND token_hash<>$2', [me.id, sha(req.cookies[COOKIE]!)]);
+      await c.query('UPDATE password_tokens SET expires_at=now() WHERE user_id=$1 AND used_at IS NULL', [me.id]);
+      await c.query('UPDATE password_reset_requests SET resolved_at=now() WHERE user_id=$1', [me.id]);
+      return changed;
+    });
+  } catch (e: any) {
+    if (e.code === '23505') throw new HttpError(409, 'דער טעלעפאן נומער ווערט שוין גענוצט דורך אן אנדער אקאונט');
+    throw e;
+  }
+  return { user: publicUser(user) };
+});
+
+async function ownerId() {
+  const row = await q1(`SELECT COALESCE(s.bootstrap_admin_id,
+    (SELECT id FROM users WHERE phone=$1)) AS id FROM settings s WHERE s.id=1`, [normPhone(config.admin.phone)]);
+  return row?.id;
+}
 
 // ---------------- admin ----------------
 app.get('/api/admin/users', async (req) => {
   await admin(req);
-  return { owner_phone: normPhone(config.admin.phone), users: await q(`SELECT id,name,phone,email,sides,status,is_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password,
+  const owner = await q1('SELECT phone FROM users WHERE id=$1', [await ownerId()]);
+  return { owner_phone: owner?.phone || '', users: await q(`SELECT id,name,phone,email,sides,status,is_admin,note,created_at,last_seen_at,(password_hash IS NOT NULL) has_password,
     (SELECT requested_at FROM password_reset_requests r WHERE r.user_id=users.id AND r.resolved_at IS NULL) reset_requested_at FROM users
     ORDER BY (status='pending') DESC, status, name`) };
 });
@@ -217,7 +248,7 @@ app.patch('/api/admin/users/:id', async (req) => {
   const me = await admin(req);
   const id = Number((req.params as any).id), b: any = req.body || {};
   const u = await q1('SELECT * FROM users WHERE id=$1', [id]); if (!u) throw new HttpError(404, 'נישט געטראפן');
-  const owner = !!config.admin.phone && u.phone === normPhone(config.admin.phone);
+  const owner = u.id === await ownerId();
   if (owner && id !== me.id && (b.status !== undefined || b.is_admin === false)) throw new HttpError(403, 'מען קען נישט טוישן דעם הויפט אדמין');
   if (b.status !== undefined) {
     if (!['active', 'rejected', 'pending'].includes(b.status)) throw bad('?');
@@ -242,7 +273,7 @@ app.delete('/api/admin/users/:id', async (req) => {
   const id = Number((req.params as any).id);
   if (id === me.id) throw bad('דו קענסט נישט אויסמעקן דיך אליין');
   const u = await q1('SELECT phone FROM users WHERE id=$1', [id]);
-  if (u && config.admin.phone && u.phone === normPhone(config.admin.phone)) throw new HttpError(403, 'מען קען נישט אויסמעקן דעם הויפט אדמין');
+  if (u && id === await ownerId()) throw new HttpError(403, 'מען קען נישט אויסמעקן דעם הויפט אדמין');
   await q('DELETE FROM users WHERE id=$1', [id]);
   return { ok: true };
 });

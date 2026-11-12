@@ -457,6 +457,7 @@ V.admin = async () => {
 };
 V.me = async () => `<h1>👤 מיין אקאונט</h1><div class="cap">${both() ? 'ביידע סיידס' : esc(sideLong(ME.sides[0]))}${ME.is_admin ? ' · אדמין' : ''} · <span dir="ltr">+${esc(ME.phone)}</span></div>
   <form data-form="me" class="card" style="margin-bottom:14px">${field('נאמען', `<input id="mn" value="${esc(ME.name)}">`)}${field('אימעיל (נישט מוז)', `<input id="mem" type="email" class="ltr" value="${esc(ME.email || '')}">`)}<div class="err" id="ferr"></div><button class="btn">סעיוו</button></form>
+  <form data-form="myphone" class="card" style="margin-bottom:14px"><h2>טויש טעלעפאן נומער</h2><p class="muted">דאס איז דער נומער צו לאג אין. פאר אן אויסלענדישן נומער, לייג צו דעם לאנד קאוד.</p>${field('טעלעפאן נומער', `<input id="mphone" type="tel" class="ltr" autocomplete="tel" value="+${esc(ME.phone)}" required>`)}${field('יעצטיגע פאסווארט', '<input id="mphonepw" type="password" autocomplete="current-password" required>')}<div class="err" id="phoneerr"></div><button class="btn">סעיוו טעלעפאן נומער</button></form>
   <form data-form="mypw" class="card">${field('אלטע פאסווארט', '<input id="mo" type="password" autocomplete="current-password">')}${field('נייע פאסווארט', '<input id="mp" type="password" autocomplete="new-password" placeholder="כאטש 6 אותיות">')}<div class="err" id="ferr2"></div><button class="btn">טויש פאסווארט</button></form>
   <div class="muted" style="margin-top:12px">צו טוישן דיין סייד, רעד מיט דעם אדמין.</div><button class="btn l" style="margin-top:14px" data-act="logout">↩ לאג אאוט</button>`;
 
@@ -556,6 +557,7 @@ const FORMS = {
     await api(id ? '/directory/' + id : '/directory', { method: id ? 'PUT' : 'POST', body: b }); closeModal(); toast('✓ געסעיווט'); refresh(); },
   settings: async () => { const b = {}; document.querySelectorAll('[id^=st_]').forEach((e) => { b[e.id.slice(3)] = e.value.trim(); }); const r = await api('/admin/settings', { method: 'PUT', body: b }); S = r.settings; toast('✓ געסעיווט'); refresh(); },
   me: async () => { const r = await api('/me', { method: 'PATCH', body: { name: val('mn'), email: val('mem') } }); ME = r.user; toast('✓ געסעיווט'); refresh(); },
+  myphone: async () => { const r = await api('/me/phone', { method: 'POST', body: { phone: val('mphone'), password: $('mphonepw').value } }); ME = r.user; toast('✓ טעלעפאן נומער געסעיווט'); refresh(); },
   mypw: async () => { await api('/me/password', { method: 'POST', body: { old: $('mo').value, password: $('mp').value } }); $('mo').value = $('mp').value = ''; toast('✓ פאסווארט געטוישט'); },
 };
 document.addEventListener('click', async (ev) => {
