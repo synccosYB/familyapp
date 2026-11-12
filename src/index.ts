@@ -1276,6 +1276,38 @@ app.post('/api/simchas', async (req) => {
   return { simcha: await q1(`INSERT INTO simchas(kind,whose,gdate,time_text,hdate_text,hall,address,audience,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [...simBody(u, req.body), u.id]) };
 });
 const mayEditSim = (u: User, s: any) => managesFamily(u) || s.created_by === u.id;
+async function invitationEmailPreview(req:FastifyRequest) {
+  const u=await member(req),s=await simchaFor(u,Number((req.params as any).id));
+  if(!mayEditSim(u,s))throw new HttpError(403,'נאר דער מחבר אדער אדמין קען שיקן אימעילס');
+  const scope=String((req.method==='GET' ? req.query as any : req.body as any)?.scope || 'family');
+  if(!['family','all'].includes(scope))throw bad('קלייב אויס פאר וועמען');
+  if(scope==='all'&&!u.is_admin)throw new HttpError(403,'נאר דער הויפט אדמין קען שיקן צו אלע משפחות');
+  const users=await q(`SELECT DISTINCT ON(lower(trim(email))) id,email FROM users
+    WHERE status='active' AND ($1::boolean OR ($2::int=ANY(family_group_ids)
+      AND (is_admin OR (is_family_admin AND family_group_id=$2) OR $3='all' OR $3=ANY(sides))))
+    AND email IS NOT NULL ORDER BY lower(trim(email)),id`,[scope==='all',s.family_group_id,s.audience]);
+  const recipients=users.map(r=>({...r,email:normalizeEmail(r.email)})).filter(r=>r.email);
+  const total=await q1(`SELECT count(*)::int n FROM users WHERE status='active' AND ($1::boolean OR ($2::int=ANY(family_group_ids)
+      AND (is_admin OR (is_family_admin AND family_group_id=$2) OR $3='all' OR $3=ANY(sides))))`,[scope==='all',s.family_group_id,s.audience]);
+  return {u,s,scope,recipients,total:total!.n};
+}
+app.get('/api/simchas/:id/email',async req=>{
+  const {s,recipients,total}=await invitationEmailPreview(req);
+  const status=await q1(`SELECT count(*) FILTER(WHERE sent_at IS NOT NULL)::int sent,
+    count(*) FILTER(WHERE sent_at IS NULL AND attempts<8 AND created_at>now()-interval '20 hours')::int queued,
+    count(*) FILTER(WHERE sent_at IS NULL AND (attempts>=8 OR created_at<=now()-interval '20 hours'))::int failed
+    FROM invitation_email_deliveries WHERE simcha_id=$1`,[s.id]);
+  return {configured:emailReady(),recipients:recipients.length,skipped:total-recipients.length,...status};
+});
+app.post('/api/simchas/:id/email',async req=>{
+  if(!emailReady())throw new HttpError(503,'אימעיל איז נאך נישט פארבונדן');
+  const {u,s,scope,recipients}=await invitationEmailPreview(req);
+  if((req.body as any)?.confirmed!==true)throw bad('באשטעטיג קודם דעם אימעיל');
+  const mail={title:`${s.kind} · ${s.whose}`,lines:[s.gdate,s.hdate_text,s.time_text,s.hall,s.address,s.note].filter(Boolean),link:`${config.publicUrl}/#sim/${s.id}/${s.family_group_id}`};
+  const queued=await tx(async c=>{let n=0;for(const r of recipients){const result=await c.query(`INSERT INTO invitation_email_deliveries(simcha_id,recipient,user_id,queued_by,all_families,payload)
+    VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,[s.id,r.email,r.id,u.id,scope==='all',JSON.stringify(mail)]);n+=result.rowCount||0;}return n;});
+  return {queued,already_queued:recipients.length-queued};
+});
 app.put('/api/simchas/:id', async (req) => {
   const u = await member(req); const s = await simchaFor(u, Number((req.params as any).id));
   if (!mayEditSim(u, s)) throw new HttpError(403, 'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');

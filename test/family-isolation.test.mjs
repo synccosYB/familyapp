@@ -53,6 +53,8 @@ test('families isolate owners, members, invitations, records, chat and direct UR
   const sb=ok(await req('/simchas',{kind:'Wedding',whose:'B private',gdate:'2099-01-01',audience:'all'},b.cookie)).simcha;
   assert.deepEqual(ok(await req('/simchas?id='+sb.id,undefined,m.cookie)).simchas,[]);
   assert.equal(ok(await req('/simchas?id='+sb.id,undefined,b.cookie)).simchas[0].id,sb.id);
+  assert.equal((await req('/simchas/'+sb.id+'/email?scope=family',undefined,m.cookie)).status,404);
+  assert.equal((await req('/simchas/'+sb.id+'/email',{scope:'family',confirmed:true},m.cookie)).status,404);
   const ma=ok(await req('/chat/all',{body:'A private chat'},a.cookie)).message;
   const mb=ok(await req('/chat/all',{body:'B private chat'},b.cookie)).message;
   for(const endpoint of ['/people','/yahrzeits','/lists','/simchas','/directory','/directory-people','/home','/chat/all','/chat-summary','/chat-members','/directory.csv']){

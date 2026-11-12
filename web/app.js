@@ -466,7 +466,11 @@ function shareSim(x) {
   const subject = `${x.kind} · ${x.whose}`;
   const message = [subject, gdate(x.gdate), x.time_text, x.hall, x.address, link].filter(Boolean).join('\n');
   const body = encodeURIComponent(message);
-  modal(`<h2>📲 טייל אינוויטעישן</h2><p>דער לינק עפנט די שמחה. מען דארף זיין איינגעלאגט און האבן צוטריט צו דער משפחה.</p><textarea id="rl" readonly rows="7" aria-label="Invitation message">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">וואטסעפ</a><a class="btn l" href="mailto:?subject=${encodeURIComponent(subject)}&body=${body}">אימעיל</a><a class="btn l" href="sms:?body=${body}">SMS</a><button class="btn l" data-act="copy">קאפי מעסעדזש און לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+  modal(`<h2>📲 טייל אינוויטעישן</h2><p>דער לינק עפנט די שמחה. מען דארף זיין איינגעלאגט און האבן צוטריט צו דער משפחה.</p><textarea id="rl" readonly rows="7" aria-label="Invitation message">${esc(message)}</textarea><div class="btns"><a class="btn g" href="https://wa.me/?text=${body}" target="_blank" rel="noopener">וואטסעפ</a>${(isManager()||x.created_by===ME.id)?`<button class="btn l" data-act="emailsim" data-id="${x.id}">שיק אימעיל צו מעמבערס</button>`:''}<a class="btn l" href="sms:?body=${body}">SMS</a><button class="btn l" data-act="copy">קאפי מעסעדזש און לינק</button><button class="btn l" data-act="close">צומאכן</button></div>`);
+}
+async function emailSim(id,scope=ME.is_admin?'all':'family') {
+  const p=await api(`/simchas/${id}/email?scope=${scope}`);
+  modal(`<h2>שיק אינוויטעישן דורך אימעיל</h2><p>דער סיסטעם שיקט דעם אימעיל גלייך צו יעדן מעמבער באזונדער.</p>${ME.is_admin?field('פאר וועמען',`<select data-change="emailscope" data-id="${id}"><option value="all" ${scope==='all'?'selected':''}>אלע מעמבערס אין אלע משפחות</option><option value="family" ${scope==='family'?'selected':''}>נאר די משפחה פון דער שמחה</option></select>`):''}<p><b>${p.recipients} אימעיל אדרעסן</b> · ${p.skipped} אן א גילטיגן אימעיל / דאפלטע אדרעסן</p>${scope==='all'?'<p>מעמבערס פון אנדערע משפחות באקומען די פרטים אין אימעיל, אבער דער לינק פארלאנגט צוטריט צו דער משפחה.</p>':''}<p>${p.sent} אנגענומען צום שיקן · ${p.queued} אין ריי · ${p.failed} נישט געשיקט</p>${!p.configured?'<p role="alert">אימעיל איז נאך נישט פארבונדן.</p>':''}<form data-form="simemail" data-id="${id}" data-scope="${scope}"><label><input type="checkbox" id="emailconfirm" required> איך באשטעטיג שיקן צו די אויסגעקליבענע מעמבערס</label><p>די זעלבע אינוויטעישן ווערט נאר איינמאל געשיקט צו יעדן אימעיל אדרעס.</p><div class="err" role="alert"></div><div class="btns"><button class="btn" ${!p.configured||!p.recipients?'disabled':''}>שיק דורך אימעיל</button><button type="button" class="btn l" data-act="emailstatus" data-id="${id}" data-scope="${scope}">דערפריש סטאטוס</button><button type="button" class="btn l" data-act="close">קענסל</button></div></form>`);
 }
 function simForm(id) {
   const x = (STATE.sims || []).find((s) => s.id === id) || { audience: 'all', whose: ME.name, kind: SIMKINDS[0] };
@@ -759,6 +763,8 @@ const ACT = {
     const names={people:'מענטשן',yahrzeits:'יארצייטן',learn_lists:'לערנען',directory:'אדרעסן',simchas:'שמחות',files:'פיילס',messages:'מעסעדזשעס',families:'משפחה נעמען'};
     modal(`<h2>צוטיילן אלטע רעקארדס</h2>${records.people.length?`<form data-form="recoverypreview" class="card"><h3>שטעל צוריק דעם אריגינעלן בוים</h3><p>פארבינד יעדן אלטן משפחה נאמען מיט דער ריכטיגער משפחה. דערנאך זעסטו א קלארן איבערבליק איידער מען סעיווט.</p>${records.families.map(f=>field(esc(f.label),`<select required data-recovery-label="${f.id}"><option value="">— קלייב א משפחה —</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)).join('')}<div class="err"></div><button class="btn">ווייז די צוטיילונג</button></form>`:''}<p>די רעקארדס זענען פארבארגן ביז מען טיילט זיי צו. קלייב בלויז רעקארדס פון איין משפחה, מיט זייערע פארבינדונגען. קיין רעקארד ווערט נישט אויסגעמעקט.</p><form data-form="assignrecords">${field('משפחה',`<select id="assigngroup" required><option value="">—</option>${STATE.groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>`)}${Object.entries(records).map(([table,rows])=>`<details><summary>${names[table]} (${rows.length}${rows.length===500?'+':''})</summary>${rows.map(r=>`<label style="display:block"><input type="checkbox" name="assignrecord" data-table="${table}" value="${esc(r.id)}"> #${esc(r.id)} ${esc(r.label)}${table==='people'?`<small style="display:block;padding-inline-start:28px;font-weight:normal">${[['טאטע',r.father_name,r.father_id],['מאמע',r.mother_name,r.mother_id],['פארבונדן צו',r.parent_name,r.parent_id],['זיווג ראשון',r.spouse_name,r.spouse_id],['זיווג שני',r.second_spouse_name,r.second_spouse_id]].filter(x=>x[2]).map(x=>`${esc(x[0])}: ${esc(x[1]||'—')} (#${esc(x[2])})`).join(' · ')}${r.families?.length?'<br>משפחה נעמען: '+r.families.map(f=>esc(f.name)+' (#'+esc(f.id)+')').join(', '):''}</small>`:''}</label>`).join('')}</details>`).join('')}<div class="err"></div><button class="btn">באשטעטיג צוטיילונג</button></form>`,true);
   },
+  emailsim: el=>emailSim(Number(el.dataset.id)),
+  emailstatus: el=>emailSim(Number(el.dataset.id),el.dataset.scope),
   sharesim: el=>shareSim(STATE.sims.find(x=>x.id===Number(el.dataset.id))),
   viewperson: el=>personProfile(Number(el.dataset.id)),
   emaillearn:async()=>{
@@ -845,6 +851,7 @@ const ACT = {
   copy: async () => { const e = $('rl'); e.select(); try { await navigator.clipboard.writeText(e.value); } catch { document.execCommand('copy'); } toast('✓ קאפירט'); },
 };
 const CHANGE = {
+  emailscope: el=>emailSim(Number(el.dataset.id),el.value),
   cousinfamily:()=>{
     STATE.cousinFamilies=[...document.querySelectorAll('input[name="cousin-family"]:checked')].map(el=>Number(el.value));
     return refresh();
@@ -860,6 +867,7 @@ const CHANGE = {
     try { await api('/admin/users/' + u.id, { method: 'PATCH', body: { sides: [...s] } }); toast('✓ סייד געטוישט'); } catch (e) { el.checked = !el.checked; throw e; } refresh(); },
 };
 const FORMS = {
+  simemail: async f=>{await api(`/simchas/${f.dataset.id}/email`,{method:'POST',body:{scope:f.dataset.scope,confirmed:$('emailconfirm').checked}});toast('✓ אימעילס צוגעלייגט צום שיקן');await emailSim(Number(f.dataset.id),f.dataset.scope);},
   marriagechild: ()=>{
     const {person,spouse}=STATE.childMarriage;
     return personForm(0,undefined,{...childParents(person.id,spouse.id,Number(val('childfather'))),side:person.side,families:person.families||[]});
