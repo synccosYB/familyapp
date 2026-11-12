@@ -1,0 +1,1 @@
+ALTER TABLE people ADD COLUMN IF NOT EXISTS kever_address text NOT NULL DEFAULT '';

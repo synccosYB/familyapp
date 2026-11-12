@@ -398,7 +398,7 @@ function yzOut(r: any) {
   return { ...r, hebrew: `${gem(r.hday)} ${MONTH_YI[r.hmonth] || r.hmonth}`, next: n };
 }
 async function listYahrzeits(u: User) {
-  const rows = await q(`SELECT y.*,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
+  const rows = await q(`SELECT y.*,coalesce(p.side,y.side) side,CASE WHEN p.id IS NULL THEN y.name ELSE concat_ws(' ',nullif(p.title,''),p.name) END name,coalesce(p.kever,y.kever) kever,p.kever_address,coalesce(p.death_hday,y.hday) hday,coalesce(p.death_hmonth,y.hmonth) hmonth,coalesce(p.death_year,y.death_year) death_year, coalesce((SELECT json_agg(json_build_object('id',f.id,'name',f.name) ORDER BY f.name) FROM person_families pf JOIN families f ON f.id=pf.family_id WHERE pf.person_id=y.person_id),'[]') families, (r.user_id IS NOT NULL) remind, cu.name created_by_name FROM yahrzeits y LEFT JOIN people p ON p.id=y.person_id
     LEFT JOIN yahrzeit_reminders r ON r.yahrzeit_id=y.id AND r.user_id=$1 LEFT JOIN users cu ON cu.id=y.created_by
     WHERE y.archived_at IS NULL AND ${sideSql('y.side', 2)}`, [u.id, mySides(u)]);
   return rows.map(yzOut).sort((a, b) => (a.next?.days ?? 9999) - (b.next?.days ?? 9999));
@@ -414,7 +414,7 @@ app.get('/api/yahrzeits', async (req) => ({ yahrzeits: await listYahrzeits(await
 app.post('/api/yahrzeits',async req=>{
   const u=await member(req),b:any=req.body||{};
   yzBody(u,b);
-  const person=await savePerson(u,{name:b.name,side:b.side,life_status:'deceased',death_hday:b.hday,death_hmonth:b.hmonth,death_year:b.death_year,kever:b.kever,note:b.note,family_ids:b.family_ids||[]},b.person_id?Number(b.person_id):undefined);
+  const person=await savePerson(u,{name:b.name,side:b.side,life_status:'deceased',death_hday:b.hday,death_hmonth:b.hmonth,death_year:b.death_year,kever:b.kever,kever_address:b.kever_address,note:b.note,family_ids:b.family_ids||[]},b.person_id?Number(b.person_id):undefined);
   const y=await q1('SELECT * FROM yahrzeits WHERE person_id=$1',[person.id]);
   if(!y) throw bad('לייג צו א טאג און חודש אין דעם מענטשס פראפיל');
   return {yahrzeit:yzOut(y)};
@@ -523,7 +523,8 @@ async function savePerson(u: User, b: any, id?: number) {
     const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14,lineage_term=$15 WHERE id=$16 RETURNING *`,[...vals,id])).rows[0]
       : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,lineage_term,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[...vals,u.id])).rows[0];
     row.kever=str(b.kever ?? old?.kever,200);
-    await c.query('UPDATE people SET kever=$1 WHERE id=$2',[row.kever,row.id]);
+    row.kever_address=str(b.kever_address ?? old?.kever_address,500);
+    await c.query('UPDATE people SET kever=$1,kever_address=$3 WHERE id=$2',[row.kever,row.id,row.kever_address]);
     if (spouse) await c.query('UPDATE people SET spouse_id=$1 WHERE id=$2',[row.id,spouse]);
     await c.query('DELETE FROM person_families WHERE person_id=$1',[row.id]);
     if(familyIds.length) await c.query('INSERT INTO person_families(person_id,family_id) SELECT $1,unnest($2::int[])',[row.id,familyIds]);
@@ -567,8 +568,10 @@ app.delete('/api/people/:id', async req => {
 // ---------------- mishnayos & tehillim ----------------
 app.get('/api/lists', async (req) => {
   const u = await member(req);
-  const rows = await q(`SELECT l.*, cu.name created_by_name, count(i.idx)::int total, count(i.taken_by)::int taken, count(*) FILTER (WHERE i.done)::int done,
-      count(*) FILTER (WHERE i.taken_by=$2)::int mine
+  const rows = await q(`SELECT l.*, (SELECT coalesce(json_agg(json_build_object('id',fam.id,'name',fam.name)),'[]') FROM families fam JOIN person_families pf ON pf.family_id=fam.id JOIN yahrzeits y ON y.person_id=pf.person_id WHERE y.id=l.yahrzeit_id) families, cu.name created_by_name, count(i.idx)::int total, count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,
+      count(*) FILTER (WHERE i.done)::int done,
+      count(*) FILTER (WHERE EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NOT NULL) AND EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL))::int partial,
+      count(*) FILTER (WHERE i.taken_by=$2 OR EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by=$2))::int mine
     FROM learn_lists l LEFT JOIN learn_items i ON i.list_id=l.id LEFT JOIN users cu ON cu.id=l.created_by
     WHERE ${sideSql('l.side', 1)} GROUP BY l.id, cu.name ORDER BY (l.target_date IS NULL OR l.target_date < CURRENT_DATE), l.target_date, l.id DESC`, [mySides(u), u.id]);
   return { lists: rows.map((r) => ({ ...r, days: r.target_date ? daysUntil(r.target_date) : null })), masechtos: MASECHTOS };
@@ -581,7 +584,9 @@ async function visibleList(u: User, id: number) {
 app.get('/api/lists/:id', async (req) => {
   const u = await member(req); const l = await visibleList(u, Number((req.params as any).id));
   const items = await q(`SELECT i.idx,i.taken_by,i.done,tu.name taken_name FROM learn_items i LEFT JOIN users tu ON tu.id=i.taken_by WHERE list_id=$1 ORDER BY idx`, [l.id]);
-  return { list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items, masechtos: MASECHTOS };
+  const counts = await q(`SELECT idx,count(*)::int total,count(taken_by)::int taken,count(*) FILTER(WHERE done)::int done FROM learn_portions WHERE list_id=$1 GROUP BY idx`,[l.id]);
+  const help = await q(`SELECT h.*,u.name requested_name,v.name helper_name FROM learn_help_requests h JOIN users u ON u.id=h.requested_by LEFT JOIN users v ON v.id=h.helper_id WHERE h.list_id=$1 AND h.resolved_at IS NULL ORDER BY h.created_at`,[l.id]);
+  return { list: { ...l, days: l.target_date ? daysUntil(l.target_date) : null }, items: items.map(i=>({...i,parts:counts.find(c=>c.idx===i.idx)||null})), help, masechtos: MASECHTOS };
 });
 app.post('/api/lists', async (req) => {
   const u = await member(req); const b: any = req.body || {};
@@ -609,22 +614,78 @@ app.delete('/api/lists/:id', async (req) => {
   await q('DELETE FROM learn_lists WHERE id=$1', [l.id]);
   return { ok: true };
 });
-app.post('/api/lists/:id/items/:idx', async (req) => {
-  const u = await member(req); const l = await visibleList(u, Number((req.params as any).id));
-  const idx = Number((req.params as any).idx), act = (req.body as any)?.action;
-  const cur = await q1('SELECT i.*, tu.name taken_name FROM learn_items i LEFT JOIN users tu ON tu.id=i.taken_by WHERE list_id=$1 AND idx=$2', [l.id, idx]);
-  if (!cur) throw new HttpError(404, 'נישט געטראפן');
-  if (act === 'take') {
-    const r = await q1('UPDATE learn_items SET taken_by=$1,taken_at=now(),done=false WHERE list_id=$2 AND idx=$3 AND taken_by IS NULL RETURNING idx', [u.id, l.id, idx]);
-    if (!r) { if (cur.taken_by === u.id) return { ok: true }; throw new HttpError(409, `דאס האט שוין ${cur.taken_name || 'איינער'} גענומען`); }
-  } else if (act === 'give') {
-    if (cur.taken_by !== u.id && !u.is_admin) throw new HttpError(403, 'דאס איז נישט דיינס');
-    await q('UPDATE learn_items SET taken_by=NULL,taken_at=NULL,done=false WHERE list_id=$1 AND idx=$2', [l.id, idx]);
-  } else if (act === 'done' || act === 'undone') {
-    if (cur.taken_by !== u.id) throw new HttpError(403, 'דאס איז נישט דיינס');
-    await q('UPDATE learn_items SET done=$1 WHERE list_id=$2 AND idx=$3', [act === 'done', l.id, idx]);
-  } else throw bad('?');
-  return { ok: true };
+function learningScope(kind: string, idx: number, body: any) {
+  const chapter=Number(body?.chapter ?? 0), mishnah=Number(body?.mishnah ?? 0);
+  if (![idx,chapter,mishnah].every(Number.isSafeInteger) || chapter<0 || mishnah<0 || (mishnah && !chapter)) throw bad('קלייב אויס א ריכטיגן חלק');
+  if (kind==='tehillim') { if(idx<1||idx>150||chapter||mishnah) throw bad('קלייב אויס א קאפיטל'); }
+  else {
+    const chapters=MASECHTOS[idx]?.chapters;
+    if(!chapters || chapter>chapters.length || (mishnah && mishnah>chapters[chapter-1])) throw bad('קלייב אויס א ריכטיגן פרק אדער משנה');
+  }
+  return {chapter,mishnah};
+}
+app.get('/api/lists/:id/items/:idx/parts',async req=>{
+  const u=await member(req), l=await visibleList(u,Number((req.params as any).id)),idx=Number((req.params as any).idx);
+  learningScope(l.kind,idx,{});
+  if(l.kind!=='mishnayos') throw bad('נאר פאר משניות');
+  const root=await q1('SELECT i.*,u.name taken_name FROM learn_items i LEFT JOIN users u ON u.id=i.taken_by WHERE list_id=$1 AND idx=$2',[l.id,idx]);
+  if(!root) throw new HttpError(404,'נישט געטראפן');
+  const saved=await q('SELECT p.*,u.name taken_name FROM learn_portions p LEFT JOIN users u ON u.id=p.taken_by WHERE list_id=$1 AND idx=$2 ORDER BY chapter,mishnah',[l.id,idx]);
+  const items=saved.length?saved:MASECHTOS[idx].chapters.flatMap((count,c)=>Array.from({length:count},(_,m)=>({chapter:c+1,mishnah:m+1,taken_by:root.taken_by,taken_name:root.taken_name,done:root.done})));
+  return {items};
+});
+app.post('/api/lists/:id/items/:idx', async req => {
+  const u=await member(req),l=await visibleList(u,Number((req.params as any).id)),idx=Number((req.params as any).idx),body:any=req.body||{};
+  const {chapter,mishnah}=learningScope(l.kind,idx,body),act=body.action;
+  if(!['take','give','done','undone'].includes(act)) throw bad('קלייב אויס אן אקציע');
+  return tx(async c=>{
+    // Every claim, including a whole masechta, shares this lock. Overlapping scopes cannot race.
+    const root=(await c.query('SELECT * FROM learn_items WHERE list_id=$1 AND idx=$2 FOR UPDATE',[l.id,idx])).rows[0];
+    if(!root) throw new HttpError(404,'נישט געטראפן');
+    let rows;
+    if(l.kind==='mishnayos') {
+      const count=(await c.query('SELECT 1 FROM learn_portions WHERE list_id=$1 AND idx=$2 LIMIT 1',[l.id,idx])).rows.length;
+      if(!count) {
+        const parts=MASECHTOS[idx].chapters.flatMap((n,c)=>Array.from({length:n},(_,m)=>({chapter:c+1,mishnah:m+1})));
+        await c.query(`INSERT INTO learn_portions(list_id,idx,chapter,mishnah,taken_by,taken_at,done)
+          SELECT $1,$2,p.chapter,p.mishnah,$4,$5,$6 FROM jsonb_to_recordset($3::jsonb) p(chapter int,mishnah int)`,[l.id,idx,JSON.stringify(parts),root.taken_by,root.taken_at,root.done]);
+      }
+      rows=(await c.query('SELECT taken_by,done FROM learn_portions WHERE list_id=$1 AND idx=$2 AND ($3::int=0 OR chapter=$3) AND ($4::int=0 OR mishnah=$4)',[l.id,idx,chapter,mishnah])).rows;
+    } else rows=[root];
+    if(act==='take' && rows.some(r=>r.taken_by && r.taken_by!==u.id)) throw new HttpError(409,'א חלק איז שוין גענומען. עפן די פרקים און קלייב א פרייען חלק.');
+    if(act!=='take' && rows.some(r=>r.taken_by!==u.id) && !(act==='give'&&u.is_admin)) throw new HttpError(403,'דו קענסט נאר טוישן דיין אייגענעם חלק');
+    const table=l.kind==='mishnayos'?'learn_portions':'learn_items';
+    const condition=l.kind==='mishnayos'?' AND ($3::int=0 OR chapter=$3) AND ($4::int=0 OR mishnah=$4)':'';
+    const params:any[]=l.kind==='mishnayos'?[l.id,idx,chapter,mishnah]:[l.id,idx];
+    let update=act==='give'?'taken_by=NULL,taken_at=NULL,done=false':act==='done'?'done=true':act==='undone'?'done=false':`taken_by=$${params.length+1},taken_at=now(),done=false`;
+    if(act==='take')params.push(u.id);
+    await c.query(`UPDATE ${table} SET ${update} WHERE list_id=$1 AND idx=$2${condition}${act==='take'?' AND taken_by IS NULL':''}`,params);
+    if(l.kind==='mishnayos') await c.query(`UPDATE learn_items SET taken_by=s.owner,done=s.done,taken_at=CASE WHEN s.owner IS NULL THEN NULL ELSE coalesce(taken_at,now()) END FROM
+      (SELECT CASE WHEN count(taken_by)=count(*) AND count(DISTINCT taken_by)=1 THEN min(taken_by) ELSE NULL END owner,bool_and(done) done FROM learn_portions WHERE list_id=$1 AND idx=$2) s
+      WHERE list_id=$1 AND idx=$2`,[l.id,idx]);
+    return {ok:true};
+  });
+});
+app.post('/api/lists/:id/items/:idx/help',async req=>{
+  const u=await member(req),l=await visibleList(u,Number((req.params as any).id)),idx=Number((req.params as any).idx),b:any=req.body||{};
+  const {chapter,mishnah}=learningScope(l.kind,idx,b);
+  const h=await q1(`INSERT INTO learn_help_requests(list_id,idx,chapter,mishnah,requested_by,note) VALUES($1,$2,$3,$4,$5,$6)
+    ON CONFLICT(list_id,idx,chapter,mishnah,requested_by) WHERE resolved_at IS NULL DO UPDATE SET note=excluded.note RETURNING id`,[l.id,idx,chapter,mishnah,u.id,str(b.note,500)]);
+  return {request:h};
+});
+app.post('/api/lists/:id/help/:helpId',async req=>{
+  const u=await member(req),l=await visibleList(u,Number((req.params as any).id)),id=Number((req.params as any).helpId),act=(req.body as any)?.action;
+  const h=await q1('SELECT * FROM learn_help_requests WHERE id=$1 AND list_id=$2 AND resolved_at IS NULL',[id,l.id]);
+  if(!h) throw new HttpError(404,'נישט געטראפן');
+  if(act==='help') {
+    if(h.requested_by===u.id) throw bad('דאס איז דיין אייגענע בקשה');
+    const r=await q1('UPDATE learn_help_requests SET helper_id=$1 WHERE id=$2 AND resolved_at IS NULL AND (helper_id IS NULL OR helper_id=$1) RETURNING id',[u.id,id]);
+    if(!r)throw new HttpError(409,'איינער האט שוין אנגענומען צו העלפן');
+  } else if(act==='resolve') {
+    if(h.requested_by!==u.id&&!u.is_admin) throw new HttpError(403,'נאר דער בעטער אדער אדמין');
+    await q('UPDATE learn_help_requests SET resolved_at=now() WHERE id=$1',[id]);
+  } else throw bad('קלייב אויס אן אקציע');
+  return {ok:true};
 });
 
 // ---------------- simchas + invitations ----------------
@@ -724,13 +785,20 @@ app.delete('/api/simchas/:id/invite', async (req) => {
 });
 app.get('/api/files/:id', async (req, reply) => {
   const u = await member(req); const id = String((req.params as any).id);
-  const f = await q1(`SELECT f.*, s.audience FROM files f JOIN simchas s ON s.file_id=f.id WHERE f.id=$1`, [id]);
-  if (!f || !canSee(u, f.audience)) throw new HttpError(404, 'נישט געטראפן');
+  const f = await q1('SELECT * FROM files WHERE id=$1',[id]);
+  if(!f)throw new HttpError(404,'נישט געטראפן');
+  if(f.chat_room) {
+    try {await chatRoom(u,f.chat_room);}catch {throw new HttpError(404,'נישט געטראפן');}
+    if(f.uploaded_by!==u.id&&!await q1('SELECT 1 FROM messages WHERE file_id=$1',[id]))throw new HttpError(404,'נישט געטראפן');
+  } else {
+    const sim=await q1('SELECT audience FROM simchas WHERE file_id=$1',[id]);
+    if(!sim||!canSee(u,sim.audience))throw new HttpError(404,'נישט געטראפן');
+  }
   const p = path.join(UPLOADS, f.id); if (!existsSync(p)) throw new HttpError(404, 'נישט געטראפן');
-  const dl = (req.query as any).dl === '1';
+  const dl = (req.query as any).dl === '1' || f.mime === 'application/octet-stream';
   reply.header('Content-Type', f.mime).header('Content-Length', statSync(p).size)
     .header('Content-Disposition', `${dl ? 'attachment' : 'inline'}; filename="invitation${extOf(f.mime)}"; filename*=UTF-8''${encodeURIComponent(f.filename)}`)
-    .header('Cache-Control', 'private, max-age=3600').header('X-Content-Type-Options', 'nosniff');
+    .header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff');
   // images get a locked-down CSP; PDFs get none so the browser's own PDF viewer can open them (a sandbox CSP blocks it)
   if (f.mime !== 'application/pdf') reply.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
   else reply.removeHeader('Content-Security-Policy');
@@ -808,32 +876,85 @@ app.get('/api/directory.csv', async (req, reply) => {
 
 // ---------------- chat ----------------
 const roomsFor = (u: User) => ['all', ...mySides(u)];
-app.get('/api/chat/:room', async (req) => {
-  const u = await member(req); const room = String((req.params as any).room);
-  if (!roomsFor(u).includes(room)) throw new HttpError(403, 'נישט דיין גרופע');
-  const after = Number((req.query as any).after) || 0;
-  const rows = after
-    ? await q(`SELECT m.id,m.body,m.created_at,m.user_id,u.name FROM messages m JOIN users u ON u.id=m.user_id WHERE room=$1 AND m.id>$2 ORDER BY m.id LIMIT 200`, [room, after])
-    : (await q(`SELECT m.id,m.body,m.created_at,m.user_id,u.name FROM messages m JOIN users u ON u.id=m.user_id WHERE room=$1 ORDER BY m.id DESC LIMIT 100`, [room])).reverse();
-  return { messages: rows };
+async function chatPeers(u: User) {
+  return q(`SELECT id,name FROM users WHERE status='active' AND (id=$1 OR is_admin OR sides && $2::text[]) ORDER BY name`,[u.id,mySides(u)]);
+}
+async function chatRoom(u: User, room: string) {
+  if(roomsFor(u).includes(room)) return;
+  const match=/^dm:([1-9][0-9]*):([1-9][0-9]*)$/.exec(room);
+  if(!match) throw new HttpError(403,'נישט דיין גרופע');
+  const ids=[Number(match[1]),Number(match[2])];
+  if(!ids.every(Number.isSafeInteger)||ids[0]>=ids[1]||!ids.includes(u.id)) throw new HttpError(403,'נישט דיין פריוואטע שמועס');
+  if(!(await chatPeers(u)).some(p=>p.id===ids.find(id=>id!==u.id))) throw new HttpError(403,'נישט דיין פריוואטע שמועס');
+}
+async function membersOfRoom(u: User,room: string) {
+  await chatRoom(u,room);
+  const dm=room.startsWith('dm:')?room.slice(3).split(':').map(Number):null;
+  return q(`SELECT u.id,u.name,p.seen_at>now()-interval '75 seconds' online,p.active_at>now()-interval '45 seconds' active
+    FROM users u LEFT JOIN chat_presence p ON p.user_id=u.id AND p.room=$3
+    WHERE u.status='active' AND ($1::int[] IS NULL OR u.id=ANY($1))
+      AND ($2::text='all' OR $1::int[] IS NOT NULL OR u.is_admin OR $2=ANY(u.sides)) ORDER BY u.name`,[dm,room,room]);
+}
+app.get('/api/chat-members',async req=>({members:await chatPeers(await member(req))}));
+const messageSelect=`SELECT m.id,m.body,m.created_at,m.user_id,m.reply_to,u.name,f.filename,f.mime,f.size,m.file_id,
+  r.body reply_body,ru.name reply_name,
+  coalesce((SELECT json_agg(json_build_object('id',mu.id,'name',mu.name)) FROM message_mentions mm JOIN users mu ON mu.id=mm.user_id WHERE mm.message_id=m.id),'[]') mentions
+  FROM messages m JOIN users u ON u.id=m.user_id LEFT JOIN files f ON f.id=m.file_id
+  LEFT JOIN messages r ON r.id=m.reply_to AND r.room=m.room LEFT JOIN users ru ON ru.id=r.user_id`;
+app.get('/api/chat/:room',async req=>{
+  const u=await member(req),room=String((req.params as any).room);await chatRoom(u,room);
+  const after=Number((req.query as any).after)||0;
+  const rows=after?await q(`${messageSelect} WHERE m.room=$1 AND m.id>$2 ORDER BY m.id LIMIT 200`,[room,after])
+    :(await q(`${messageSelect} WHERE m.room=$1 ORDER BY m.id DESC LIMIT 100`,[room])).reverse();
+  return {messages:rows,members:await membersOfRoom(u,room)};
 });
-app.post('/api/chat/:room', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req) => {
-  const u = await member(req); const room = String((req.params as any).room);
-  if (!roomsFor(u).includes(room)) throw new HttpError(403, 'נישט דיין גרופע');
-  const body = str((req.body as any)?.body, 2000); if (!body) throw bad('שרייב א מעסעדזש');
-  return { message: await q1(`INSERT INTO messages(room,user_id,body) VALUES($1,$2,$3) RETURNING id,body,created_at,user_id`, [room, u.id, body]) };
+app.post('/api/chat/:room/presence',async req=>{
+  const u=await member(req),room=String((req.params as any).room);await chatRoom(u,room);
+  await q(`INSERT INTO chat_presence(user_id,room,active_at) VALUES($1,$2,CASE WHEN $3 THEN now() ELSE '-infinity'::timestamptz END)
+    ON CONFLICT(user_id) DO UPDATE SET room=$2,seen_at=now(),active_at=CASE WHEN $3 THEN now() WHEN chat_presence.room=$2 THEN chat_presence.active_at ELSE '-infinity'::timestamptz END`,[u.id,room,!!(req.body as any)?.active]);
+  return {ok:true};
 });
-app.delete('/api/chat/message/:id', async (req) => {
-  const u = await member(req); const id = Number((req.params as any).id);
-  const m = await q1('SELECT user_id FROM messages WHERE id=$1', [id]);
-  if (!m) throw new HttpError(404, 'נישט געטראפן');
-  if (m.user_id !== u.id && !u.is_admin) throw new HttpError(403, 'נאר דיינע');
-  await q('DELETE FROM messages WHERE id=$1', [id]);
-  return { ok: true };
+app.post('/api/chat/:room/attachment',async req=>{
+  const u=await member(req),room=String((req.params as any).room);await chatRoom(u,room);
+  const part=await req.file();if(!part)throw bad('קלייב אויס א פייל');
+  const buf=await part.toBuffer();if(!buf.length)throw bad('די פייל איז ליידיג');
+  const mime=sniff(buf)||'application/octet-stream',id=tok(18),filename=(part.filename||'attachment').replace(/[\\/\r\n"]/g,'_').slice(0,120);
+  writeFileSync(path.join(UPLOADS,id),buf,{mode:0o600});
+  try {await q('INSERT INTO files(id,filename,mime,size,uploaded_by,chat_room) VALUES($1,$2,$3,$4,$5,$6)',[id,filename,mime,buf.length,u.id,room]);}
+  catch(e){unlinkSync(path.join(UPLOADS,id));throw e;}
+  return {file:{id,filename,mime,size:buf.length}};
 });
-app.get('/api/chat-summary', async (req) => {
-  const u = await member(req);
-  return { rooms: await q(`SELECT r room, (SELECT max(id) FROM messages WHERE room=r) last_id FROM unnest($1::text[]) r`, [roomsFor(u)]) };
+app.post('/api/chat/:room',{config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{
+  const u=await member(req),room=String((req.params as any).room);await chatRoom(u,room);
+  const b:any=req.body||{},body=str(b.body,2000),fileId=str(b.file_id,100)||null,replyId=b.reply_to?Number(b.reply_to):null;
+  if(!body&&!fileId)throw bad('שרייב א מעסעדזש אדער לייג צו א פייל');
+  if(replyId&&(!Number.isSafeInteger(replyId)||!await q1('SELECT 1 FROM messages WHERE id=$1 AND room=$2',[replyId,room]))) throw bad('דער מעסעדזש איז נישט אין דעם שמועס');
+  const mentions=Array.isArray(b.mention_ids)?[...new Set<number>(b.mention_ids.map(Number))]:[];
+  const allowed=await membersOfRoom(u,room);
+  if(mentions.length>30||mentions.some(id=>!Number.isSafeInteger(id)||!allowed.some(p=>p.id===id)))throw bad('מען קען נאר דערמאנען א מעמבער פון דעם שמועס');
+  const message=await tx(async c=>{
+    if(fileId) {
+      const f=(await c.query('SELECT * FROM files WHERE id=$1 AND uploaded_by=$2 AND chat_room=$3 FOR UPDATE',[fileId,u.id,room])).rows[0];
+      if(!f || (await c.query('SELECT 1 FROM messages WHERE file_id=$1',[fileId])).rows.length)throw bad('די פייל באלאנגט נישט צו דעם מעסעדזש');
+    }
+    const m=(await c.query('INSERT INTO messages(room,user_id,body,reply_to,file_id) VALUES($1,$2,$3,$4,$5) RETURNING id,body,created_at,user_id',[room,u.id,body,replyId,fileId])).rows[0];
+    if(mentions.length)await c.query('INSERT INTO message_mentions(message_id,user_id) SELECT $1,unnest($2::int[])',[m.id,mentions]);
+    return m;
+  });
+  return {message};
+});
+app.delete('/api/chat/message/:id',async req=>{
+  const u=await member(req),id=Number((req.params as any).id),m=await q1('SELECT user_id,room FROM messages WHERE id=$1',[id]);
+  if(!m)throw new HttpError(404,'נישט געטראפן');await chatRoom(u,m.room);
+  if(m.user_id!==u.id&&!u.is_admin)throw new HttpError(403,'נאר דיינע');
+  await q('DELETE FROM messages WHERE id=$1',[id]);return {ok:true};
+});
+app.get('/api/chat-summary',async req=>{
+  const u=await member(req),peers=await chatPeers(u);
+  const dm=peers.filter(p=>p.id!==u.id).map(p=>'dm:'+Math.min(u.id,p.id)+':'+Math.max(u.id,p.id));
+  return {rooms:await q(`SELECT r room,(SELECT max(id) FROM messages WHERE room=r) last_id,
+    (SELECT count(*)::int FROM message_mentions mm JOIN messages m ON m.id=mm.message_id WHERE m.room=r AND mm.user_id=$2) mentions
+    FROM unnest($1::text[]) r`,[[...roomsFor(u),...dm],u.id])};
 });
 
 // ---------------- home ----------------
@@ -843,7 +964,7 @@ app.get('/api/home', async (req) => {
   const sims = (await q(`SELECT s.id,s.kind,s.whose,s.gdate,s.time_text,s.hdate_text,s.hall,s.address,s.audience FROM simchas s WHERE ${sideSql('s.audience', 1)} AND s.gdate >= $2 ORDER BY s.gdate LIMIT 4`, [mySides(u), todayYmd()]))
     .map((s) => ({ ...s, hebrew: s.hdate_text || hebrewForYmd(s.gdate), days: daysUntil(s.gdate) }));
   const msgs = await q(`SELECT m.id,m.room,m.body,m.created_at,u.name FROM messages m JOIN users u ON u.id=m.user_id WHERE m.room = ANY($1::text[]) ORDER BY m.id DESC LIMIT 5`, [roomsFor(u)]);
-  const lists = await q(`SELECT l.id,l.kind,l.niftar,l.target_date,count(i.taken_by)::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
+  const lists = await q(`SELECT l.id,l.kind,l.niftar,l.target_date,count(*) FILTER (WHERE i.taken_by IS NOT NULL OR (EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx) AND NOT EXISTS(SELECT 1 FROM learn_portions p WHERE p.list_id=l.id AND p.idx=i.idx AND p.taken_by IS NULL)))::int taken,count(i.idx)::int total FROM learn_lists l JOIN learn_items i ON i.list_id=l.id
     WHERE ${sideSql('l.side', 1)} AND (l.target_date IS NULL OR l.target_date >= $2) GROUP BY l.id ORDER BY l.target_date NULLS LAST LIMIT 4`, [mySides(u), todayYmd()]);
   const counts = await q1(`SELECT (SELECT count(*) FROM users WHERE status='active')::int members, (SELECT count(*) FROM users WHERE status='pending')::int pending`);
   return { yahrzeits: yz, simchas: sims, messages: msgs, lists, members: counts.members, pending: u.is_admin ? counts.pending : 0, today: hebrewForYmd(todayYmd()) };

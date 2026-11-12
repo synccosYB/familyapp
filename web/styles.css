@@ -94,3 +94,5 @@ table.t{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;o
  .seg button{padding:9px 11px}
 }
 @media(min-width:801px){.topbar{display:none}}
+
+.family-scroll{cursor:grab;user-select:none}.family-scroll.dragging,.family-scroll.dragging *{cursor:grabbing!important}.family-scroll .family-person{cursor:pointer}

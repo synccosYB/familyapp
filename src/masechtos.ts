@@ -1,5 +1,6 @@
+import { MISHNAH_COUNTS } from './mishnah-counts.js';
 // The 63 masechtos of Mishnah, in order, by seder
-export const MASECHTOS: { name: string; seder: string }[] = [
+const catalogue: { name: string; seder: string }[] = [
   ...['ברכות', 'פאה', 'דמאי', 'כלאים', 'שביעית', 'תרומות', 'מעשרות', 'מעשר שני', 'חלה', 'ערלה', 'ביכורים'].map((name) => ({ name, seder: 'זרעים' })),
   ...['שבת', 'עירובין', 'פסחים', 'שקלים', 'יומא', 'סוכה', 'ביצה', 'ראש השנה', 'תענית', 'מגילה', 'מועד קטן', 'חגיגה'].map((name) => ({ name, seder: 'מועד' })),
   ...['יבמות', 'כתובות', 'נדרים', 'נזיר', 'סוטה', 'גיטין', 'קידושין'].map((name) => ({ name, seder: 'נשים' })),
@@ -7,3 +8,5 @@ export const MASECHTOS: { name: string; seder: string }[] = [
   ...['זבחים', 'מנחות', 'חולין', 'בכורות', 'ערכין', 'תמורה', 'כריתות', 'מעילה', 'תמיד', 'מדות', 'קינים'].map((name) => ({ name, seder: 'קדשים' })),
   ...['כלים', 'אהלות', 'נגעים', 'פרה', 'טהרות', 'מקואות', 'נדה', 'מכשירין', 'זבים', 'טבול יום', 'ידים', 'עוקצין'].map((name) => ({ name, seder: 'טהרות' })),
 ];
+
+export const MASECHTOS = catalogue.map((m,idx)=>({...m,chapters:MISHNAH_COUNTS[idx]}));
