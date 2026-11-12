@@ -1,0 +1,20 @@
+-- Additive migration: retain legacy free text and parent links until explicitly reviewed.
+ALTER TABLE people DROP CONSTRAINT people_side_check;
+ALTER TABLE people ADD CONSTRAINT people_side_check CHECK (side IN ('a','b','both'));
+ALTER TABLE people ADD COLUMN title text NOT NULL DEFAULT '';
+ALTER TABLE people ADD COLUMN father_id int REFERENCES people(id) ON DELETE RESTRICT;
+ALTER TABLE people ADD COLUMN mother_id int REFERENCES people(id) ON DELETE RESTRICT;
+ALTER TABLE people ADD COLUMN spouse_id int UNIQUE REFERENCES people(id) ON DELETE RESTRICT;
+ALTER TABLE people ADD COLUMN life_status text NOT NULL DEFAULT 'unknown' CHECK (life_status IN ('unknown','living','deceased'));
+ALTER TABLE people ADD COLUMN death_hday int CHECK (death_hday BETWEEN 1 AND 30);
+ALTER TABLE people ADD COLUMN death_hmonth text CHECK (death_hmonth IN ('TISHREI','CHESHVAN','KISLEV','TEVET','SHVAT','ADAR','ADAR_I','ADAR_II','NISAN','IYYAR','SIVAN','TAMUZ','AV','ELUL'));
+ALTER TABLE people ADD COLUMN death_year int CHECK (death_year BETWEEN 5001 AND 5999);
+ALTER TABLE people ADD CONSTRAINT people_not_self CHECK (father_id IS DISTINCT FROM id AND mother_id IS DISTINCT FROM id AND spouse_id IS DISTINCT FROM id);
+ALTER TABLE people ADD CONSTRAINT people_distinct_parents CHECK (father_id IS NULL OR mother_id IS NULL OR father_id <> mother_id);
+UPDATE people SET life_status='deceased' WHERE niftar;
+CREATE INDEX people_father ON people(father_id);
+CREATE INDEX people_mother ON people(mother_id);
+ALTER TABLE directory ADD COLUMN husband_person_id int REFERENCES people(id) ON DELETE RESTRICT;
+ALTER TABLE directory ADD COLUMN wife_person_id int REFERENCES people(id) ON DELETE RESTRICT;
+ALTER TABLE directory ADD CONSTRAINT directory_distinct_people CHECK (husband_person_id IS NULL OR wife_person_id IS NULL OR husband_person_id <> wife_person_id);
+ALTER TABLE yahrzeits ADD COLUMN person_id int UNIQUE REFERENCES people(id) ON DELETE SET NULL;

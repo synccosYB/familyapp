@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hash, verify } from '@node-rs/argon2';
 import { config } from './config.js';
-import { pool, q, q1 } from './db.js';
+import { pool, q, q1, tx } from './db.js';
 import { MONTH_CODES, MONTH_YI, daysUntil, gem, hebrewForYmd, nextYahrzeit, todayYmd } from './hebrew.js';
 import { startJobs } from './jobs.js';
 import { MASECHTOS } from './masechtos.js';
@@ -270,15 +270,17 @@ app.post('/api/yahrzeits', async (req) => {
 });
 app.put('/api/yahrzeits/:id', async (req) => {
   const u = await member(req); const id = Number((req.params as any).id);
-  const old = await q1('SELECT side FROM yahrzeits WHERE id=$1', [id]);
+  const old = await q1('SELECT side,person_id FROM yahrzeits WHERE id=$1', [id]);
+  if (old?.person_id) throw bad('עדיט דעם מענטש אין פעמילי טרי');
   if (!old || !canSee(u, old.side)) throw new HttpError(404, 'נישט געטראפן');
   const r = await q1(`UPDATE yahrzeits SET name=$1,father_name=$2,relation=$3,side=$4,hday=$5,hmonth=$6,death_year=$7,kever=$8,note=$9 WHERE id=$10 RETURNING *`, [...yzBody(u, req.body), id]);
   return { yahrzeit: yzOut(r) };
 });
 app.delete('/api/yahrzeits/:id', async (req) => {
   const u = await member(req); const id = Number((req.params as any).id);
-  const r = await q1('SELECT created_by FROM yahrzeits WHERE id=$1', [id]);
+  const r = await q1('SELECT created_by,person_id FROM yahrzeits WHERE id=$1', [id]);
   if (!r) throw new HttpError(404, 'נישט געטראפן');
+  if (r.person_id) throw bad('עדיט דעם פטירה דאטום אין פעמילי טרי');
   if (!u.is_admin && r.created_by !== u.id) throw new HttpError(403, 'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
   await q('DELETE FROM yahrzeits WHERE id=$1', [id]);
   return { ok: true };
@@ -290,45 +292,87 @@ app.post('/api/yahrzeits/:id/remind', async (req) => {
   return { remind: on };
 });
 
-// ---------------- family tree ----------------
+// ---------------- family tree: canonical person records ----------------
+const personSelect = `SELECT p.*, f.name father_name, f.title father_title, m.name mother_name, m.title mother_title,
+  sp.name spouse_name, sp.title spouse_title FROM people p
+  LEFT JOIN people f ON f.id=p.father_id LEFT JOIN people m ON m.id=p.mother_id
+  LEFT JOIN people sp ON sp.id=p.spouse_id`;
 app.get('/api/people', async (req) => {
   const u = await member(req);
-  return { people: await q(`SELECT id,side,name,spouse,parent_id,niftar,note,created_by FROM people WHERE side = ANY($1::text[]) ORDER BY id`, [mySides(u)]) };
+  return { people: await q(`${personSelect} WHERE ${sideSql('p.side',1)} ORDER BY p.id`, [mySides(u)]) };
 });
-async function personBody(u: User, b: any, selfId?: number) {
-  const name = str(b.name, 120); if (!name) throw bad('שרייב א נאמען');
-  let side = okSide(u, b.side, ['a', 'b']);
-  let parent: number | null = b.parent_id ? Number(b.parent_id) : null;
-  if (parent) {
-    const p = await q1('SELECT side FROM people WHERE id=$1', [parent]);
-    if (!p || !canSee(u, p.side)) throw bad('דער טאטע/מאמע איז נישט געטראפן');
-    side = p.side;
-    // no cycles
-    if (selfId) {
-      let cur: number | null = parent;
-      for (let i = 0; cur && i < 200; i++) { if (cur === selfId) throw bad('א מענטש קען נישט זיין זיין אייגענער אייניקל'); cur = (await q1('SELECT parent_id FROM people WHERE id=$1', [cur]))?.parent_id ?? null; }
+const personId = (v: any): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v); if (!Number.isSafeInteger(n) || n < 1) throw bad('קלייב אויס א מענטש'); return n;
+};
+async function savePerson(u: User, b: any, id?: number) {
+  return tx(async c => {
+    // Serialize graph changes so two simultaneous saves cannot introduce ancestry cycles.
+    await c.query("SELECT pg_advisory_xact_lock(68427301)");
+    const old = id ? (await c.query('SELECT * FROM people WHERE id=$1 FOR UPDATE',[id])).rows[0] : null;
+    if (id && (!old || !canSee(u,old.side))) throw new HttpError(404,'נישט געטראפן');
+    b = {...(old || {}),...b};
+    const name = str(b.name,120); if (!name) throw bad('שרייב א נאמען');
+    const side = okSide(u,b.side);
+    const father = personId(b.father_id), mother = personId(b.mother_id), spouse = personId(b.spouse_id);
+    const legacyParent = b.parent_id !== undefined ? personId(b.parent_id) : old?.parent_id || null;
+    if ((father && father===mother) || (spouse && [father,mother,legacyParent].includes(spouse)) || [father,mother,spouse,legacyParent].some(v=>v && v===id)) throw bad('די משפחה לינקס זענען נישט ריכטיג');
+    const status = b.life_status ?? (b.niftar ? 'deceased' : old?.life_status || 'unknown');
+    if (!['unknown','living','deceased'].includes(status)) throw bad('קלייב אויס א סטאטוס');
+    const day = b.death_hday === '' || b.death_hday == null ? null : Number(b.death_hday);
+    const month = str(b.death_hmonth,20) || null;
+    const year = b.death_year === '' || b.death_year == null ? null : Number(b.death_year);
+    if ((day !== null && (!Number.isInteger(day)||day<1||day>30)) || (month && !(MONTH_CODES as readonly string[]).includes(month)) || (year!==null && (!Number.isInteger(year)||year<=5000||year>=6000))) throw bad('דער אידישער דאטום איז נישט ריכטיג');
+    if (status!=='deceased' && (day||month||year)) throw bad('א פטירה דאטום איז נאר פאר א נפטר');
+    const refs = [...new Set([father,mother,spouse,legacyParent].filter(Boolean))];
+    for (const ref of refs) {
+      const r=(await c.query('SELECT * FROM people WHERE id=$1',[ref])).rows[0];
+      // A linked person must be visible to every viewer of this person, not just the editor.
+      if (!r || !canSee(u,r.side) || (r.side!=='both' && r.side!==side)) throw bad('דער פארבינדונג דארף זיין אויף דער זעלבער סייד');
+      if (ref===spouse && r.side!==side) throw bad('מאן און ווייב לינקס דארפן זיין אויף דער זעלבער סייד');
+      if (ref===spouse && r.spouse_id && r.spouse_id!==id) throw bad('דער מענטש האט שוין א מאן/ווייב לינק');
     }
-  }
-  return [side, name, str(b.spouse, 120), parent, !!b.niftar, str(b.note, 300)];
+    if (id) {
+      const cycle=(await c.query(`WITH RECURSIVE ancestors(id) AS (
+        SELECT unnest($1::int[]) UNION
+        SELECT x.parent FROM ancestors a JOIN people p ON p.id=a.id
+        CROSS JOIN LATERAL unnest(ARRAY[p.father_id,p.mother_id,p.parent_id]) x(parent) WHERE x.parent IS NOT NULL
+      ) SELECT 1 FROM ancestors WHERE id=$2`,[[father,mother,legacyParent].filter(Boolean),id])).rows.length;
+      if (cycle) throw bad('א מענטש קען נישט זיין זיין אייגענער אייניקל');
+      // Do not move a referenced person behind a narrower visibility boundary.
+      const incoming=(await c.query(`SELECT side FROM people WHERE father_id=$1 OR mother_id=$1 OR spouse_id=$1 OR parent_id=$1
+        UNION SELECT side FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows;
+      if (incoming.some(r=>side!=='both' && r.side!==side)) throw bad('די סייד דארף שטימען מיט די פארבינדונגען');
+    }
+    const vals=[side,name,str(b.spouse ?? old?.spouse,120),legacyParent,status==='deceased',str(b.note,300),str(b.title,80),father,mother,spouse,status,day,month,year];
+    if (old?.spouse_id && old.spouse_id!==spouse) await c.query('UPDATE people SET spouse_id=NULL WHERE id=$1 AND spouse_id=$2',[old.spouse_id,id]);
+    const row=id ? (await c.query(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6,title=$7,father_id=$8,mother_id=$9,spouse_id=$10,life_status=$11,death_hday=$12,death_hmonth=$13,death_year=$14 WHERE id=$15 RETURNING *`,[...vals,id])).rows[0]
+      : (await c.query(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,title,father_id,mother_id,spouse_id,life_status,death_hday,death_hmonth,death_year,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,[...vals,u.id])).rows[0];
+    if (spouse) await c.query('UPDATE people SET spouse_id=$1 WHERE id=$2',[row.id,spouse]);
+    // A complete known date makes one shared yahrzeit; unknown dates remain unknown.
+    if (status==='deceased' && day && month) {
+      await c.query(`INSERT INTO yahrzeits(name,side,hday,hmonth,death_year,person_id,created_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(person_id) DO UPDATE SET name=excluded.name,side=excluded.side,hday=excluded.hday,hmonth=excluded.hmonth,death_year=excluded.death_year`,[[row.title,row.name].filter(Boolean).join(' '),side,day,month,year,row.id,u.id]);
+    } else await c.query('DELETE FROM yahrzeits WHERE person_id=$1',[row.id]);
+    // Keep a linked yahrzeit name in sync when its person's father is renamed too.
+    await c.query(`UPDATE yahrzeits y SET father_name=coalesce((SELECT concat_ws(' ',nullif(f.title,''),f.name) FROM people f WHERE f.id=p.father_id),'') FROM people p WHERE y.person_id=p.id AND (p.id=$1 OR p.father_id=$1)`,[row.id]);
+    return row;
+  });
 }
-app.post('/api/people', async (req) => {
-  const u = await member(req);
-  return { person: await q1(`INSERT INTO people(side,name,spouse,parent_id,niftar,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`, [...(await personBody(u, req.body)), u.id]) };
-});
-app.put('/api/people/:id', async (req) => {
-  const u = await member(req); const id = Number((req.params as any).id);
-  const old = await q1('SELECT side FROM people WHERE id=$1', [id]);
-  if (!old || !canSee(u, old.side)) throw new HttpError(404, 'נישט געטראפן');
-  return { person: await q1(`UPDATE people SET side=$1,name=$2,spouse=$3,parent_id=$4,niftar=$5,note=$6 WHERE id=$7 RETURNING *`, [...(await personBody(u, req.body, id)), id]) };
-});
-app.delete('/api/people/:id', async (req) => {
-  const u = await member(req); const id = Number((req.params as any).id);
-  const r = await q1('SELECT created_by,side FROM people WHERE id=$1', [id]);
-  if (!r || !canSee(u, r.side)) throw new HttpError(404, 'נישט געטראפן');
-  if (await q1('SELECT 1 FROM people WHERE parent_id=$1', [id])) throw bad('מעק קודם אויס די קינדער');
-  if (!u.is_admin && r.created_by !== u.id) throw new HttpError(403, 'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
-  await q('DELETE FROM people WHERE id=$1', [id]);
-  return { ok: true };
+app.post('/api/people', async req => ({person:await savePerson(await member(req),req.body)}));
+app.put('/api/people/:id', async req => ({person:await savePerson(await member(req),req.body,Number((req.params as any).id))}));
+app.delete('/api/people/:id', async req => {
+  const u=await member(req), id=Number((req.params as any).id);
+  return tx(async c=>{
+    await c.query('SELECT pg_advisory_xact_lock(68427301)');
+    const r=(await c.query('SELECT * FROM people WHERE id=$1',[id])).rows[0];
+    if (!r || !canSee(u,r.side)) throw new HttpError(404,'נישט געטראפן');
+    if (!u.is_admin && r.created_by!==u.id) throw new HttpError(403,'נאר דער וואס האט עס צוגעלייגט אדער דער אדמין');
+    const linked=(await c.query(`SELECT 1 FROM people WHERE parent_id=$1 OR father_id=$1 OR mother_id=$1 OR spouse_id=$1
+      UNION SELECT 1 FROM directory WHERE husband_person_id=$1 OR wife_person_id=$1`,[id])).rows.length;
+    if (linked) throw bad('דער מענטש איז פארבונדן מיט משפחה. נעם קודם אוועק די לינקס.');
+    await c.query('DELETE FROM people WHERE id=$1',[id]); return {ok:true};
+  });
 });
 
 // ---------------- mishnayos & tehillim ----------------
@@ -507,26 +551,46 @@ const extOf = (m: string) => ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'imag
 
 // ---------------- cousins directory ----------------
 const dirSelect = `SELECT d.*, ou.name owner_name FROM directory d LEFT JOIN users ou ON ou.id=d.owner_id`;
-async function listDir(u: User) { return q(`${dirSelect} WHERE ${sideSql('d.side', 1)} ORDER BY coalesce(nullif(d.husband,''),d.wife)`, [mySides(u)]); }
-app.get('/api/directory', async (req) => { const u = await member(req); return { families: await listDir(u) }; });
-function dirBody(u: User, b: any) {
-  const husband = str(b.husband, 120), wife = str(b.wife, 120);
-  if (!husband && !wife) throw bad('שרייב כאטש איין נאמען');
-  return [husband, wife, str(b.parents, 150), okSide(u, b.side), str(b.address, 200), str(b.phone_h, 30), str(b.phone_w, 30)];
+async function listDir(u: User) {
+  const rows=await q(`${dirSelect} WHERE ${sideSql('d.side',1)} ORDER BY d.id`,[mySides(u)]);
+  const people=await q(`${personSelect} WHERE ${sideSql('p.side',1)}`,[mySides(u)]);
+  const byId=new Map(people.map(p=>[p.id,p]));
+  const full=(p:any)=>p ? [p.title,p.name].filter(Boolean).join(' ') : '';
+  return rows.map(d=>{
+    const h=byId.get(d.husband_person_id), w=byId.get(d.wife_person_id);
+    const parentName=(id:number)=>{const p=byId.get(id);return p?[full(p),p.niftar?'ז״ל':''].filter(Boolean).join(' '):'';};
+    const parents=(p:any)=>p ? [p.father_id?`טאטע: ${parentName(p.father_id)}`:'',p.mother_id?`מאמע: ${parentName(p.mother_id)}`:''].filter(Boolean).join(' · ') : '';
+    return {...d,husband:h?full(h):d.husband,wife:w?full(w):d.wife,
+      parents:[h&&parents(h)?`${h.name}: ${parents(h)}`:'',w&&parents(w)?`${w.name}: ${parents(w)}`:''].filter(Boolean).join(' · ') || d.parents};
+  });
 }
+app.get('/api/directory', async (req) => { const u = await member(req); return { families: await listDir(u) }; });
 const mayEditDir = (u: User, d: any) => u.is_admin || d.owner_id === u.id || d.created_by === u.id;
-app.post('/api/directory', async (req) => {
-  const u = await member(req); const b: any = req.body || {};
-  const mine = !!b.mine && !(await q1('SELECT 1 FROM directory WHERE owner_id=$1', [u.id]));
-  return { family: await q1(`INSERT INTO directory(husband,wife,parents,side,address,phone_h,phone_w,owner_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [...dirBody(u, b), mine ? u.id : null, u.id]) };
-});
-app.put('/api/directory/:id', async (req) => {
-  const u = await member(req); const id = Number((req.params as any).id);
-  const d = await q1('SELECT * FROM directory WHERE id=$1', [id]);
-  if (!d || !canSee(u, d.side)) throw new HttpError(404, 'נישט געטראפן');
-  if (!mayEditDir(u, d)) throw new HttpError(403, 'דו קענסט עדיטן נאר דיין אייגענע משפחה');
-  return { family: await q1(`UPDATE directory SET husband=$1,wife=$2,parents=$3,side=$4,address=$5,phone_h=$6,phone_w=$7,updated_at=now() WHERE id=$8 RETURNING *`, [...dirBody(u, req.body), id]) };
-});
+async function saveDirectory(u:User,b:any,id?:number) {
+  return tx(async c=>{
+    await c.query('SELECT pg_advisory_xact_lock(68427301)');
+    const old=id?(await c.query('SELECT * FROM directory WHERE id=$1 FOR UPDATE',[id])).rows[0]:null;
+    if (id && (!old || !canSee(u,old.side))) throw new HttpError(404,'נישט געטראפן');
+    if (old && !mayEditDir(u,old)) throw new HttpError(403,'דו קענסט עדיטן נאר דיין אייגענע משפחה');
+    b={...(old||{}),...b};
+    const hp=personId(b.husband_person_id),wp=personId(b.wife_person_id),side=okSide(u,b.side);
+    if(hp && hp===wp) throw bad('קלייב אויס צוויי באזונדערע מענטשן');
+    const linked=new Map<number,any>();
+    for(const person of [hp,wp].filter(Boolean)) {
+      const p=(await c.query('SELECT * FROM people WHERE id=$1',[person])).rows[0];
+      if(!p || !canSee(u,p.side) || (p.side!=='both' && p.side!==side)) throw bad('דער מענטש דארף זיין אויף דער זעלבער סייד');
+      linked.set(p.id,p);
+    }
+    const husband=hp?linked.get(hp).name:str(b.husband,120),wife=wp?linked.get(wp).name:str(b.wife,120);
+    if(!husband && !wife) throw bad('שרייב כאטש איין נאמען');
+    const values=[husband,wife,str(b.parents,1000),side,str(b.address,200),str(b.phone_h,30),str(b.phone_w,30),hp,wp];
+    if(id) return (await c.query(`UPDATE directory SET husband=$1,wife=$2,parents=$3,side=$4,address=$5,phone_h=$6,phone_w=$7,husband_person_id=$8,wife_person_id=$9,updated_at=now() WHERE id=$10 RETURNING *`,[...values,id])).rows[0];
+    const mine=!!b.mine && !(await c.query('SELECT 1 FROM directory WHERE owner_id=$1',[u.id])).rows.length;
+    return (await c.query(`INSERT INTO directory(husband,wife,parents,side,address,phone_h,phone_w,husband_person_id,wife_person_id,owner_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,[...values,mine?u.id:null,u.id])).rows[0];
+  });
+}
+app.post('/api/directory',async req=>({family:await saveDirectory(await member(req),req.body)}));
+app.put('/api/directory/:id',async req=>({family:await saveDirectory(await member(req),req.body,Number((req.params as any).id))}));
 app.delete('/api/directory/:id', async (req) => {
   const u = await member(req); const id = Number((req.params as any).id);
   const d = await q1('SELECT * FROM directory WHERE id=$1', [id]);

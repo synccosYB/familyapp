@@ -26,6 +26,14 @@ Live: https://familye.sites.tab.bot/ (Bochner / Biderman — באכנער / בי
 
 Visibility: a member sees the items of his/her own side(s) plus everything marked "both"/"all". Admins see everything.
 
+## Structured family records
+
+Family tree people are the shared source for the directory and linked yahrzeits. Each person has a separate title, name, father, mother, spouse, life status (unknown / living / deceased), and optional Hebrew day, month and year of passing. Select existing people for relationships; a spouse link is reciprocal. A complete known day/month creates one linked yahrzeit; its Edit button opens the person record. Unknown dates do not create calendar entries.
+
+In the directory, link the husband and wife to their existing tree records. Names and parents then follow edits in the tree. Household contact information stays on the household. Family-side visibility applies to every link. The API rejects ancestry cycles, conflicting spouse links and removal of people still referenced by family records.
+
+Migration `002_person_relationships.sql` is additive. Existing parent links and free-text spouse/household details remain available for review; the application does not guess which parent an old generic link represents or parse prose into people automatically. Create/reuse the confirmed person records, select the relationships, then link the existing household. No real family names or deployment-specific data are embedded in migrations.
+
 ## Stack
 Node 20 + TypeScript + Fastify 4, PostgreSQL 15, plain JS front end (no framework, no build step) in `web/`.
 - `src/index.ts` API + static files, `src/hebrew.ts` Hebrew calendar, `src/bootstrap.ts` migrations / first admin,
