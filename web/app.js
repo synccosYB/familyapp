@@ -27,7 +27,7 @@ async function loadWording() {
       applyWording(snapshot.overrides);
       wordingRevision = snapshot.revision;
       wordingNeedsRender = true;
-      document.title = S.family_yi || word("account.load_me.01");
+      document.title = appName();
       if ($('loading')) $('loading').textContent = word("shared.loading");
     }
   } catch { /* Keep the last available wording if the connection drops. */ }
@@ -110,7 +110,7 @@ function loadActingPhotos(root) {
   }
 }
 const familyChoices = (rows) => [...new Map(rows.flatMap(p=>p.families || []).map(f=>[f.id,f])).values()].sort((a,b)=>a.name.localeCompare(b.name));
-const familySelector = (rows,key,label) => field(label,`<select data-change="familyfilter" data-key="${key}"><option value="">${htmlWord("calendar.family_selector.01")}</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`);
+const familySelector = (rows, key, label) => `<label class="view-picker">${esc(label)}<select data-change="familyfilter" data-key="${key}"><option value="">${htmlWord("calendar.family_selector.01")}</option>${familyChoices(rows).map(f=>`<option value="${f.id}" ${Number(STATE[key])===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select></label>`;
 const isManager = () => ME && (ME.is_admin || ME.is_family_admin);
 const managesAccounts = () => isManager() && !ME.acting;
 const both = () => ME && (isManager() || (ME.sides.includes('a') && ME.sides.includes('b')));
@@ -127,27 +127,35 @@ const gmap = (a) => 'https://www.google.com/maps/dir/?api=1&destination=' + enco
 const waze = (a) => 'https://waze.com/ul?q=' + encodeURIComponent(a) + '&navigate=yes';
 const navBtns = (a) => (a ? `<a class="btn s gm" href="${gmap(a)}" target="_blank" rel="noopener">🗺️ Google Maps</a><a class="btn s wz" href="${waze(a)}" target="_blank" rel="noopener">🚗 Waze</a>` : '');
 const tel = (p) => (p ? `<a href="tel:${esc(p.replace(/[^\d+]/g, ''))}" dir="ltr">📞 ${esc(p)}</a>` : '<span class="muted">—</span>');
-const empty = (e, t, btn = '') => `<div class="empty"><div class="e">${e}</div><div>${esc(t)}</div>${btn ? `<div style="margin-top:12px">${btn}</div>` : ''}</div>`;
+const empty = (e, t, btn = '') => `<div class="empty"><div class="e">${e}</div><div>${esc(t)}</div>${btn ? `<div class="empty-action">${btn}</div>` : ''}</div>`;
 const field = (lbl, inner) => { const id=inner.match(/id="([^"]+)"/); return `<label${id ? ` for="${id[1]}"` : ''}>${esc(lbl)}</label>${inner}`; };
 const val = (id) => ($(id) ? $(id).value.trim() : '');
 
 // ---------- nav ----------
 const calendarNav = () => ['calendar', '📅', word('family_tools.calendar.title')];
 const pages = () => [['home', '🏠', word("navigation.home")], ['yz', '🕯️', word("navigation.yahrzeits")], calendarNav(), ['tree', '🌳', word("navigation.tree")], ['learn', '📖', word("navigation.learning")], ['sim', '🎉', word("navigation.simchas")], ['chat', '💬', word("navigation.chat")], ['people', '👥', word("navigation.directory")]];
-let PENDING = 0, UNREAD = false;
+let PENDING = 0, UNREAD = false, familyChanging = false;
+const appName = () => (ME?.family_groups?.length > 1 ? word("navigation.app_name") : S.family_yi) || word("account.load_me.01");
+function workspacePicker() {
+  const groups = ME.family_groups || [];
+  if (groups.length < 2) return '';
+  return `<label class="view-picker">${htmlWord("navigation.family_context")}<select data-change="viewgroup">${groups.map(group =>
+    `<option value="${group.id}" ${group.id === ME.selected_family_group_id ? 'selected' : ''}>${esc(group.name)}</option>`).join('')}</select></label>`;
+}
+const viewHeader = (title, actions = '') => `<header class="view-header"><h1>${title}</h1>${actions ? `<div class="btns">${actions}</div>` : ''}</header>`;
 function actingBanner() {
   const text=ME?.acting?word("navigation.acting_banner.01", { name: ME.name }):word("navigation.acting_banner.02");
   return `<div class="acting-banner" role="status"><strong>${esc(text)}</strong><button type="button" class="btn s l" data-act="stopacting">${htmlWord("navigation.acting_banner.03")}</button></div>`;
 }
 function renderNav(v) {
   const extra = [['me', '👤', word("navigation.account")]]; if (managesAccounts()) extra.unshift(['admin', '🛡️', word("navigation.admin")]);
-  $('nav').innerHTML = `<div class="lg">${esc(S.family_yi)}</div><div class="sd">${esc(ME.name)} · ${esc(S.family_yi)}</div>` +
+  $('nav').innerHTML = `<div class="lg">${esc(appName())}</div><div class="sd">${esc(ME.name)}</div>` +
     [...pages(), ...extra].map(([k, i, t]) => `<a class="${v === k ? 'on' : ''}" href="#${k}">${i} ${esc(t)}${k === 'admin' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}</a>`).join('') +
     `<a data-act="logout" style="margin-top:14px;opacity:.7">${htmlWord("navigation.render_nav.01")}</a>`;
   const tb = [['home', '🏠', word("navigation.home")], ['yz', '🕯️', word("navigation.yahrzeits")], ['sim', '🎉', word("navigation.simchas")], ['chat', '💬', word("navigation.chat")], ['more', '☰', word("navigation.render_nav.02")]];
   const inMore = !['home', 'yz', 'sim', 'chat'].includes(v);
   $('tabs').innerHTML = tb.map(([k, i, t]) => `<a class="${(k === v || (k === 'more' && inMore)) ? 'on' : ''}" ${k === 'more' ? 'data-act="more"' : `href="#${k}"`}><span class="i">${i}</span>${esc(t)}${k === 'chat' && UNREAD ? '<span class="badge">●</span>' : ''}${k === 'more' && PENDING ? `<span class="badge">${PENDING}</span>` : ''}</a>`).join('');
-  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(S.family_yi)}</b><span>${esc(ME.name.split(' ')[0])}</span></div>${(ME.family_groups||[]).length>1?`<label class="family-switch">${htmlWord("navigation.render_nav.03")}<select aria-label="${htmlWord("navigation.render_nav.03")}" data-change="viewgroup">${ME.family_groups.map(g=>`<option value="${g.id}" ${g.id===ME.selected_family_group_id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label>`:''}`;
+  $('top').innerHTML = `<div class="topbar"><b>🌳 ${esc(appName())}</b><span>${esc(ME.name.split(' ')[0])}</span></div>`;
   if(ME.acting)$('top').insertAdjacentHTML('afterbegin',actingBanner());
 }
 function moreSheet() {
@@ -188,9 +196,9 @@ V.setpw = () => `<div class="login"><div style="font-size:54px">🔑</div><h1>${
 V.home = async () => {
   const h = await api('/home'); PENDING = h.pending;
   const nx = h.yahrzeits[0];
-  return `<h1>${htmlWord("home.01", { name: ME.name.split(' ')[0] })}</h1><div class="cap">${htmlWord("home.02", { today: h.today, family: S.family_yi })}</div>
+  return `<div class="home-view">${viewHeader(htmlWord("home.01", { name: ME.name.split(' ')[0] }), workspacePicker())}<div class="cap">${htmlWord("home.today", { today: h.today })}</div>
   ${h.pending ? `<a class="row" href="#admin" style="text-decoration:none;color:inherit;background:#fffbeb;border-color:#fcd34d"><div class="grow"><b>${htmlWord("home.11", { pending: h.pending })}</b></div><span class="btn s">${htmlWord("home.12")}</span></a>` : ''}
-  <div class="grid g4"><a class="card" href="#yz" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.03")}</div><div class="big" style="font-size:20px">${nx ? esc(nx.hebrew) : '—'}</div><div class="muted">${nx ? esc(inDays(nx.next.days)) : htmlWord("home.13")}</div></a>
+  <div class="grid g4 home-stats"><a class="card" href="#yz" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.03")}</div><div class="big">${nx ? esc(nx.hebrew) : '—'}</div><div class="muted home-stat-note">${nx ? esc(inDays(nx.next.days)) : htmlWord("home.13")}</div></a>
   <a class="card" href="#sim" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.04")}</div><div class="big">${h.simchas.length}</div></a>
   <a class="card" href="#learn" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.05")}</div><div class="big">${h.lists.length}</div></a>
   <a class="card" href="#people" style="text-decoration:none;color:inherit"><div class="muted">${htmlWord("home.06")}</div><div class="big">${h.members}</div></a></div>
@@ -201,7 +209,7 @@ V.home = async () => {
     : empty('🎉', word("home.22"), `<a class="btn s" href="#sim">${htmlWord("home.23")}</a>`)}
   <h2>${htmlWord("home.09")}</h2>${h.messages.length ? h.messages.map((m) => `<a class="row" href="#chat" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(m.name)}</b> <span class="muted">· ${esc(m.room === 'all' ? word("home.24") : famOf(m.room) || sideName(m.room))} · ${hm(m.created_at)}</span><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.body)}</div></div></a>`).join('')
     : empty('💬', word("home.25"), `<a class="btn s" href="#chat">${htmlWord("home.26")}</a>`)}
-  <div style="margin-top:18px"><button class="btn l" data-act="familyinvite">${htmlWord("home.10")}</button></div>`;
+  <div style="margin-top:12px"><button class="btn l" data-act="familyinvite">${htmlWord("home.10")}</button></div></div>`;
 };
 function familyInviteForm() {
   modal(`<h2>${htmlWord("home.10")}</h2><p class="muted">${htmlWord("home.family_invite_form.01")}</p>
@@ -219,10 +227,11 @@ async function useLinkedFamily() {
 }
 V.yz = async arg => {
   const id = Number(arg);
+  const remindersOpen = Boolean($('m').querySelector('.yahrzeit-reminders[open]'));
   if (id) await useLinkedFamily();
   const { yahrzeits, email_days } = await api('/yahrzeits'); STATE.yzs = yahrzeits;
   const L = yahrzeits.filter(y => id ? y.id===id : !STATE.yzFamily || (y.families || []).some(f=>f.id===Number(STATE.yzFamily)));
-  const reminders = !ME.acting && `<section class="card" style="margin-bottom:14px"><h2>${htmlWord("yahrzeits.reminders.heading")}</h2>
+  const reminders = !ME.acting && `<details class="card yahrzeit-reminders"${remindersOpen ? ' open' : ''}><summary>${htmlWord("yahrzeits.reminders.heading")}</summary>
     <p>${htmlWord("family_tools.reminders.lead",{days:email_days})}</p>
     ${EMAIL_READY ? (ME.email_verified ? '' : `<p class="muted"><a href="#me">${htmlWord("yahrzeits.reminders.verify")}</a></p>`) : `<p class="muted">${htmlWord("shared.emaillearn.02")}</p>`}
     ${ME.person_id ? '' : `<p class="muted">${htmlWord("yahrzeits.reminders.link_profile")}</p>`}
@@ -230,16 +239,20 @@ V.yz = async arg => {
     <label class="reminder-option"><input type="checkbox" data-change="yahrzeitpreference" ${ME.whatsapp_yahrzeit_reminders?'checked':''}
     ${!STATE.whatsappEnabled && !ME.whatsapp_yahrzeit_reminders?'disabled':''}> ${htmlWord('family_tools.reminders.whatsapp')}</label>
     <p class="muted">${STATE.whatsappEnabled ? htmlWord('family_tools.reminders.whatsapp_phone',{phone:`+${ME.phone}`}) : htmlWord('family_tools.reminders.whatsapp_unavailable')}</p>
-    </section>`;
+    </details>`;
   STATE.printYahrzeits = L;
-  return `<header class="family-feature-header"><h1>${htmlWord(id?'yahrzeits.reminders.detail':'yahrzeits.heading')}</h1><div class="btns"><a href="#calendar" class="btn s l">${htmlWord('family_tools.calendar.title')}</a>${L.length ? `<button class="btn s l" data-act="printyahrzeits">${htmlWord('family_tools.print.action')}</button>` : ''}</div></header>${id?`<p><a href="#yz">${htmlWord("yahrzeits.reminders.all")}</a></p>`:`<div class="cap">${htmlWord("yahrzeits.yz.01")}</div>${reminders || ''}${familySelector(yahrzeits,'yzFamily',word("yahrzeits.yz.03"))}`}
+  const add = `<button class="btn s" data-act="edityz" data-id="0">${htmlWord("yahrzeits.add")}</button>`;
+  const calendar = `<a href="#calendar" class="btn s l">${htmlWord('family_tools.calendar.title')}</a>`;
+  const print = L.length ? `<button class="btn s l" data-act="printyahrzeits">${htmlWord('family_tools.print.action')}</button>` : '';
+  return `${viewHeader(htmlWord(id?'yahrzeits.reminders.detail':'yahrzeits.heading'), (id ? '' : add + workspacePicker()) + calendar + print)}
+  ${id?`<p><a href="#yz">${htmlWord("yahrzeits.reminders.all")}</a></p>`:`<div class="list-tools">${familySelector(yahrzeits,'yzFamily',word("yahrzeits.family_filter"))}${reminders || ''}</div>`}
   ${L.map((y) => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b>${esc(yahrzeitName(y))}</b>
    ${y.families?.length?`<div class="yahrzeit-families">${familyTags(y)}</div>`:''}
    <div class="muted">${esc(y.relation)}${y.relation ? ' · ' : ''}<b style="color:#111827">${esc(y.hebrew)}</b>${y.next ? ` ${htmlWord("yahrzeits.yz.06", { date: gdate(y.next.ymd) })} <b style="color:#4338ca">${esc(inDays(y.next.days))}</b>` : ''}</div>
    ${y.kever ? `<div class="muted">🪦 ${esc(y.kever)}</div>` : ''}${y.kever_address?`<div class="muted" dir="auto">📍 ${esc(y.kever_address)}</div><div class="btns">${navBtns(y.kever_address)}</div>`:''}${y.note ? `<div class="muted">${esc(y.note)}</div>` : ''}</div>
    <div class="btns">${ME.acting?'':`<button class="btn s ${y.remind ? 'g' : 'l'}" type="button" aria-pressed="${y.remind}" data-act="remind" data-id="${y.id}" data-on="${y.remind ? 0 : 1}">${htmlWord(y.remind?'yahrzeits.reminders.disable_one':'yahrzeits.reminders.enable_one')}</button>`}
    <button class="btn s l" data-act="newlist" data-yz="${y.id}">${htmlWord("yahrzeits.yz.04")}</button><button class="btn s l" data-act="shareyz" data-id="${y.id}">${htmlWord("yahrzeits.reminders.whatsapp")}</button><button class="btn s l" data-act="edityz" data-id="${y.id}">${htmlWord("yahrzeits.yz.05")}</button></div></div>`).join('') || empty('🕯️', word(id?'yahrzeits.reminders.missing':'yahrzeits.yz.09'))}
-  ${id?reminders || '':`<button class="btn" style="margin-top:10px" data-act="edityz" data-id="0">${htmlWord("yahrzeits.add")}</button>`}`;
+  ${id ? reminders || '' : ''}`;
 };
 
 const eventLabel = kind => word(`family_tools.calendar.${kind}`);
@@ -263,7 +276,7 @@ V.calendar = async () => {
   const counts = new Map();
   for (const event of calendar.events) counts.set(event.date, (counts.get(event.date) || 0) + 1);
   const monthButton = (key, label) => `<button type="button" class="btn s l" data-act="calendarmonth" data-v="${key}">${htmlWord(label)}</button>`;
-  return `<header class="family-feature-header"><h1>${htmlWord('family_tools.calendar.title')}</h1><button class="btn s" data-act="calendarmonth" data-v="today">${htmlWord('family_tools.calendar.today')}</button></header>
+  return `${viewHeader(htmlWord('family_tools.calendar.title'), workspacePicker() + `<button class="btn s" data-act="calendarmonth" data-v="today">${htmlWord('family_tools.calendar.today')}</button>`)}
   <section class="card calendar-card"><div class="calendar-controls">${monthButton('previous','family_tools.calendar.previous')}<h2>${esc(calendar.label)}</h2>${monthButton('next','family_tools.calendar.next')}</div>
   <div class="calendar-grid">${dayWords.map((key,index) => `<span class="calendar-weekday" title="${htmlWord(key)}">${index===6?htmlWord('family_tools.calendar.shabbos'):esc(hebD(index+1))}</span>`).join('')}
   ${'<span aria-hidden="true"></span>'.repeat(calendar.startWeekday)}
@@ -293,30 +306,46 @@ async function yahrzeitPerson(id) {
 }
 
 // family tree
+function treeSpouses(p, relative) {
+  return [
+    p.spouse_name ? htmlWord("tree.10") + ' ' + esc(relative(p, 'spouse')) : esc(p.spouse),
+    p.second_spouse_name ? htmlWord("tree.11") + ' ' + esc(relative(p, 'second_spouse')) : ''
+  ].filter(Boolean).join('<br>') || '—';
+}
 V.tree = async () => {
   const { people } = await api('/people'); STATE.people = people;
   const P = people; // Server permissions determine visibility; family membership never cuts spouse/ancestor links.
   const {units,edges,generationConflicts}=familyUnits(P); STATE.treeEdges=edges;
-  STATE.treePrintUnits = units;
+  STATE.treePrint = { units, hasGenerations: !generationConflicts.length };
   const graphMode=STATE.treeView==='tree' && !generationConflicts.length;
   const peopleById=new Map(P.map(p=>[p.id,p]));
   const relative=(p,key)=>relationName(peopleById,p,key);
-  const node = p => `<button style="${STATE.treeFamily && (p.families || []).some(f=>f.id===Number(STATE.treeFamily))?'outline:3px solid #4338ca;outline-offset:2px':''}" class="pn family-person ${isDeceased(p)?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><span class="person-card-heading">${profilePhoto(p)}<strong>${esc(personName(p))}</strong></span>${knownAs(p)}${p.spouse_name?`<span class="muted">${htmlWord("tree.node.02", { spouse_name: relative(p,'spouse') })}</span>`:''}${p.second_spouse_name?`<span class="muted">${htmlWord("tree.node.03", { second_spouse_name: relative(p,'second_spouse') })}</span>`:''}${p.father_name?`<span class="muted tree-relation">${htmlWord("tree.node.04", { father_name: relative(p,'father') })}</span>`:''}${p.mother_name?`<span class="muted tree-relation">${htmlWord("tree.node.05", { mother_name: relative(p,'mother') })}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">${htmlWord("tree.node.06", { spouse: p.spouse })}</span>`:''}</button>`;
+  const node = p => `<button class="pn family-person ${isDeceased(p)?'d':''}" data-tree-person="${p.id}" data-act="viewperson" data-id="${p.id}"><span class="person-card-heading">${profilePhoto(p)}<strong>${esc(personName(p))}</strong></span>${knownAs(p)}${p.spouse_name?`<span class="muted">${htmlWord("tree.node.02", { spouse_name: relative(p,'spouse') })}</span>`:''}${p.second_spouse_name?`<span class="muted">${htmlWord("tree.node.03", { second_spouse_name: relative(p,'second_spouse') })}</span>`:''}${p.father_name?`<span class="muted tree-relation">${htmlWord("tree.node.04", { father_name: relative(p,'father') })}</span>`:''}${p.mother_name?`<span class="muted tree-relation">${htmlWord("tree.node.05", { mother_name: relative(p,'mother') })}</span>`:''}${p.spouse && !p.spouse_id?`<span class="muted">${htmlWord("tree.node.06", { spouse: p.spouse })}</span>`:''}</button>`;
   const couple = unit => `<section class="family-unit ${unit.members.length>1?'married':''}" aria-label="${unit.members.length>1?htmlWord("tree.couple.01"):htmlWord("tree.couple.02")}">${unit.members.length>1?`<div class="marriage-label">${htmlWord("tree.couple.01")}</div>`:''}<div class="family-members">${unit.members.map(node).join('')}</div></section>`;
   const levels=[...new Set(units.map(u=>u.level))].sort((a,b)=>a-b);
+  const zoom = `<div class="tree-toolbar" role="group" aria-label="${htmlWord("tree.01")}"><button class="btn s l" data-act="treezoom" data-v="fit">${htmlWord("tree.02")}</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="${htmlWord("tree.03")}">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="${htmlWord("tree.04")}">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button></div>`;
   const treeHtml=graphMode
-    ? `<div class="tree-toolbar" aria-label="${htmlWord("tree.01")}"><button class="btn s l" data-act="treezoom" data-v="fit">${htmlWord("tree.02")}</button><button class="btn s l" data-act="treezoom" data-v="-0.1" aria-label="${htmlWord("tree.03")}">−</button><output id="tree-scale" aria-live="polite">100%</output><button class="btn s l" data-act="treezoom" data-v="0.1" aria-label="${htmlWord("tree.04")}">+</button><button class="btn s l" data-act="treezoom" data-v="actual">100%</button><button class="btn s" data-act="editp" data-id="0">${htmlWord(isManager() ? "tree.05" : "family_tools.suggestions.add")}</button></div><div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
-     : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>${htmlWord("tree.06")}</th><th>${htmlWord("tree.07")}</th><th>${htmlWord("tree.08")}</th><th>${htmlWord("tree.09")}</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${profilePhoto(p)}${esc(personName(p))}</button>${knownAs(p)} ${familyTags(p)}</td><td>${esc(p.spouse_name?`${word("tree.10")} `+relative(p,'spouse'):p.spouse)||'—'}${p.second_spouse_name?`<br>${htmlWord("tree.11")} `+esc(relative(p,'second_spouse')):''}</td><td>${esc(relative(p,'father'))||'—'}</td><td>${esc(relative(p,'mother'))||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
-  return `<header class="family-feature-header"><h1>${htmlWord("tree.12")}</h1><div class="btns">
-  ${P.length > 1 ? `<button class="btn s l" data-act="findrelationship">${htmlWord('family_tools.relationship.title')}</button>` : ''}
-  ${P.length ? `<button class="btn s l" data-act="printtree">${htmlWord('family_tools.print.action')}</button>` : ''}</div></header><div class="cap">${htmlWord("tree.13")}</div>
-  ${familySelector(P,'treeFamily',word("tree.16"))}
-  <div class="btns" style="margin-bottom:6px">
-  <div class="seg"><button class="${STATE.treeView === 'tree' ? 'on' : ''}" data-act="treeview" data-v="tree">${htmlWord("tree.14")}</button><button class="${STATE.treeView === 'list' ? 'on' : ''}" data-act="treeview" data-v="list">${htmlWord("tree.15")}</button></div></div>
+    ? `<div class="family-scroll" id="family-viewport"><div class="family-stage" id="family-stage"><div class="family-map" id="family-map"><svg class="family-lines" aria-hidden="true"></svg>${levels.map(level=>`<div class="family-level">${units.filter(u=>u.level===level).map(couple).join('')}</div>`).join('')}</div></div></div>`
+    : `<div class="family-table-scroll"><table class="family-table"><thead><tr><th>${htmlWord("tree.06")}</th><th>${htmlWord("tree.07")}</th><th>${htmlWord("tree.08")}</th><th>${htmlWord("tree.09")}</th></tr></thead>${units.map(unit=>`<tbody${unit.members.length>1?' class="married-rows"':''}>${unit.members.map(p=>`<tr><td><button class="family-name" data-act="viewperson" data-id="${p.id}">${profilePhoto(p)}${esc(personName(p))}</button>${knownAs(p)} ${familyTags(p)}</td><td>${treeSpouses(p, relative)}</td><td>${esc(relative(p,'father'))||'—'}</td><td>${esc(relative(p,'mother'))||'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
+  const add = `<button class="btn s" data-act="editp" data-id="0">${htmlWord(isManager() ? "tree.05" : "family_tools.suggestions.add")}</button>`;
+  const print = P.length ? `<button class="btn s l" data-act="printtree">🖨️ ${htmlWord('family_tools.print.action')}</button>` : '';
+  const relate = P.length > 1 ? `<button class="btn s l" data-act="findrelationship">${htmlWord('family_tools.relationship.title')}</button>` : '';
+  return `${viewHeader(htmlWord("tree.12"), add + print + relate)}
   ${generationConflicts.length ? `<p class="err" role="alert">${htmlWord("tree.17")}</p>` : ''}
-  ${units.length ? `<div class="card">${treeHtml}</div>` : empty('🌳',word("tree.18"))}
-  ${graphMode && units.length ? '' : `<button class="btn" style="margin-top:12px" data-act="editp" data-id="0">${htmlWord(isManager() ? "tree.05" : "family_tools.suggestions.add")}</button>`}`;
+  ${units.length ? `<div class="list-tools">
+    <div class="seg"><button class="${graphMode ? 'on' : ''}" aria-pressed="${graphMode}" data-act="treeview" data-v="tree" ${generationConflicts.length ? 'disabled' : ''}>${htmlWord("tree.14")}</button><button class="${graphMode ? '' : 'on'}" aria-pressed="${!graphMode}" data-act="treeview" data-v="list">${htmlWord("tree.15")}</button></div>
+    ${graphMode && familyChoices(P).length > 1 ? familySelector(P,'treeFamily',word("tree.highlight_family")) : ''}
+    ${graphMode ? zoom : ''}
+  </div><div class="card tree-content">${treeHtml}</div>` : empty('🌳',word("tree.18"))}`;
 };
+
+function highlightTreeFamily() {
+  const familyId = Number(STATE.treeFamily);
+  const people = new Set(STATE.people.filter(person => person.families?.some(family => family.id === familyId)).map(person => person.id));
+  for (const node of $('family-map').querySelectorAll('[data-tree-person]')) {
+    node.classList.toggle('is-highlighted', people.has(Number(node.dataset.treePerson)));
+  }
+}
 
 function findRelationship() {
   const people = [...STATE.people].sort((a,b) => personName(a).localeCompare(personName(b),'he'));
@@ -353,11 +382,12 @@ function showPrint(kind, heading, markup) {
   const section = document.createElement('section');
   section.id = 'family-print';
   section.className = `family-print print-${kind}`;
-  section.innerHTML = `<h1>${esc(heading)} · ${esc(S.family_yi)}</h1>${markup}`;
+  const title = kind === 'tree' ? heading : `${heading} · ${S.family_yi}`;
+  section.innerHTML = `<h1>${esc(title)}</h1>${markup}`;
   document.body.append(section);
   document.body.classList.add('printing-family');
   const previousTitle = document.title;
-  document.title = `${heading} - ${S.family_yi}`;
+  document.title = title;
   window.addEventListener('afterprint', () => {
     section.remove();
     document.body.classList.remove('printing-family');
@@ -367,26 +397,34 @@ function showPrint(kind, heading, markup) {
 }
 
 function printFamilyTree() {
-  const units = STATE.treePrintUnits;
+  const { units, hasGenerations } = STATE.treePrint;
   const map = $('family-map');
   const scale = map ? Math.min(1, 960 / map.offsetWidth) : 0;
   const title = word('family_tools.print.tree');
-  if (map && scale >= 0.55 && map.offsetHeight * scale <= 620) {
+  if (map && scale >= 0.8 && map.offsetHeight * scale <= 620) {
     drawFamilyLines();
     const graph = map.cloneNode(true);
     graph.removeAttribute('id');
+    graph.querySelectorAll('.is-highlighted').forEach(node => node.classList.remove('is-highlighted'));
     graph.querySelectorAll('img').forEach(photo => photo.style.visibility = 'hidden');
     Object.assign(graph.style,{ right:'0', top:'0', width:`${map.offsetWidth}px`, transform:`scale(${scale})` });
     showPrint('tree', title, `<div class="print-chart" style="height:${Math.ceil(map.offsetHeight*scale)}px">${graph.outerHTML}</div>`);
     return;
   }
+  const peopleById = new Map(STATE.people.map(person => [person.id, person]));
+  const relative = (person, key) => relationName(peopleById, person, key, true);
+  const row = person => {
+    const parents = [relative(person, 'father'), relative(person, 'mother')];
+    if (person.parent_id && ![person.father_id, person.mother_id].includes(person.parent_id)) parents.push(relative(person, 'parent'));
+    return `<tr><th scope="row">${esc(personName(person))}${knownAs(person)}</th><td>${parents.filter(Boolean).map(esc).join('<br>') || '—'}</td>
+      <td>${treeSpouses(person, relative)}</td></tr>`;
+  };
+  const table = group => `<table><thead><tr><th scope="col">${htmlWord("tree.06")}</th><th scope="col">${htmlWord("family_tools.print.parents")}</th>
+    <th scope="col">${htmlWord("tree.07")}</th></tr></thead><tbody>${group.flatMap(unit => unit.members).map(row).join('')}</tbody></table>`;
   const generations = [...new Set(units.map(unit => unit.level))].sort((a,b) => a-b);
-  const nameColumn = key => htmlWord(`tree.${key}`);
-  const groups = generations.map((level,index) => `<h2>${htmlWord('family_tools.print.generation', { number:index+1 })}</h2>
-    <table><thead><tr><th>${nameColumn('06')}</th><th>${nameColumn('08')}</th><th>${nameColumn('09')}</th><th>${nameColumn('07')}</th></tr></thead><tbody>
-    ${units.filter(unit => unit.level === level).flatMap(unit => unit.members).map(person => `<tr><td>${esc(personName(person))}</td><td>${esc(person.father_name || '—')}</td>
-      <td>${esc(person.mother_name || '—')}</td><td>${esc([person.spouse_name || person.spouse,person.second_spouse_name].filter(Boolean).join(' · ') || '—')}</td></tr>`).join('')}</tbody></table>`);
-  showPrint('tree', title, groups.join(''));
+  const content = hasGenerations ? generations.map(level => `<h2>${htmlWord('family_tools.print.generation', { number:level+1 })}</h2>
+    ${table(units.filter(unit => unit.level === level))}`).join('') : table(units);
+  showPrint('tree', title, content);
 }
 
 function printYahrzeits() {
@@ -422,11 +460,15 @@ function updateFamilyViewport(point) {
   const documentTop=viewport.getBoundingClientRect().top+window.scrollY;
   const outerHeight=Math.max(220,Math.floor(window.innerHeight-documentTop-(window.innerWidth<=800?104:40)));
   viewport.style.height=outerHeight+'px';viewport.style.maxHeight=outerHeight+'px';
-  const layout=treeViewportLayout(map.offsetWidth,map.offsetHeight,viewport.clientWidth,viewport.clientHeight,STATE.treeZoom);
+  const zoom = STATE.treeZoom === undefined
+    ? Math.max(0.8, Math.min(1, (viewport.clientWidth - 1) / map.offsetWidth))
+    : STATE.treeZoom;
+  const layout=treeViewportLayout(map.offsetWidth,map.offsetHeight,viewport.clientWidth,viewport.clientHeight,zoom);
   const {scale}=layout;STATE.treeScale=scale;
   stage.style.width=layout.stageWidth+'px';stage.style.height=layout.stageHeight+'px';
   map.style.top=layout.top+'px';map.style.right=layout.right+'px';map.style.transform=`scale(${scale})`;map.dataset.scale=String(scale);
-  if(STATE.treeZoom==null) {viewport.scrollLeft=0;viewport.scrollTop=0;}
+  if(zoom===null) {viewport.scrollLeft=0;viewport.scrollTop=0;}
+  else if(!oldScale) viewport.scrollLeft=(viewport.clientWidth-viewport.scrollWidth)/2;
   else if(anchor) {
     const next=map.getBoundingClientRect(),bounds=viewport.getBoundingClientRect();
     viewport.scrollLeft+=next.left+anchor.x*scale-focus.x;
@@ -443,6 +485,7 @@ function scheduleFamilyViewport() {
 function observeFamilyTree() {
   treeObserver?.disconnect();
   const map=$('family-map'); if(!map) return;
+  highlightTreeFamily();
   // Never observe the scroll viewport: scrollbar changes are an output of zoom.
   // Observing them fed that output back into the next fit calculation.
   if(typeof ResizeObserver!=='undefined') {treeObserver=new ResizeObserver(scheduleFamilyViewport);treeObserver.observe(map);treeObserver.observe($('m'));}
@@ -608,8 +651,8 @@ async function personForm(id, parentId, defaults={}) {
 V.learn = async (arg) => {
   if (arg) return learnDetail(Number(arg));
   const [{ lists },{people}] = await Promise.all([api('/lists'),api('/people')]); STATE.learningLists=lists; const L = lists.filter(l => vis(l.side) && (!STATE.learnFamily || (l.families||[]).some(f=>f.id===Number(STATE.learnFamily))));
-  return `<header class="learning-header"><h1>${htmlWord("learning.heading")}</h1><button type="button" class="btn" data-act="newlist">${htmlWord("learning.new_list")}</button></header>
-  <p><a href="#me">${htmlWord("learning.learn.01")}</a></p><div class="cap">${htmlWord("learning.learn.03")}</div>${seg()}${familySelector([...lists,...people],'learnFamily',word("learning.learn.04"))}
+  return `${viewHeader(htmlWord("learning.heading"), workspacePicker() + `<button type="button" class="btn s" data-act="newlist">${htmlWord("learning.new_list")}</button>`)}
+  <div class="list-tools">${seg()}${familySelector([...lists,...people],'learnFamily',word("learning.learn.04"))}<a class="muted" href="#me">${htmlWord("learning.learn.01")}</a></div>
   ${L.map((l) => `<a class="card" href="#learn/${l.id}" style="display:block;text-decoration:none;color:inherit;margin-bottom:10px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:18px">${l.kind === 'tehillim' ? htmlWord("learning.learn.08") : htmlWord("learning.learn.09")} ${htmlWord("learning.learn.05", { name: l.niftar })}</b>${familyTags(l)}</div>
   <div class="muted">${l.target_date ? htmlWord("learning.learn.10", { date: gdate(l.target_date), days: inDays(l.days) }) : htmlWord("learning.learn.11")}${l.mine ? ` ${htmlWord("learning.learn.12", { mine: l.mine })}` : ''}</div>
   <div class="bar"><div style="width:${Math.round(100 * l.taken / l.total)}%"></div></div><div class="muted">${htmlWord("learning.learn.06", { taken: l.taken, total: l.total })}${l.partial?` ${htmlWord("learning.learn.13", { partial: l.partial })}`: ''} ${htmlWord("learning.learn.07", { done: l.done })}</div></a>`).join('') || empty('📖', word("learning.learn.15"))}`;
@@ -793,8 +836,8 @@ V.sim = async (id) => {
   const past = STATE.simPast;
   const { simchas } = await api('/simchas' + (id ? '?id='+encodeURIComponent(id) : past ? '?past=1' : '')); STATE.sims = simchas;
   if (id) return `<h1>${htmlWord("simchas.sim.01")}</h1><p><a href="#sim">${htmlWord("simchas.sim.02")}</a></p>${simchas.length ? simchas.map(simCard).join('') : empty('🎉',word("simchas.sim.03"))}`;
-  return `<h1>${htmlWord("simchas.sim.04")}</h1><div class="cap">${htmlWord("simchas.sim.05")}</div>
-  <div class="btns" style="margin-bottom:12px"><button class="btn" data-act="editsim" data-id="0">${htmlWord("simchas.sim.06")}</button><div class="seg" style="margin:0"><button class="${past ? '' : 'on'}" data-act="simpast" data-v="0">${htmlWord("simchas.sim.07")}</button><button class="${past ? 'on' : ''}" data-act="simpast" data-v="1">${htmlWord("simchas.sim.08")}</button></div></div>
+  return `${viewHeader(htmlWord("simchas.sim.04"), workspacePicker() + `<button class="btn s" data-act="editsim" data-id="0">${htmlWord("simchas.sim.06")}</button>`)}
+  <div class="list-tools"><div class="seg"><button class="${past ? '' : 'on'}" data-act="simpast" data-v="0">${htmlWord("simchas.sim.07")}</button><button class="${past ? 'on' : ''}" data-act="simpast" data-v="1">${htmlWord("simchas.sim.08")}</button></div></div>
   ${simchas.length ? `<div class="simgrid">${simchas.map(simCard).join('')}</div>` : empty('🎉', past ? word("simchas.sim.09") : word("simchas.sim.10"))}`;
 };
 function simCard(x) {
@@ -866,7 +909,7 @@ V.chat = async () => {
   const {messages,members}=await api('/chat/'+STATE.room);STATE.chatMembers=members;STATE.chatMessages=messages;
   LASTMSG=messages.length?messages[messages.length-1].id:0;markSeen(STATE.room,LASTMSG);
   setTimeout(()=>{checkUnread();const c=$('cb');if(c)c.scrollTop=c.scrollHeight;startChatPoll();},0);
-  return `<h1>💬 ${dm?`${htmlWord("chat.04")} `+esc(peers.find(p=>p.id===dm)?.name||''):htmlWord("chat.05")}</h1>
+  return `${viewHeader('💬 ' + (dm ? htmlWord("chat.04") + ' ' + esc(peers.find(p=>p.id===dm)?.name||'') : htmlWord("chat.05")), workspacePicker())}
     <div class="seg">${rooms.map(k=>`<button class="${STATE.room===k?'on':''}" data-act="room" data-v="${k}">${k==='all'?htmlWord("chat.06"):esc(famOf(k)||sideName(k))}</button>`).join('')}</div>
     ${field(word("chat.07"),`<select data-change="privatechat"><option value="">${htmlWord("chat.08")}</option>${peers.filter(p=>p.id!==ME.id).map(p=>`<option value="${p.id}" ${p.id===dm?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`)}
     <div class="card"><div id="chatpresence" class="muted" aria-live="polite">${chatPresence(members)}</div>
@@ -923,55 +966,109 @@ function appendMsgs(ms) {
 function stopPoll() { if (POLL) clearInterval(POLL); POLL = null; }
 function markSeen(room, id) { if (id && (SEEN[room] || 0) < id) { SEEN[room] = id; if(!ME?.acting)localStorage.setItem('fam_seen', JSON.stringify(SEEN)); } }
 async function checkUnread() {
-  if (!ME || ME.status !== 'active') return;
-  try { const { rooms } = await api('/chat-summary'); const u = rooms.some((r) => r.last_id && r.last_id > (SEEN[r.room] || 0) && !(curView() === 'chat' && STATE.room === r.room));
+  if (!ME || ME.status !== 'active' || familyChanging) return;
+  const group = ME.selected_family_group_id;
+  try { const { rooms } = await api('/chat-summary');
+    if (familyChanging || group !== ME?.selected_family_group_id) return;
+    const u = rooms.some((r) => r.last_id && r.last_id > (SEEN[r.room] || 0) && !(curView() === 'chat' && STATE.room === r.room));
     if (u !== UNREAD) { UNREAD = u; renderNav(curView()); } } catch { /* */ }
 }
 
 // directory
 V.people = async () => {
-  const rosterPath=STATE.cousinFamilies?'/cousins?groups='+STATE.cousinFamilies.join(','):'/cousins';
-  const [{ families }, { members, groups, selected }] = await Promise.all([api('/directory'), api(rosterPath)]); STATE.dir = families;
-  const Q = STATE.q.trim(); const L = families.filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
-  const hasMine = families.some((d) => d.owner_id === ME.id);
-  const groupNames=new Map(groups.map(g=>[g.id,g.name]));
+  const rosterPath = STATE.cousinFamilies ? '/cousins?groups=' + STATE.cousinFamilies.join(',') : '/cousins';
+  const [{ families }, { members, groups, selected }] = await Promise.all([api('/directory'), api(rosterPath)]);
+  STATE.dir = families;
+  const entries = directoryMatches();
+  const mine = families.find(family => family.owner_id === ME.id);
+  const picker = workspacePicker();
+  const groupNames = new Map(groups.map(group => [group.id, group.name]));
   const linkedMembers = members.filter(member => member.person_id != null);
   const unlinkedMembers = members.filter(member => member.person_id == null);
-  const memberCard=member=>`<div class="card"><b>${esc(member.name)}</b>${member.id===ME.id?` <span class="tag g">${htmlWord("directory.member_card.01")}</span>`:''}
-    <div class="muted">${member.group_ids.map(id=>esc(groupNames.get(id))).join(' · ')}</div><div class="btns">
-    ${member.id===ME.id?`<button class="btn s l" data-act="editdir" data-id="${families.find(d=>d.owner_id===member.id)?.id||0}" data-mine="1">${htmlWord("directory.member_card.02")}</button>`:''}
-    ${ME.is_admin?`<button class="btn s l" data-act="linkcousin" data-id="${member.id}">${member.person_id?htmlWord("directory.member_card.03"):htmlWord("directory.member_card.04")}</button>`:''}</div></div>`;
-  const byFather=new Map();
-  for(const member of linkedMembers){
-    if(!member.father_id)continue;
-    if(!byFather.has(member.father_id))byFather.set(member.father_id,[]);
+  const cousinRows = rows => `<ul class="people-rows" role="list">${rows.map(member => `
+    <li class="cousin-row">
+      <div class="cousin-info"><strong><bdi>${esc(member.name)}</bdi></strong>
+        ${member.id === ME.id ? `<span class="tag g">${htmlWord("directory.member_card.01")}</span>` : ''}
+        <span class="muted">${member.group_ids.map(id => `<bdi>${esc(groupNames.get(id))}</bdi>`).join(' · ')}</span>
+      </div>
+      ${ME.is_admin ? `<button type="button" class="btn s l" data-act="linkcousin" data-id="${member.id}">${htmlWord(member.person_id ? "directory.member_card.03" : "directory.member_card.04")}</button>` : ''}
+    </li>`).join('')}</ul>`;
+  const byFather = new Map();
+  for (const member of linkedMembers) {
+    if (!member.father_id) continue;
+    if (!byFather.has(member.father_id)) byFather.set(member.father_id, []);
     byFather.get(member.father_id).push(member);
   }
-  const siblingSets=[...byFather.values()].filter(set=>set.length>1);
-  const siblingIds=new Set(siblingSets.flatMap(set=>set.map(member=>member.id)));
+  const siblingSets = [...byFather.values()].filter(set => set.length > 1);
+  const siblingIds = new Set(siblingSets.flatMap(set => set.map(member => member.id)));
   const otherLinkedMembers = linkedMembers.filter(member => !siblingIds.has(member.id));
-  return `<h1>${htmlWord("directory.people.01")}</h1><div class="cap">${htmlWord("directory.people.02")}</div>${seg()}
-  <h2>${htmlWord("directory.people.03", { length: members.length })}</h2>
-  ${groups.length>1?`<fieldset class="person-family-picker"><legend>${htmlWord("directory.people.10")}</legend><div class="person-family-options">${groups.map(g=>`<label><input type="checkbox" name="cousin-family" data-change="cousinfamily" value="${g.id}" ${selected.includes(g.id)?'checked':''}><strong>${esc(g.name)}</strong></label>`).join('')}</div></fieldset>`:''}
-  <div id="memberlist">
-    ${siblingSets.map(set=>`<section><h3>${set.every(member=>member.lineage_term==='בן')?htmlWord("directory.people.12"):htmlWord("directory.people.13")} ${htmlWord("directory.people.11", { father_name: set[0].father_deceased?withMemorialSuffix(set[0].father_name):set[0].father_name })}</h3><div class="grid g2">${set.map(memberCard).join('')}</div></section>`).join('')}
-    ${otherLinkedMembers.length ? `<div class="grid g2">${otherLinkedMembers.map(memberCard).join('')}</div>` : ''}
-    ${unlinkedMembers.length ? `<section aria-labelledby="unlinked-cousins-heading">
-      <h3 id="unlinked-cousins-heading">${htmlWord("directory.people.18")}</h3>
-      <div class="grid g2">${unlinkedMembers.map(memberCard).join('')}</div>
-    </section>` : ''}
-    ${members.length?'':`<p class="muted">${htmlWord("directory.people.14")}</p>`}
-  </div><h2>${htmlWord("directory.people.04", { family: S.family_yi })}</h2>
-  ${hasMine ? '' : `<div class="row" style="background:#eef2ff;border-color:#c7d2fe"><div class="grow"><b>${htmlWord("directory.people.15")}</b><div class="muted">${htmlWord("directory.people.16")}</div></div><button class="btn s" data-act="editdir" data-id="0" data-mine="1">${htmlWord("directory.people.17")}</button></div>`}
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px"><input id="q" type="search" placeholder="${htmlWord("directory.people.05")}" value="${esc(STATE.q)}" style="margin:0;max-width:340px" data-input="q"><span class="muted" id="qn">${htmlWord("directory.people.06", { length: L.length })}</span>
-  <a class="btn s l" href="/api/directory.csv" download>${htmlWord("directory.people.07")}</a><button class="btn s" data-act="editdir" data-id="0">${htmlWord("directory.people.08")}</button></div>
-  <div class="grid g2" id="dirlist">${dirCards(L)}</div>
-  <button class="btn" style="margin-top:14px" data-act="familyinvite">${htmlWord("directory.people.09")}</button>`;
+  return `<div class="people-view">
+    ${viewHeader(htmlWord("directory.people.01"))}
+    <div class="people-columns">
+      <section aria-labelledby="address-book-heading">
+        <header class="people-section-header">
+          <h2 id="address-book-heading">${picker ? htmlWord("directory.address_book") : htmlWord("directory.people.04", { family: S.family_yi })}</h2>
+          ${picker}
+          <a class="cousin-jump" href="#people" data-act="jumpcousins">${htmlWord("directory.people.03", { length: members.length })}</a>
+        </header>
+        <div class="directory-tools">
+          <div class="directory-search">
+            <input id="q" type="search" aria-label="${htmlWord("directory.people.05")}" placeholder="${htmlWord("directory.people.05")}" value="${esc(STATE.q)}" data-input="q">
+            <span class="muted" id="qn" role="status">${htmlWord("directory.people.06", { length: entries.length })}</span>
+          </div>
+          ${seg()}
+          <div class="btns">
+            <button type="button" class="btn s" data-act="editdir" data-id="${mine?.id ?? 0}" data-mine="1">${htmlWord(mine ? "directory.member_card.02" : "directory.people.17")}</button>
+            <button type="button" class="btn s l" data-act="editdir" data-id="0">${htmlWord("directory.people.08")}</button>
+            <a class="btn s l" href="/api/directory.csv" download>${htmlWord("directory.people.07")}</a>
+            <button type="button" class="btn s l" data-act="familyinvite">${htmlWord("directory.people.09")}</button>
+          </div>
+        </div>
+        <ul class="people-rows" id="dirlist" role="list">${directoryRows(entries)}</ul>
+      </section>
+      <section aria-labelledby="cousins-heading">
+        <header class="people-section-header"><h2 id="cousins-heading" tabindex="-1">${htmlWord("directory.people.03", { length: members.length })}</h2></header>
+        ${groups.length > 1 ? `<fieldset class="cousin-family-filters" aria-label="${htmlWord("directory.family_filter")}"><div class="btns">${groups.map(group => `
+          <label><input type="checkbox" name="cousin-family" data-change="cousinfamily" value="${group.id}" ${selected.includes(group.id) ? 'checked' : ''}>${esc(group.name)}</label>`).join('')}</div></fieldset>` : ''}
+        <div id="memberlist">
+          ${siblingSets.map(set => `<section><h3>${htmlWord(set.every(member => member.lineage_term === 'בן') ? "directory.people.12" : "directory.people.13")} ${htmlWord("directory.people.11", { father_name: set[0].father_deceased ? withMemorialSuffix(set[0].father_name) : set[0].father_name })}</h3>${cousinRows(set)}</section>`).join('')}
+          ${otherLinkedMembers.length ? cousinRows(otherLinkedMembers) : ''}
+          ${unlinkedMembers.length ? `<section aria-labelledby="unlinked-cousins-heading">
+            <h3 id="unlinked-cousins-heading">${htmlWord("directory.people.18")}</h3>
+            ${cousinRows(unlinkedMembers)}
+          </section>` : ''}
+          ${members.length ? '' : `<p class="muted people-empty">${htmlWord("directory.people.14")}</p>`}
+        </div>
+      </section>
+    </div>
+  </div>`;
 };
-function dirCards(L) {
-  return L.map((d) => `<div class="card" style="padding:14px"><div style="display:flex;gap:10px;align-items:flex-start"><div class="av">${esc((d.husband || d.wife)[0])}</div><div class="grow"><b style="font-size:18px">${esc(d.husband_deceased?withMemorialSuffix(d.husband):d.husband)}${d.husband && d.wife ? ' · ' : ''}${esc(d.wife_deceased?withMemorialSuffix(d.wife):d.wife)}</b><div class="muted">${esc(d.parents)}</div></div>${sideTag(d.side)}</div>
-  <div style="margin-top:10px;display:grid;gap:6px"><div>📍 <span dir="auto">${esc(d.address) || '—'}</span></div><div style="display:flex;gap:14px;flex-wrap:wrap">${d.husband ? `<span><span class="muted">${htmlWord("directory.dir_cards.01")}</span> ${tel(d.phone_h)}</span>` : ''}${d.wife ? `<span><span class="muted">${htmlWord("directory.dir_cards.02")}</span> ${tel(d.phone_w)}</span>` : ''}</div></div>
-  <div class="btns" style="margin-top:10px">${isManager() || d.owner_id === ME.id || d.created_by === ME.id ? `<button class="btn s l" data-act="editdir" data-id="${d.id}">${htmlWord("directory.dir_cards.03")}</button>` : ''}${navBtns(d.address)}</div></div>`).join('') || `<div class="muted">${htmlWord("directory.dir_cards.04")}</div>`;
+function directoryMatches() {
+  const query = STATE.q.trim();
+  return (STATE.dir || []).filter(entry => vis(entry.side) && (!query ||
+    [entry.husband, entry.wife, entry.address, entry.parents, entry.phone_h, entry.phone_w].join(' ').includes(query)));
+}
+function directoryRows(entries) {
+  return entries.map(d => {
+    const husband = d.husband_deceased ? withMemorialSuffix(d.husband) : d.husband;
+    const wife = d.wife_deceased ? withMemorialSuffix(d.wife) : d.wife;
+    const actions = (isManager() || d.owner_id === ME.id || d.created_by === ME.id
+      ? `<button type="button" class="btn s l" data-act="editdir" data-id="${d.id}">${htmlWord("directory.dir_cards.03")}</button>` : '') + navBtns(d.address);
+    return `<li class="directory-row">
+      <div class="directory-row-heading">
+        <strong>${[husband, wife].filter(Boolean).map(name => `<bdi>${esc(name)}</bdi>`).join(' · ')}</strong>
+        ${sideTag(d.side)}
+      </div>
+      ${d.parents ? `<div class="muted"><bdi>${esc(d.parents)}</bdi></div>` : ''}
+      ${d.address ? `<div>📍 <bdi>${esc(d.address)}</bdi></div>` : ''}
+      <div class="directory-phones">${[
+        [d.husband, d.phone_h, "directory.dir_cards.01"],
+        [d.wife, d.phone_w, "directory.dir_cards.02"],
+      ].filter(([name, phone]) => name && phone).map(([, phone, label]) =>
+        `<span><span class="muted">${htmlWord(label)}</span> ${tel(phone)}</span>`).join('')}</div>
+      ${actions ? `<div class="btns">${actions}</div>` : ''}
+    </li>`;
+  }).join('') || `<li class="muted people-empty">${htmlWord("directory.dir_cards.04")}</li>`;
 }
 async function dirForm(id, mine) {
   const {people}=await api('/directory-people');
@@ -1086,10 +1183,16 @@ async function go() {
 }
 const refresh = () => { STATE.keepScroll = true; return go(); };
 function clearChrome() { $('m').classList.remove('tree-workspace'); $('nav').innerHTML = ''; $('tabs').innerHTML = ''; $('top').innerHTML = ''; }
-async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStopActing=!!r.can_stop_acting; EMAIL_READY = !!r.email_enabled; STATE.whatsappEnabled = !!r.whatsapp_enabled; S = r.settings || {}; document.title = S.family_yi || word("account.load_me.01"); }
+async function loadMe() { const r = await api('/me'); ME = r.user; STATE.canStopActing=!!r.can_stop_acting; EMAIL_READY = !!r.email_enabled; STATE.whatsappEnabled = !!r.whatsapp_enabled; S = r.settings || {}; document.title = appName(); }
 
 // ---------- actions ----------
 const ACT = {
+  jumpcousins: (_el, event) => {
+    event.preventDefault();
+    const heading = $('cousins-heading');
+    heading.scrollIntoView({ block: 'start' });
+    heading.focus({ preventScroll: true });
+  },
   calendarmonth: el => {
     STATE.calendarMonth = el.dataset.v === 'today' ? null : STATE.familyCalendar[el.dataset.v];
     STATE.calendarDay = '';
@@ -1273,11 +1376,47 @@ const CHANGE = {
     } catch (error) { el.checked = !checked; el.disabled = false; throw error; }
   },
   emailscope: el=>emailSim(Number(el.dataset.id),el.value),
-  cousinfamily:()=>{
-    STATE.cousinFamilies=[...document.querySelectorAll('input[name="cousin-family"]:checked')].map(el=>Number(el.value));
-    return refresh();
+  cousinfamily: async el => {
+    const group = Number(el.value);
+    const restoreFocus = document.activeElement === el;
+    STATE.cousinFamilies = [...document.querySelectorAll('input[name="cousin-family"]:checked')].map(input => Number(input.value));
+    await refresh();
+    if (restoreFocus && !el.isConnected && document.activeElement === document.body && curView() === 'people') {
+      $('m').querySelector(`input[name="cousin-family"][value="${group}"]`)?.focus({ preventScroll: true });
+    }
   },
-  viewgroup:async el=>{if(!el.value)return;await api('/me/family-group',{method:'POST',body:{family_group_id:Number(el.value)}});location.reload();},
+  viewgroup: async el => {
+    const group = Number(el.value);
+    if (!group || familyChanging || group === ME.selected_family_group_id) return;
+    const main = $('m'), route = location.hash, restoreFocus = document.activeElement === el;
+    familyChanging = true;
+    main.inert = true;
+    main.setAttribute('aria-busy', 'true');
+    try {
+      await api('/me/family-group', { method: 'POST', body: { family_group_id: group } });
+      stopPoll();
+      await loadMe();
+      STATE.room = STATE.side = 'all';
+      STATE.yzFamily = STATE.learnFamily = '';
+      UNREAD = false;
+      if (curView() === 'people') await refresh();
+      else await go();
+    } catch (error) {
+      el.value = String(ME.selected_family_group_id || '');
+      throw error;
+    } finally {
+      familyChanging = false;
+      main.inert = false;
+      main.removeAttribute('aria-busy');
+      if (restoreFocus && location.hash === route) main.querySelector('[data-change="viewgroup"]')?.focus({ preventScroll: true });
+      checkUnread();
+    }
+  },
+  familyfilter: el => {
+    STATE[el.dataset.key] = el.value;
+    if (el.dataset.key === 'treeFamily') highlightTreeFamily();
+    else return refresh();
+  },
   membershippick:el=>{const boxes=[...document.querySelectorAll('[name=membership]')];const count=boxes.filter(b=>b.checked).length;boxes.forEach(b=>b.disabled=!b.checked&&count>=4);$('membershipcount').textContent=count+' / 4';},
   privatechat: el=>{if(!el.value)return;const id=Number(el.value);STATE.room='dm:'+Math.min(ME.id,id)+':'+Math.max(ME.id,id);return go();},
   chatfile: el=>{const f=el.files[0];STATE.chatUpload=null;if(f&&f.size>10*1024*1024){el.value='';throw new Error(word("shared.chatfile.01"));}$('chatfilename').textContent=f?' · '+f.name:'';},
@@ -1410,13 +1549,14 @@ document.addEventListener('click', async (ev) => {
   const f = ACT[el.dataset.act]; if (!f) return; if (el.tagName === 'A' && !el.getAttribute('href')) ev.preventDefault();
   try { await f(el, ev); } catch (e) { fail(e); }
 });
-document.addEventListener('change', async (ev) => { const el = ev.target.closest('[data-change]'); if (!el || el.dataset.change==='familyfilter') return; try { await CHANGE[el.dataset.change](el); } catch (e) { fail(e); } });
+document.addEventListener('change', async (ev) => { const el = ev.target.closest('[data-change]'); if (!el) return; try { await CHANGE[el.dataset.change](el); } catch (e) { fail(e); } });
 document.addEventListener('input', (ev) => {
   if (ev.target.closest('main form')) editingMainForm = true;
   if(ev.target.id==='pn'){if($('pdistinct'))$('pdistinct').checked=false;return renderPersonMatches();}const relative=/^new_(father_id|mother_id|spouse_id|second_spouse_id)_name$/.exec(ev.target.id);if(relative)return renderPersonMatches(relative[1]);
   const el = ev.target;if(el.id==='ci'){STATE.chatActivity=Date.now();mentionChoices();return;} if (el.dataset.input !== 'q') return; STATE.q = el.value;
-  const Q = STATE.q.trim(); const L = (STATE.dir || []).filter((d) => vis(d.side) && (!Q || [d.husband, d.wife, d.address, d.parents, d.phone_h, d.phone_w].join(' ').includes(Q)));
-  $('dirlist').innerHTML = dirCards(L); $('qn').textContent = L.length + ` ${word("shared.01")}`;
+  const entries = directoryMatches();
+  $('dirlist').innerHTML = directoryRows(entries);
+  $('qn').textContent = word("directory.people.06", { length: entries.length });
 });
 document.addEventListener('submit', async (ev) => {
   const f = ev.target.closest('[data-form]'); if (!f) return; ev.preventDefault(); if(f.dataset.busy)return;f.dataset.busy='1';
@@ -1425,7 +1565,7 @@ document.addEventListener('submit', async (ev) => {
   try { await FORMS[f.dataset.form](f); } catch (e) { if (e.status === 401 && f.dataset.form !== 'login') return fail(e); if (err) err.textContent = e.message; else fail(e); }
   finally { delete f.dataset.busy; if (btn && document.body.contains(btn)) btn.disabled = false; }
 });
-document.addEventListener('change', (ev) => { if(ev.target.dataset.change==='familyfilter') { STATE[ev.target.dataset.key]=ev.target.value; refresh(); } if (ev.target.id === 'sk') $('skow').style.display = ev.target.value === 'אנדערע' ? '' : 'none';
+document.addEventListener('change', (ev) => { if (ev.target.id === 'sk') $('skow').style.display = ev.target.value === 'אנדערע' ? '' : 'none';
   if (ev.target.id === 'sd' || ev.target.id === 'safter') $('sh').value = automaticHebrewDate(val('sd'), $('safter').checked);
   if (ev.target.id === 'sf') { const f = ev.target.files[0]; $('ip').innerHTML = !f ? '' : f.type === 'application/pdf' ? `<div class="muted" style="margin:-4px 0 12px">📄 ${esc(f.name)}</div>` : `<img src="${URL.createObjectURL(f)}" style="max-width:100%;max-height:200px;border-radius:8px;margin:-4px 0 12px">`; } });
 document.addEventListener('pointerdown',()=>{if(curView()==='chat')STATE.chatActivity=Date.now();});
